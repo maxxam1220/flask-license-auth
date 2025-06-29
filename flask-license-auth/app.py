@@ -1,73 +1,46 @@
+from flask import Flask, request, jsonify, render_template, redirect, session, url_for, render_template_string
+import json, os
 
-from flask import Flask, request, jsonify, render_template
-from datetime import datetime
-import json
-import os
+app = Flask(__name__)
+app.secret_key = "super_secret_key_123"  # ← 請改成更安全的亂數字串
 
-app = Flask(__name__, template_folder="templates")
+# ✅ 登入帳密設定
+USERNAME = "admin"
+PASSWORD = "Aa721220"
 
-DB_FILE = "license_db.json"
+# ✅ 登入頁面
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form["username"] == USERNAME and request.form["password"] == PASSWORD:
+            session["logged_in"] = True
+            return redirect("/admin")
+        return "❌ 帳號或密碼錯誤", 401
+    return render_template_string("""
+        <form method="post" style="margin: 80px auto; width: 300px;">
+            <h2>授權後台登入</h2>
+            <input name="username" placeholder="帳號"><br><br>
+            <input name="password" type="password" placeholder="密碼"><br><br>
+            <button type="submit">登入</button>
+        </form>
+    """)
 
-def load_db():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# ✅ 登出
+@app.route("/logout")
+def logout():
+    session.pop("logged_in", None)
+    return redirect("/login")
 
-def save_db(db):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(db, f, ensure_ascii=False, indent=2)
-
-@app.route("/check_license", methods=["POST"])
-def check_license():
-    data = request.json
-    auth_code = data.get("auth_code")
-    mac = data.get("mac")
-
-    db = load_db()
-    lic = db.get(auth_code)
-
-    if not lic:
-        return jsonify({"status": "fail", "msg": "授權碼錯誤"})
-
-    if datetime.today() > datetime.strptime(lic["expiry"], "%Y-%m-%d"):
-        return jsonify({"status": "fail", "msg": "授權已過期"})
-
-    if mac in lic["used_macs"]:
-        return jsonify({"status": "success", "msg": "已註冊裝置", "expiry": lic["expiry"]})
-
-    if lic["remaining"] <= 0:
-        return jsonify({"status": "fail", "msg": "授權次數已用完"})
-
-    lic["used_macs"].append(mac)
-    lic["remaining"] -= 1
-    save_db(db)
-
-    return jsonify({"status": "success", "msg": "新裝置已註冊", "expiry": lic["expiry"]})
-
-@app.route("/update_license", methods=["POST"])
-def update_license():
-    data = request.json
-    auth_code = data.get("auth_code")
-    expiry = data.get("expiry")
-    remaining = data.get("remaining")
-
-    db = load_db()
-    if auth_code not in db:
-        return jsonify({"status": "fail", "msg": "授權碼不存在"})
-
-    if expiry:
-        db[auth_code]["expiry"] = expiry
-    if remaining is not None:
-        db[auth_code]["remaining"] = int(remaining)
-
-    save_db(db)
-    return jsonify({"status": "success", "msg": "授權更新成功"})
-
+# ✅ 管理頁面，加上登入保護
 @app.route("/admin")
-def admin_page():
-    db = load_db()
-    return render_template("admin.html", db=db)
+def admin():
+    if not session.get("logged_in"):
+        return redirect("/login")
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            licenses = json.load(f)
+    except:
+        licenses = {}
+    return render_template("admin.html", licenses=licenses)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+# 其他 API 路由（check_license / update_license）照原本寫法即可
