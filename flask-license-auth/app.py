@@ -42,6 +42,18 @@ def admin():
     except:
         licenses = {}
     return render_template("admin.html", licenses=licenses)
+@app.route("/get_licenses", methods=["GET"])
+def get_licenses():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"error": "無效 API 金鑰"}), 403
+
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 port = int(os.environ.get("PORT", 5000))
 app.run(host="0.0.0.0", port=port)
