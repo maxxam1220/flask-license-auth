@@ -1,0 +1,22 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>授權管理後台</title>
+</head>
+<body>
+    <h1>授權清單</h1>
+    <table border="1">
+        <tr><th>授權碼</th><th>到期日</th><th>剩餘次數</th><th>已註冊裝置</th></tr>
+        {% for code, info in db.items() %}
+        <tr>
+            <td>{{ code }}</td>
+            <td>{{ info.expiry }}</td>
+            <td>{{ info.remaining }}</td>
+            <td>{{ info.used_macs | join(', ') }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>

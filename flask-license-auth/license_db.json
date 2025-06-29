@@ -1,0 +1,7 @@
+{
+  "ABCD-1234": {
+    "expiry": "2026-12-31",
+    "remaining": 2,
+    "used_macs": []
+  }
+}
