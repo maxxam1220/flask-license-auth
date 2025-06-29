@@ -43,4 +43,5 @@ def admin():
         licenses = {}
     return render_template("admin.html", licenses=licenses)
 
-# 其他 API 路由（check_license / update_license）照原本寫法即可
+port = int(os.environ.get("PORT", 5000))
+app.run(host="0.0.0.0", port=port)
