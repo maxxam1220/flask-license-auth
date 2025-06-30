@@ -92,22 +92,27 @@ def check_license():
 
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM licenses WHERE auth_code = %s", (code,))
-        row = cur.fetchone()
 
-        if not row:
+        # ✅ 檢查這組授權是否存在
+        cur.execute("SELECT * FROM licenses WHERE auth_code = %s", (code,))
+        lic = cur.fetchone()
+        if not lic:
             return jsonify({"error": "無效授權碼"}), 403
 
-        # ✅ 裝置綁定
-        db_mac = row.get("mac") or ""
-        if not db_mac:
-            cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
-            conn.commit()
-        elif db_mac != mac:
-            return jsonify({"error": "裝置不符"}), 403
+        # ✅ 檢查這台電腦是否已經綁定其他授權
+        cur.execute("SELECT auth_code FROM bindings WHERE mac = %s", (mac,))
+        bound = cur.fetchone()
 
-        # ✅ 到期日檢查
-        expiry = row["expiry"]
+        if bound and bound["auth_code"] != code:
+            return jsonify({"error": f"本機已綁定授權碼：{bound['auth_code']}，無法重複綁定"}), 403
+
+        # ✅ 若未綁定，新增綁定紀錄
+        if not bound:
+            cur.execute("INSERT INTO bindings (mac, auth_code) VALUES (%s, %s)", (mac, code))
+            conn.commit()
+
+        # ✅ 到期與剩餘次數檢查
+        expiry = lic["expiry"]
         if isinstance(expiry, datetime):
             expiry = expiry.date()
         if expiry < datetime.today().date():
@@ -116,7 +121,7 @@ def check_license():
         return jsonify({
             "success": True,
             "expiry": str(expiry),
-            "remaining": row["remaining"]
+            "remaining": lic["remaining"]
         })
 
 @app.route("/update_license", methods=["POST"])
