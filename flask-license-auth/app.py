@@ -1,31 +1,34 @@
-from flask import Flask, request, jsonify, render_template, redirect, session, url_for, render_template_string
-import sqlite3, os
+from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
+import psycopg2, os
+from psycopg2.extras import RealDictCursor
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = "super_secret_key_123"
+app.secret_key = "super_secret_key_123"  # 請改成更安全的亂數
 
-# 登入帳密設定
+# ✅ 登入帳密
 USERNAME = "admin"
 PASSWORD = "Aa721220"
 
-DB_PATH = "licenses.db"
+# ✅ PostgreSQL 資料庫連線資訊（Render 會自動提供 DATABASE_URL 環境變數）
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# 初始化資料庫
+def get_conn():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+# ✅ 初始化資料表（首次啟動）
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS licenses (
-            auth_code TEXT PRIMARY KEY,
-            expiry TEXT,
-            remaining INTEGER,
-            mac TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS licenses (
+                auth_code TEXT PRIMARY KEY,
+                expiry DATE NOT NULL,
+                remaining INTEGER NOT NULL,
+                mac TEXT
+            )
+        """)
+        conn.commit()
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -52,11 +55,10 @@ def logout():
 def admin():
     if not session.get("logged_in"):
         return redirect("/login")
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT auth_code, expiry, remaining, COALESCE(mac, '') FROM licenses")
-    licenses = c.fetchall()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM licenses ORDER BY auth_code")
+        licenses = cur.fetchall()
     return render_template("admin.html", licenses=licenses)
 
 @app.route("/get_licenses", methods=["GET"])
@@ -65,14 +67,11 @@ def get_licenses():
     if token != "Bearer max-lic-8899-secret":
         return jsonify({"error": "無效 API 金鑰"}), 403
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM licenses")
-    rows = c.fetchall()
-    conn.close()
-
-    result = {row[0]: {"expiry": row[1], "remaining": row[2], "mac": row[3]} for row in rows}
-    return jsonify(result)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM licenses")
+        data = {row['auth_code']: row for row in cur.fetchall()}
+    return jsonify(data)
 
 @app.route("/check_license", methods=["POST"])
 def check_license():
@@ -80,23 +79,20 @@ def check_license():
     code = data.get("auth_code")
     mac = data.get("mac")
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT expiry, remaining, mac FROM licenses WHERE auth_code = ?", (code,))
-    row = c.fetchone()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM licenses WHERE auth_code = %s", (code,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "無效授權碼"}), 403
 
-    if not row:
-        return jsonify({"error": "無效授權碼"}), 403
+        if not row["mac"]:
+            cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
+            conn.commit()
+        elif row["mac"] != mac:
+            return jsonify({"error": "裝置不符"}), 403
 
-    expiry, remaining, saved_mac = row
-    if saved_mac and saved_mac != mac:
-        return jsonify({"error": "裝置不符"}), 403
-    if not saved_mac:
-        c.execute("UPDATE licenses SET mac = ? WHERE auth_code = ?", (mac, code))
-        conn.commit()
-
-    conn.close()
-    return jsonify({"success": True, "expiry": expiry, "remaining": remaining})
+        return jsonify({"success": True, "expiry": str(row["expiry"]), "remaining": row["remaining"]})
 
 @app.route("/update_license", methods=["POST"])
 def update_license():
@@ -104,32 +100,30 @@ def update_license():
     code = data.get("auth_code")
     expiry = data.get("expiry")
     remaining = data.get("remaining")
-    mac = data.get("mac", "")  # ✅ 改這裡：接受前端傳入 mac（如未填則為空）
 
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO licenses (auth_code, expiry, remaining, mac)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(auth_code) DO UPDATE SET
-            expiry = excluded.expiry,
-            remaining = excluded.remaining,
-            mac = excluded.mac
-    """, (code, expiry, remaining, mac))
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT mac FROM licenses WHERE auth_code = %s", (code,))
+        row = cur.fetchone()
+        mac = row["mac"] if row else None
+        cur.execute("""
+            INSERT INTO licenses (auth_code, expiry, remaining, mac)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (auth_code) DO UPDATE
+            SET expiry = EXCLUDED.expiry,
+                remaining = EXCLUDED.remaining,
+                mac = COALESCE(licenses.mac, '')
+        """, (code, expiry, remaining, mac))
+        conn.commit()
     return jsonify({"success": True})
 
 @app.route("/delete_license", methods=["POST"])
 def delete_license():
-    data = request.get_json()
-    code = data.get("auth_code")
-
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM licenses WHERE auth_code = ?", (code,))
-    conn.commit()
-    conn.close()
+    code = request.get_json().get("auth_code")
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM licenses WHERE auth_code = %s", (code,))
+        conn.commit()
     return jsonify({"success": True})
 
 @app.route("/reset_mac", methods=["POST"])
@@ -138,15 +132,14 @@ def reset_mac():
     if token != "Bearer max-lic-8899-secret":
         return jsonify({"error": "無效 API 金鑰"}), 403
 
-    data = request.get_json()
-    code = data.get("auth_code")
-
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE licenses SET mac = '' WHERE auth_code = ?", (code,))
-    conn.commit()
-    conn.close()
+    code = request.get_json().get("auth_code")
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE licenses SET mac = '' WHERE auth_code = %s", (code,))
+        conn.commit()
     return jsonify({"success": True})
 
-port = int(os.environ.get("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":
+    init_db()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
