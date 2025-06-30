@@ -1,28 +1,38 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <title>授權管理後台</title>
+    <title>授權清單後台</title>
+    <style>
+        body { font-family: sans-serif; padding: 40px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background-color: #f0f0f0; }
+        a.logout { float: right; text-decoration: none; color: red; }
+    </style>
 </head>
 <body>
-    <h2>授權清單</h2>
-    <table border="1" cellpadding="5">
-        <tr>
-            <th>授權碼</th>
-            <th>到期日</th>
-            <th>剩餘次數</th>
-            <th>已註冊裝置</th>
-        </tr>
-        {% for row in licenses %}
-        <tr>
-            <td>{{ row[0] }}</td>
-            <td>{{ row[1] }}</td>
-            <td>{{ row[2] }}</td>
-            <td>{{ row[3] }}</td>
-        </tr>
-        {% endfor %}
+    <h2>授權清單後台 <a href="/logout" class="logout">登出</a></h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>授權碼</th>
+                <th>到期日</th>
+                <th>剩餘次數</th>
+                <th>已註冊裝置</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for license in licenses %}
+            <tr>
+                <td>{{ license['auth_code'] }}</td>
+                <td>{{ license['expiry'] }}</td>
+                <td>{{ license['remaining'] }}</td>
+                <td>{{ license['mac'] or '' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
     </table>
-    <br>
-    <a href="/logout">登出</a>
 </body>
 </html>
