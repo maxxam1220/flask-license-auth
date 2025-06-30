@@ -95,9 +95,10 @@ def update_license():
         db = {}
 
     db[code] = {
-        "expiry": expiry,
-        "remaining": remaining
-    }
+    "expiry": expiry,
+    "remaining": remaining,
+    "mac": db[code].get("mac", "")  # 保留原 mac，如果有的話
+}
 
     with open("license_db.json", "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
@@ -122,6 +123,28 @@ def delete_license():
         return jsonify({"success": True})
     else:
         return jsonify({"error": "找不到該授權碼"}), 404
+
+@app.route("/reset_mac", methods=["POST"])
+def reset_mac():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"error": "無效 API 金鑰"}), 403
+
+    data = request.get_json()
+    code = data.get("auth_code")
+
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            db = json.load(f)
+        if code in db and "mac" in db[code]:
+            db[code]["mac"] = ""
+            with open("license_db.json", "w", encoding="utf-8") as f:
+                json.dump(db, f, ensure_ascii=False, indent=2)
+            return jsonify({"success": True})
+        else:
+            return jsonify({"error": "找不到綁定資訊"}), 404
+    except:
+        return jsonify({"error": "處理失敗"}), 500
 
 port = int(os.environ.get("PORT", 5000))
 app.run(host="0.0.0.0", port=port)
