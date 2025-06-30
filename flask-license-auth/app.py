@@ -174,6 +174,25 @@ def reset_mac():
         conn.commit()
     return jsonify({"success": True})
 
+def init_db():
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS licenses (
+                auth_code TEXT PRIMARY KEY,
+                expiry DATE NOT NULL,
+                remaining INTEGER NOT NULL,
+                mac TEXT
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bindings (
+                mac TEXT PRIMARY KEY,
+                auth_code TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 5000))
