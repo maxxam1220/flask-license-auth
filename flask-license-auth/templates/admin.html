@@ -4,11 +4,63 @@
     <meta charset="UTF-8">
     <title>授權清單後台</title>
     <style>
-        body { font-family: sans-serif; padding: 40px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
-        th { background-color: #f0f0f0; }
-        a.logout { float: right; text-decoration: none; color: red; }
+        body {
+            font-family: "Segoe UI", sans-serif;
+            padding: 40px;
+            background: #f9f9f9;
+            color: #333;
+        }
+        h2 {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        a.logout {
+            text-decoration: none;
+            color: #d33;
+            font-weight: bold;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 20px;
+            background: #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        th, td {
+            border: 1px solid #eee;
+            padding: 10px;
+            text-align: center;
+        }
+        th {
+            background-color: #f3f3f3;
+        }
+        tr:hover {
+            background-color: #fdf5e6;
+        }
+        .mac-list {
+            white-space: pre-line;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        @media (max-width: 600px) {
+            table, thead, tbody, th, td, tr {
+                display: block;
+            }
+            td {
+                border: none;
+                border-bottom: 1px solid #ddd;
+                text-align: left;
+            }
+            td:before {
+                content: attr(data-label);
+                font-weight: bold;
+                display: block;
+                margin-bottom: 4px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -26,10 +78,10 @@
         <tbody>
             {% for license in licenses %}
             <tr>
-                <td>{{ license['auth_code'] }}</td>
-                <td>{{ license['expiry'] }}</td>
-                <td>{{ license['remaining'] }}</td>
-                <td>{{ license['mac'] or '' }}</td>
+                <td data-label="授權碼">{{ license['auth_code'] }}</td>
+                <td data-label="到期日">{{ license['expiry'] }}</td>
+                <td data-label="剩餘次數">{{ license['remaining'] }}</td>
+                <td data-label="已註冊裝置" class="mac-list">{{ license['mac'] or '' }}</td>
             </tr>
             {% endfor %}
         </tbody>
