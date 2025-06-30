@@ -16,7 +16,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# ✅ 初始化資料表（首次啟動）
+# 初始化資料表（首次啟動）
 def init_db():
     with get_conn() as conn:
         cur = conn.cursor()
@@ -26,6 +26,14 @@ def init_db():
                 expiry DATE NOT NULL,
                 remaining INTEGER NOT NULL,
                 mac TEXT
+            )
+        """)
+ # 新增 bindings 表，用來限制每台裝置只能綁定一組授權
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS bindings (
+                mac TEXT PRIMARY KEY,
+                auth_code TEXT NOT NULL,
+                FOREIGN KEY (auth_code) REFERENCES licenses(auth_code)
             )
         """)
         conn.commit()
