@@ -93,35 +93,40 @@ def check_license():
     with get_conn() as conn:
         cur = conn.cursor()
 
-        # ✅ 檢查這組授權是否存在
+        # 先查這個 MAC 是否已綁定別的授權碼
+        cur.execute("SELECT auth_code FROM bindings WHERE mac = %s", (mac,))
+        existing = cur.fetchone()
+        if existing and existing["auth_code"] != code:
+            return jsonify({"error": "此裝置已綁定其他授權碼"}), 403
+
+        # 查詢授權碼是否存在
         cur.execute("SELECT * FROM licenses WHERE auth_code = %s", (code,))
-        lic = cur.fetchone()
-        if not lic:
+        row = cur.fetchone()
+        if not row:
             return jsonify({"error": "無效授權碼"}), 403
 
-        # ✅ 檢查這台電腦是否已經綁定其他授權
-        cur.execute("SELECT auth_code FROM bindings WHERE mac = %s", (mac,))
-        bound = cur.fetchone()
-
-        if bound and bound["auth_code"] != code:
-            return jsonify({"error": f"本機已綁定授權碼：{bound['auth_code']}，無法重複綁定"}), 403
-
-        # ✅ 若未綁定，新增綁定紀錄
-        if not bound:
+        # 如果 MAC 尚未綁定，建立綁定紀錄
+        if not existing:
             cur.execute("INSERT INTO bindings (mac, auth_code) VALUES (%s, %s)", (mac, code))
-            conn.commit()
+            # 同步寫回 licenses 表（僅供前端查看用途）
+            cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
 
-        # ✅ 到期與剩餘次數檢查
-        expiry = lic["expiry"]
+        # 到期檢查
+        expiry = row["expiry"]
         if isinstance(expiry, datetime):
             expiry = expiry.date()
         if expiry < datetime.today().date():
             return jsonify({"error": "授權已過期"}), 403
 
+        # 減少剩餘次數（如果你想在驗證時遞減）
+        # cur.execute("UPDATE licenses SET remaining = remaining - 1 WHERE auth_code = %s AND remaining > 0", (code,))
+
+        conn.commit()
+
         return jsonify({
             "success": True,
             "expiry": str(expiry),
-            "remaining": lic["remaining"]
+            "remaining": row["remaining"]
         })
 
 @app.route("/update_license", methods=["POST"])
