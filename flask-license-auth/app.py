@@ -65,7 +65,7 @@ def admin():
         return redirect("/login")
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("DELETE FROM bindings WHERE auth_code = %s", (code,))
+        cur.execute("SELECT * FROM licenses ORDER BY auth_code")
         licenses = cur.fetchall()
     return render_template("admin.html", licenses=licenses)
 
