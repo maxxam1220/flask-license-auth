@@ -104,15 +104,18 @@ def update_license():
     code = data.get("auth_code")
     expiry = data.get("expiry")
     remaining = data.get("remaining")
+    mac = data.get("mac", "")  # ✅ 改這裡：接受前端傳入 mac（如未填則為空）
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT mac FROM licenses WHERE auth_code = ?", (code,))
-    row = c.fetchone()
-    mac = row[0] if row else ""
-
-    c.execute("REPLACE INTO licenses (auth_code, expiry, remaining, mac) VALUES (?, ?, ?, ?)",
-              (code, expiry, remaining, mac))
+    c.execute("""
+        INSERT INTO licenses (auth_code, expiry, remaining, mac)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(auth_code) DO UPDATE SET
+            expiry = excluded.expiry,
+            remaining = excluded.remaining,
+            mac = excluded.mac
+    """, (code, expiry, remaining, mac))
     conn.commit()
     conn.close()
     return jsonify({"success": True})
