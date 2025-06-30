@@ -94,11 +94,17 @@ def update_license():
     except:
         db = {}
 
+    # ✅ 如果是更新：保留 mac；如果是新增：mac 給空字串
+    if code in db:
+        old_mac = db[code].get("mac", "")
+    else:
+        old_mac = ""
+
     db[code] = {
-    "expiry": expiry,
-    "remaining": remaining,
-    "mac": db[code].get("mac", "")  # 保留原 mac，如果有的話
-}
+        "expiry": expiry,
+        "remaining": remaining,
+        "mac": old_mac
+    }
 
     with open("license_db.json", "w", encoding="utf-8") as f:
         json.dump(db, f, ensure_ascii=False, indent=2)
