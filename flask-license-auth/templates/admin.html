@@ -1,24 +1,28 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <title>授權清單</title>
+    <meta charset="UTF-8">
+    <title>授權管理後台</title>
 </head>
 <body>
     <h2>授權清單</h2>
-    <a href="/logout">🚪 登出</a>
-    <table border="1" cellpadding="6" cellspacing="0">
+    <table border="1" cellpadding="5">
         <tr>
-            <th>授權碼</th><th>到期日</th><th>剩餘次數</th><th>已註冊裝置</th>
+            <th>授權碼</th>
+            <th>到期日</th>
+            <th>剩餘次數</th>
+            <th>已註冊裝置</th>
         </tr>
-        {% for key, info in licenses.items() %}
+        {% for row in licenses %}
         <tr>
-            <td>{{ key }}</td>
-            <td>{{ info["expiry"] }}</td>
-            <td>{{ info["remaining"] }}</td>
-            <td>{{ ", ".join(info["devices"]) if info["devices"] else "" }}</td>
+            <td>{{ row[0] }}</td>
+            <td>{{ row[1] }}</td>
+            <td>{{ row[2] }}</td>
+            <td>{{ row[3] }}</td>
         </tr>
         {% endfor %}
     </table>
+    <br>
+    <a href="/logout">登出</a>
 </body>
 </html>
