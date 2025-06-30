@@ -55,5 +55,73 @@ def get_licenses():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/check_license", methods=["POST"])
+def check_license():
+    data = request.get_json()
+    code = data.get("auth_code")
+    mac = data.get("mac")
+
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except:
+        return jsonify({"error": "找不到授權資料"}), 500
+
+    if code not in db:
+        return jsonify({"error": "無效授權碼"}), 403
+
+    lic = db[code]
+    if "mac" not in lic:
+        lic["mac"] = mac
+    elif lic["mac"] != mac:
+        return jsonify({"error": "裝置不符"}), 403
+
+    with open("license_db.json", "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True, "expiry": lic["expiry"], "remaining": lic["remaining"]})
+
+@app.route("/update_license", methods=["POST"])
+def update_license():
+    data = request.get_json()
+    code = data.get("auth_code")
+    expiry = data.get("expiry")
+    remaining = data.get("remaining")
+
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except:
+        db = {}
+
+    db[code] = {
+        "expiry": expiry,
+        "remaining": remaining
+    }
+
+    with open("license_db.json", "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+@app.route("/delete_license", methods=["POST"])
+def delete_license():
+    data = request.get_json()
+    code = data.get("auth_code")
+
+    try:
+        with open("license_db.json", "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except:
+        return jsonify({"error": "讀取資料失敗"}), 500
+
+    if code in db:
+        del db[code]
+        with open("license_db.json", "w", encoding="utf-8") as f:
+            json.dump(db, f, ensure_ascii=False, indent=2)
+        return jsonify({"success": True})
+    else:
+        return jsonify({"error": "找不到該授權碼"}), 404
+
 port = int(os.environ.get("PORT", 5000))
 app.run(host="0.0.0.0", port=port)
