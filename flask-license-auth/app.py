@@ -77,8 +77,35 @@ def get_licenses():
 
     with get_conn() as conn:
         cur = conn.cursor()
+
+        # 取出所有授權資料
         cur.execute("SELECT * FROM licenses")
-        data = {row['auth_code']: row for row in cur.fetchall()}
+        license_rows = cur.fetchall()
+
+        # 建立 auth_code → 資訊 dict
+        data = {}
+        for row in license_rows:
+            data[row['auth_code']] = {
+                "expiry": row["expiry"],
+                "remaining": row["remaining"],
+                "mac": ""  # 預設先留空，等等補上 bindings
+            }
+
+        # 撈出綁定的裝置資訊
+        cur.execute("SELECT auth_code, mac FROM bindings")
+        bindings = cur.fetchall()
+
+        # 整理：把綁定資訊加到上面的 license 資料中
+        for row in bindings:
+            auth_code = row["auth_code"]
+            mac = row["mac"]
+            if auth_code in data:
+                existing = data[auth_code]["mac"]
+                if existing:
+                    data[auth_code]["mac"] += f"\n{mac}"  # 多台裝置用換行隔開
+                else:
+                    data[auth_code]["mac"] = mac
+
     return jsonify(data)
 
 @app.route("/check_license", methods=["POST"])
@@ -110,8 +137,21 @@ def check_license():
         if not existing:
             cur.execute("INSERT INTO bindings (mac, auth_code) VALUES (%s, %s)", (mac, code))
 
-        # ✅ 無論是否第一次綁定，都同步更新 licenses 表（for 管理畫面顯示）
-        cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
+       # 如果 MAC 尚未綁定，建立綁定紀錄 + 扣除剩餘次數
+        if not existing:
+            cur.execute("INSERT INTO bindings (mac, auth_code) VALUES (%s, %s)", (mac, code))
+            
+            # 🧮 檢查 remaining 是否大於 0 才減
+            if row["remaining"] > 0:
+                cur.execute(
+                    "UPDATE licenses SET remaining = remaining - 1, mac = %s WHERE auth_code = %s",
+                    (mac, code)
+                )
+            else:
+                return jsonify({"error": "此授權碼已無剩餘使用次數"}), 403
+        else:
+            # ✅ 非首次綁定，也同步更新 mac 欄位（for UI 顯示用途）
+            cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
 
         # 到期檢查
         expiry = row["expiry"]
