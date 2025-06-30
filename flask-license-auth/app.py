@@ -210,15 +210,10 @@ def reset_mac():
     with get_conn() as conn:
         cur = conn.cursor()
 
-        # 先查出這筆綁定的 MAC
-        cur.execute("SELECT mac FROM licenses WHERE auth_code = %s", (code,))
-        row = cur.fetchone()
-        if row and row["mac"]:
-            mac = row["mac"]
-            # ❗ 同步刪除 bindings 表資料
-            cur.execute("DELETE FROM bindings WHERE mac = %s", (mac,))
-        
-        # ✅ 清空 licenses 表中的 mac 欄位
+        # ❗ 刪除所有綁定這個授權碼的紀錄
+        cur.execute("DELETE FROM bindings WHERE auth_code = %s", (code,))
+
+        # ✅ 清空 licenses 表中的 mac 欄位（UI 顯示用）
         cur.execute("UPDATE licenses SET mac = '' WHERE auth_code = %s", (code,))
         conn.commit()
 
