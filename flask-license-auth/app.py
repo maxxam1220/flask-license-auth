@@ -172,8 +172,19 @@ def reset_mac():
     code = request.get_json().get("auth_code")
     with get_conn() as conn:
         cur = conn.cursor()
+
+        # 先查出這筆綁定的 MAC
+        cur.execute("SELECT mac FROM licenses WHERE auth_code = %s", (code,))
+        row = cur.fetchone()
+        if row and row["mac"]:
+            mac = row["mac"]
+            # ❗ 同步刪除 bindings 表資料
+            cur.execute("DELETE FROM bindings WHERE mac = %s", (mac,))
+        
+        # ✅ 清空 licenses 表中的 mac 欄位
         cur.execute("UPDATE licenses SET mac = '' WHERE auth_code = %s", (code,))
         conn.commit()
+
     return jsonify({"success": True})
 
 def init_db():
