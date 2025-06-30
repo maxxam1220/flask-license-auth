@@ -79,20 +79,37 @@ def check_license():
     code = data.get("auth_code")
     mac = data.get("mac")
 
+    if not code or not mac:
+        return jsonify({"error": "缺少授權碼或 MAC"}), 400
+
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT * FROM licenses WHERE auth_code = %s", (code,))
         row = cur.fetchone()
+
         if not row:
             return jsonify({"error": "無效授權碼"}), 403
 
-        if not row["mac"]:
+        # ✅ 裝置綁定
+        db_mac = row.get("mac") or ""
+        if not db_mac:
             cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
             conn.commit()
-        elif row["mac"] != mac:
+        elif db_mac != mac:
             return jsonify({"error": "裝置不符"}), 403
 
-        return jsonify({"success": True, "expiry": str(row["expiry"]), "remaining": row["remaining"]})
+        # ✅ 到期日檢查
+        expiry = row["expiry"]
+        if isinstance(expiry, datetime):
+            expiry = expiry.date()
+        if expiry < datetime.today().date():
+            return jsonify({"error": "授權已過期"}), 403
+
+        return jsonify({
+            "success": True,
+            "expiry": str(expiry),
+            "remaining": row["remaining"]
+        })
 
 @app.route("/update_license", methods=["POST"])
 def update_license():
