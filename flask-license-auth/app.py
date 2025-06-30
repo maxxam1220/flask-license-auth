@@ -96,6 +96,7 @@ def check_license():
         # 先查這個 MAC 是否已綁定別的授權碼
         cur.execute("SELECT auth_code FROM bindings WHERE mac = %s", (mac,))
         existing = cur.fetchone()
+        print(f"[DEBUG] 查詢 bindings：mac={mac} 綁定結果 = {existing}")
         if existing and existing["auth_code"] != code:
             return jsonify({"error": "此裝置已綁定其他授權碼"}), 403
 
@@ -107,7 +108,13 @@ def check_license():
 
         # 如果 MAC 尚未綁定，建立綁定紀錄
         if not existing:
+             # 第一次綁定
             cur.execute("INSERT INTO bindings (mac, auth_code) VALUES (%s, %s)", (mac, code))
+        elif existing["auth_code"] == code:
+            # 允許同一組授權重綁（更新可見用的 mac）
+            pass
+        else:
+            return jsonify({"error": "此裝置已綁定其他授權碼"}), 403
             # 同步寫回 licenses 表（僅供前端查看用途）
             cur.execute("UPDATE licenses SET mac = %s WHERE auth_code = %s", (mac, code))
 
