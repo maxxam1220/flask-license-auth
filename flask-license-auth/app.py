@@ -207,13 +207,26 @@ def reset_mac():
         return jsonify({"error": "無效 API 金鑰"}), 403
 
     code = request.get_json().get("auth_code")
+
+    if not code:
+        return jsonify({"error": "缺少授權碼"}), 400
+
     with get_conn() as conn:
         cur = conn.cursor()
 
-        # ❗ 刪除所有綁定這個授權碼的紀錄
-        cur.execute("DELETE FROM bindings WHERE auth_code = %s", (code,))
+        # 先查出該授權碼對應的 mac（可能為空）
+        cur.execute("SELECT mac FROM licenses WHERE auth_code = %s", (code,))
+        row = cur.fetchone()
 
-        # ✅ 清空 licenses 表中的 mac 欄位（UI 顯示用）
+        if not row:
+            return jsonify({"error": "授權碼不存在"}), 404
+
+        mac = row.get("mac")
+        if mac:
+            # ❗ 同步刪除 bindings 表中這個 mac 綁定的資料
+            cur.execute("DELETE FROM bindings WHERE mac = %s", (mac,))
+
+        # ✅ 清空 licenses 表中這筆授權的 mac 欄位
         cur.execute("UPDATE licenses SET mac = '' WHERE auth_code = %s", (code,))
         conn.commit()
 
