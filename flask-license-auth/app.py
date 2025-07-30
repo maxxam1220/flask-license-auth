@@ -232,6 +232,55 @@ def reset_mac():
 
     return jsonify({"success": True})
 
+@app.route("/export_licenses", methods=["GET"])
+def export_licenses():
+    if request.headers.get("Authorization", "") != "Bearer max-lic-8899-secret":
+        return jsonify({"error": "無效 API 金鑰"}), 403
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM licenses")
+        licenses = cur.fetchall()
+        cur.execute("SELECT * FROM bindings")
+        bindings = cur.fetchall()
+    return jsonify({
+        "licenses": licenses,
+        "bindings": bindings
+    })
+
+@app.route("/import_licenses", methods=["POST"])
+def import_licenses():
+    if request.headers.get("Authorization", "") != "Bearer max-lic-8899-secret":
+        return jsonify({"error": "無效 API 金鑰"}), 403
+
+    data = request.get_json()
+    licenses = data.get("licenses", [])
+    bindings = data.get("bindings", [])
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        for row in licenses:
+            cur.execute("""
+                INSERT INTO licenses (auth_code, expiry, remaining, mac)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (auth_code) DO UPDATE
+                SET expiry = EXCLUDED.expiry,
+                    remaining = EXCLUDED.remaining,
+                    mac = EXCLUDED.mac
+            """, (row["auth_code"], row["expiry"], row["remaining"], row["mac"]))
+
+        for row in bindings:
+            cur.execute("""
+                INSERT INTO bindings (mac, auth_code)
+                VALUES (%s, %s)
+                ON CONFLICT (mac) DO UPDATE
+                SET auth_code = EXCLUDED.auth_code
+            """, (row["mac"], row["auth_code"]))
+
+        conn.commit()
+
+    return jsonify({"success": True})
+
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 5000))
