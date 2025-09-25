@@ -1,6 +1,5 @@
 # migrations.py
 import os, psycopg2
-from psycopg2.extras import register_default_jsonb
 
 SQL_CREATE_AUDIT_LOGIN = """
 CREATE TABLE IF NOT EXISTS audit_login (
@@ -25,8 +24,13 @@ CREATE INDEX IF NOT EXISTS idx_audit_login_action   ON audit_login(action);
 """
 
 def ensure_audit_login_table():
-    dsn = os.environ["AUDIT_DB_DSN"]   # 你後端原本就有設（連 Internal DB URL）
-    # e.g. postgresql://user:pass@<internal-host>:5432/license_db_0830?sslmode=require
+    # ✅ 改用 DATABASE_URL（Render 會提供）
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL 未設定")
+    if "sslmode=" not in dsn:
+        dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
+
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
     with conn, conn.cursor() as cur:
