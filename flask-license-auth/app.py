@@ -396,7 +396,8 @@ def audit_list():
 <head>
   <meta charset="utf-8">
   <title>Audit Login ｜ 授權後台</title>
-  <link rel="icon" href="/static/favicon.ico">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=1" type="image/x-icon">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}?v=1" type="image/png" sizes="any">
   <style>
 <style>
 body{background:#0f1115;color:#eaeaea;font-family:system-ui,sans-serif}
