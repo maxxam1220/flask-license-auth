@@ -391,13 +391,14 @@ def audit_list():
 
     current_qs = urlencode(request.args.to_dict(flat=False), doseq=True)
     # 用 render_template_string，省一個檔案
-    return render_template_string("""   # 注意：前面不要加 f
+    return render_template_string("""
     <!doctype html>
     <html lang="zh-Hant">
     <head>
       <meta charset="utf-8">
       <title>Audit Login ｜ 授權後台</title>
-      <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=1">
+      <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=2" type="image/x-icon">
+      <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}?v=2" type="image/x-icon">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
         :root{
