@@ -306,7 +306,11 @@ def api_audit_log():
         return jsonify({"ok": False, "msg": "missing username/action"}), 400
 
     # 以伺服器看到的來源 IP 為準（比 client 傳的準確）
-    remote_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        remote_ip = xff.split(",")[0].strip()
+    else:
+        remote_ip = request.remote_addr
 
     with get_conn() as conn:
         cur = conn.cursor()
@@ -361,12 +365,15 @@ def audit_list():
         where.append("event_time <= %s"); params.append(to_ts)
 
     sql = f"""
-      SELECT event_time, username, action, machine_name, local_ip, public_ip, app_version, client_os, COALESCE(note,'') AS note
+      SELECT
+        to_char(event_time AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS event_time,
+        username, action, machine_name, local_ip, public_ip, app_version, client_os, COALESCE(note,'') AS note
       FROM audit_login
       WHERE {' AND '.join(where)}
       ORDER BY event_time DESC
       LIMIT %s OFFSET %s
     """
+
     params2 = params + [limit, offset]
 
     with get_conn() as conn:
@@ -408,6 +415,7 @@ th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#
   <label>迄 <input type="datetime-local" name="to"   value="{{ request.args.get('to','') }}"></label>
   <label>每頁 <input style="width:80px" type="number" name="limit" min="10" max="500" value="{{ request.args.get('limit','50') }}"></label>
   <button class="btn">查詢</button>
+  <a class="pill" href="/audit/export.csv" style="text-decoration:none">下載 CSV</a>
   {% if prev_link %}<a class="pill" href="{{ prev_link }}">上一頁</a>{% endif %}
   {% if next_link %}<a class="pill" href="{{ next_link }}">下一頁</a>{% endif %}
 </form>
@@ -433,14 +441,35 @@ th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#
 </table>
     """, rows=rows, prev_link=prev_link, next_link=next_link)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL 未設定")
-if "sslmode=" not in DATABASE_URL:
-    DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
+@app.route("/audit/export.csv", methods=["GET"])
+def audit_export_csv():
+    if not session.get("logged_in"):
+        return redirect("/login")
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    import csv, io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["time_tw","username","action","machine","local_ip","public_ip","version","os","note"])
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+          SELECT
+            to_char(event_time AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS time_tw,
+            username, action, machine_name, local_ip, public_ip, app_version, client_os, COALESCE(note,'') AS note
+          FROM audit_login
+          ORDER BY event_time DESC
+          LIMIT 5000
+        """)
+        for row in cur.fetchall():
+            writer.writerow([
+                row["time_tw"], row["username"], row["action"], row["machine_name"],
+                row["local_ip"], row["public_ip"], row["app_version"], row["client_os"], row["note"]
+            ])
+
+    resp = app.response_class(output.getvalue(), mimetype="text/csv; charset=utf-8")
+    resp.headers["Content-Disposition"] = "attachment; filename=audit_login.csv"
+    return resp
 
 if __name__ == "__main__":
     init_db()
