@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify, render_template, redirect, session, r
 import psycopg2, os
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
+from migrations import ensure_audit_login_table
+ensure_audit_login_table()
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key_123"  # 請改成更安全的亂數
