@@ -392,78 +392,96 @@ def audit_list():
     # 用 render_template_string，省一個檔案
     return render_template_string("""
 <!doctype html>
-<html>
+<html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <title>Audit Login ｜ 授權後台</title>
-  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=1" type="image/x-icon">
-  <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}?v=1" type="image/png" sizes="any">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-<style>
-body{background:#0f1115;color:#eaeaea;font-family:system-ui,sans-serif}
-form{margin:12px 0} input,select{background:#1b1d23;color:#eaeaea;border:1px solid #2b2f3a;border-radius:6px;padding:6px 8px}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#9aa0a6;text-align:left}
-.btn{background:#2d7dff;border:none;color:#fff;padding:6px 10px;border-radius:6px;cursor:pointer}
-.pill{padding:2px 6px;border-radius:999px;background:#222;border:1px solid #333;font-size:12px}
-.flex{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-</style>
-<h1>Audit Login</h1>
-{% if request.args.get('msg') %}
-  <div style="margin:8px 0;padding:8px 12px;border:1px solid #335c33;background:#1b2b1b;color:#b7e1b7;border-radius:8px">
-    {{ request.args.get('msg') }}
-  </div>
-{% endif %}
-<form method="GET" class="flex">
-  <label>使用者 <input type="text" name="username" value="{{ request.args.get('username','') }}"></label>
-  <label>事件 <select name="action">
-    {% set act = request.args.get('action','') %}
-    <option value="">(全部)</option>
-    {% for a in ["login_success","login_fail"] %}
-      <option value="{{a}}" {% if a==act %}selected{% endif %}>{{a}}</option>
-    {% endfor %}
-  </select></label>
-  <label>起 <input type="datetime-local" name="from" value="{{ request.args.get('from','') }}"></label>
-  <label>迄 <input type="datetime-local" name="to"   value="{{ request.args.get('to','') }}"></label>
-  <label>每頁 <input style="width:80px" type="number" name="limit" min="10" max="500" value="{{ request.args.get('limit','50') }}"></label>
-  <button class="btn">查詢</button>
-  <!-- 下載 CSV（帶上目前的篩選條件） -->
-  <a class="pill" href="/audit/export.csv?{{ request.query_string|safe }}" style="text-decoration:none">下載 CSV</a>
-  <!-- 清除舊紀錄（POST 到 /audit/prune，帶 days；先跳確認） -->
-  <input type="number" name="days" min="1" max="3650" value="{{ request.args.get('days','180') }}" style="width:80px" />
-  <button class="pill"
-          type="submit"
-          formmethod="post"
-          formaction="/audit/prune?{{ request.query_string|safe }}"
-          title="刪除早於此天數的紀錄"
-          onclick="return confirm('確定要清除舊紀錄嗎？此動作無法復原。');">
-    清除(天)
-  </button>
-  {% if prev_link %}<a class="pill" href="{{ prev_link }}">上一頁</a>{% endif %}
-  {% if next_link %}<a class="pill" href="{{ next_link }}">下一頁</a>{% endif %}
-</form>
-<table>
-  <thead><tr>
-    <th>時間</th><th>使用者</th><th>事件</th><th>機器</th><th>local ip</th><th>public ip</th><th>版本</th><th>OS</th><th>備註</th>
-  </tr></thead>
-  <tbody>
-  {% for r in rows %}
-    <tr>
-      <td>{{ r["event_time"] }}</td>
-      <td>{{ r["username"] }}</td>
-      <td>{{ r["action"] }}</td>
-      <td>{{ r["machine_name"] }}</td>
-      <td>{{ r["local_ip"] }}</td>
-      <td>{{ r["public_ip"] }}</td>
-      <td>{{ r["app_version"] }}</td>
-      <td>{{ r["client_os"] }}</td>
-      <td>{{ r["note"] }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-</body></html>
-    """, rows=rows, prev_link=prev_link, next_link=next_link)
+    :root{
+      --bg:#0f1115; --panel:#151821; --panel2:#1b1f2a; --line:#2b2f3a;
+      --text:#eaeaea; --muted:#9aa0a6; --accent:#2d7dff;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;padding:18px 18px 28px;background:var(--bg);color:var(--text);font:14px/1.6 system-ui,Segoe UI,Roboto,Apple Color Emoji}
+    h1{margin:0 0 12px;font-size:28px}
+    form{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--panel);padding:12px;border:1px solid var(--line);border-radius:10px}
+    input,select{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+    input[type="number"]{width:90px}
+    .btn{background:var(--accent);border:none;color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#1b1d23;border:1px solid var(--line);color:var(--text);text-decoration:none}
+    table{width:100%;border-collapse:collapse;margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+    th,td{border-bottom:1px solid var(--line);padding:8px 10px;font-size:13px;text-align:left}
+    th{color:var(--muted);background:#121521}
+    tr:hover{background:#171b25}
+    .msg{margin:10px 0;padding:10px 12px;border:1px solid #335c33;background:#132313;color:#b7e1b7;border-radius:8px}
+    @media (max-width:760px){
+      th:nth-child(6),td:nth-child(6){display:none} /* 隱藏 public ip（手機） */
+    }
+  </style>
+</head>
+<body>
+  <h1>Audit Login</h1>
+
+  {% if request.args.get('msg') %}
+    <div class="msg">{{ request.args.get('msg') }}</div>
+  {% endif %}
+
+  <form method="GET">
+    <label>使用者 <input type="text" name="username" value="{{ request.args.get('username','') }}"></label>
+    <label>事件
+      {% set act = request.args.get('action','') %}
+      <select name="action">
+        <option value="">(全部)</option>
+        {% for a in ["login_success","login_fail"] %}
+          <option value="{{a}}" {% if a==act %}selected{% endif %}>{{a}}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>起 <input type="datetime-local" name="from" value="{{ request.args.get('from','') }}"></label>
+    <label>迄 <input type="datetime-local" name="to"   value="{{ request.args.get('to','') }}"></label>
+    <label>每頁 <input type="number" name="limit" min="10" max="500" value="{{ request.args.get('limit','50') }}"></label>
+
+    <button class="btn" type="submit">查詢</button>
+
+    <!-- 下載 / 清除 -->
+    <a class="pill" href="/audit/export.csv{% if current_qs %}?{{ current_qs }}{% endif %}">下載 CSV</a>
+    <input type="number" name="days" min="1" max="3650" value="{{ request.args.get('days','180') }}">
+    <button class="pill" type="submit"
+            formmethod="post"
+            formaction="/audit/prune{% if current_qs %}?{{ current_qs }}{% endif %}"
+            onclick="return confirm('確定要清除舊紀錄嗎？此動作無法復原。');">
+      清除(天)
+    </button>
+
+    {% if prev_link %}<a class="pill" href="{{ prev_link }}">上一頁</a>{% endif %}
+    {% if next_link %}<a class="pill" href="{{ next_link }}">下一頁</a>{% endif %}
+  </form>
+
+  <table>
+    <thead><tr>
+      <th>時間</th><th>使用者</th><th>事件</th><th>機器</th><th>local ip</th><th>public ip</th><th>版本</th><th>OS</th><th>備註</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r["event_time"] }}</td>
+        <td>{{ r["username"] }}</td>
+        <td>{{ r["action"] }}</td>
+        <td>{{ r["machine_name"] }}</td>
+        <td>{{ r["local_ip"] }}</td>
+        <td>{{ r["public_ip"] }}</td>
+        <td>{{ r["app_version"] }}</td>
+        <td>{{ r["client_os"] }}</td>
+        <td>{{ r["note"] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
+""", rows=rows, prev_link=prev_link, next_link=next_link, current_qs=current_qs)
 
 @app.route("/audit/export.csv", methods=["GET"])
 def audit_export_csv():
