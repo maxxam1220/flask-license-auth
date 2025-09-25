@@ -389,8 +389,9 @@ def audit_list():
     prev_link = mk_link(-1) if page > 1 else None
     next_link = mk_link(+1) if len(rows) >= limit else None
 
+    current_qs = urlencode(request.args.to_dict(flat=False), doseq=True)
     # 用 render_template_string，省一個檔案
-    return render_template_string("""
+    return render_template_string("""   # 注意：前面不要加 f
     <!doctype html>
     <html lang="zh-Hant">
     <head>
@@ -417,7 +418,7 @@ def audit_list():
         tr:hover{background:#171b25}
         .msg{margin:10px 0;padding:10px 12px;border:1px solid #335c33;background:#132313;color:#b7e1b7;border-radius:8px}
         @media (max-width:760px){
-          th:nth-child(6),td:nth-child(6){display:none} /* 隱藏 public ip（手機） */
+          th:nth-child(6),td:nth-child(6){display:none}
         }
       </style>
     </head>
@@ -445,7 +446,6 @@ def audit_list():
     
         <button class="btn" type="submit">查詢</button>
     
-        <!-- 下載 / 清除 -->
         <a class="pill" href="/audit/export.csv{% if current_qs %}?{{ current_qs }}{% endif %}">下載 CSV</a>
         <input type="number" name="days" min="1" max="3650" value="{{ request.args.get('days','180') }}">
         <button class="pill" type="submit"
