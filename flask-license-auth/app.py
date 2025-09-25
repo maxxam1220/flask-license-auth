@@ -391,7 +391,13 @@ def audit_list():
 
     # 用 render_template_string，省一個檔案
     return render_template_string("""
-<!doctype html><meta charset="utf-8">
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Audit Login ｜ 授權後台</title>
+  <link rel="icon" href="/static/favicon.ico">
+  <style>
 <style>
 body{background:#0f1115;color:#eaeaea;font-family:system-ui,sans-serif}
 form{margin:12px 0} input,select{background:#1b1d23;color:#eaeaea;border:1px solid #2b2f3a;border-radius:6px;padding:6px 8px}
@@ -455,6 +461,7 @@ th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#
   {% endfor %}
   </tbody>
 </table>
+</body></html>
     """, rows=rows, prev_link=prev_link, next_link=next_link)
 
 @app.route("/audit/export.csv", methods=["GET"])
