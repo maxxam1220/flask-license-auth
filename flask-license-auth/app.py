@@ -402,6 +402,11 @@ th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#
 .flex{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 </style>
 <h1>Audit Login</h1>
+{% if request.args.get('msg') %}
+  <div style="margin:8px 0;padding:8px 12px;border:1px solid #335c33;background:#1b2b1b;color:#b7e1b7;border-radius:8px">
+    {{ request.args.get('msg') }}
+  </div>
+{% endif %}
 <form method="GET" class="flex">
   <label>使用者 <input type="text" name="username" value="{{ request.args.get('username','') }}"></label>
   <label>事件 <select name="action">
@@ -415,7 +420,18 @@ th,td{border-bottom:1px solid #2b2f3a;padding:6px 8px;font-size:13px} th{color:#
   <label>迄 <input type="datetime-local" name="to"   value="{{ request.args.get('to','') }}"></label>
   <label>每頁 <input style="width:80px" type="number" name="limit" min="10" max="500" value="{{ request.args.get('limit','50') }}"></label>
   <button class="btn">查詢</button>
-  <a class="pill" href="/audit/export.csv" style="text-decoration:none">下載 CSV</a>
+  <!-- 下載 CSV（帶上目前的篩選條件） -->
+  <a class="pill" href="/audit/export.csv?{{ request.query_string|safe }}" style="text-decoration:none">下載 CSV</a>
+  <!-- 清除舊紀錄（POST 到 /audit/prune，帶 days；先跳確認） -->
+  <input type="number" name="days" min="1" max="3650" value="{{ request.args.get('days','180') }}" style="width:80px" />
+  <button class="pill"
+          type="submit"
+          formmethod="post"
+          formaction="/audit/prune?{{ request.query_string|safe }}"
+          title="刪除早於此天數的紀錄"
+          onclick="return confirm('確定要清除舊紀錄嗎？此動作無法復原。');">
+    清除(天)
+  </button>
   {% if prev_link %}<a class="pill" href="{{ prev_link }}">上一頁</a>{% endif %}
   {% if next_link %}<a class="pill" href="{{ next_link }}">下一頁</a>{% endif %}
 </form>
@@ -470,6 +486,41 @@ def audit_export_csv():
     resp = app.response_class(output.getvalue(), mimetype="text/csv; charset=utf-8")
     resp.headers["Content-Disposition"] = "attachment; filename=audit_login.csv"
     return resp
+
+@app.route("/audit/prune", methods=["POST"])
+def audit_prune():
+    if not session.get("logged_in"):
+        return redirect("/login")
+
+    # 限制 days 範圍，避免誤刪或注入
+    try:
+        days = int(request.form.get("days", "180"))
+    except ValueError:
+        days = 180
+    days = max(1, min(days, 3650))  # 1~3650 天
+
+    # 刪除並回傳筆數
+    with get_conn() as conn:
+        cur = conn.cursor()
+        # 用 make_interval 比較安全（param 是純整數）
+        cur.execute("DELETE FROM audit_login WHERE event_time < now() - make_interval(days => %s)", (days,))
+        deleted = cur.rowcount
+        conn.commit()
+
+    # （可選）輕量更新統計，幫查詢計劃更準
+    try:
+        with get_conn() as conn2:
+            cur2 = conn2.cursor()
+            cur2.execute("ANALYZE audit_login")
+            conn2.commit()
+    except Exception:
+        pass
+        
+    # 帶訊息回到 /audit（保留原查詢參數）
+    q = request.args.to_dict(flat=True)
+    q["msg"] = f"已清除 {days} 天前的舊紀錄，共 {deleted} 筆。"
+    from urllib.parse import urlencode
+    return redirect(f"/audit?{urlencode(q)}")
 
 if __name__ == "__main__":
     init_db()
