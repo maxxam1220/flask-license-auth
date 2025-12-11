@@ -13,7 +13,7 @@ USERNAME = os.getenv("ADMIN_USER", "admin")
 PASSWORD = os.getenv("ADMIN_PASS", "Aa721220")
 
 # ✅ 給外部 ping 的 health token（可選，沒設就不檢查）
-PING_TOKEN = os.getenv("Aa721220-#$%^@721220Aa")  # 不設的話 = None
+PING_TOKEN = os.getenv("invimb-health-721220-9Dx2fP0")  # 不設的話 = None
 
 # ✅ PostgreSQL 連線字串（補上 sslmode=require）
 DATABASE_URL = os.environ.get("DATABASE_URL")
