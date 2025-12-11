@@ -12,6 +12,9 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")  # ✅ 改�
 USERNAME = os.getenv("ADMIN_USER", "admin")
 PASSWORD = os.getenv("ADMIN_PASS", "Aa721220")
 
+# ✅ 給外部 ping 的 health token（可選，沒設就不檢查）
+PING_TOKEN = os.getenv("Aa721220-#$%^@721220Aa")  # 不設的話 = None
+
 # ✅ PostgreSQL 連線字串（補上 sslmode=require）
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
@@ -46,6 +49,35 @@ def init_db():
             )
         """)
         conn.commit()
+
+# ✅ 給 Cron-Job.org / 監控用的健康檢查
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    簡單健康檢查：
+    - 若有設定 PING_TOKEN，必須帶 ?token=xxx 才回 200
+    - 沒設定 PING_TOKEN，任何人 GET /health 都會回 200
+    """
+    if PING_TOKEN:
+        token = request.args.get("token", "")
+        if token != PING_TOKEN:
+            return jsonify({"status": "forbidden"}), 403
+
+    # 這裡你也可以順便測 DB（可選）：
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        db_ok = True
+    except Exception as e:
+        print("🔥 [health] DB check failed:", e)
+        db_ok = False
+
+    return jsonify({
+        "status": "ok" if db_ok else "degraded",
+        "db": db_ok,
+    }), 200 if db_ok else 500
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
