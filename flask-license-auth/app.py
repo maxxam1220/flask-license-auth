@@ -241,7 +241,7 @@ def _encode_expiry(date_str: str | None) -> str | None:
     
 def decode_license_expiry_utc(expires_enc: str | None) -> str | None:
     """
-    提供給 /check_account 回傳的 license_expiry_utc：
+    提供給 / 回傳的 license_expiry_utc：
 
     1. 用 _decode_expiry() 還原 'YYYY-MM-DD'
     2. 視為【台北時間當天 23:59:59】到期
@@ -554,6 +554,84 @@ def check_account():
     finally:
         if conn is not None:
             conn.close()
+
+# === RBAC 設定：角色 / 模組 → tabs ====
+@app.get("/rbac/role_tabs")
+def api_get_role_tabs():
+    """回傳 role → tabs mapping，給客戶端載入 RBAC 用。"""
+    try:
+        with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT role_name, tabs FROM rbac_tabs ORDER BY role_name")
+            rows = cur.fetchall()
+        mapping = {r["role_name"]: r["tabs"] for r in rows}
+        return jsonify({"ok": True, "role_tabs": mapping})
+    except Exception as e:
+        print("[rbac] api_get_role_tabs error:", e)
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+@app.post("/rbac/role_tabs")
+def api_save_role_tabs():
+    """
+    覆蓋整份 role → tabs 設定。
+    Request JSON:
+      { "role_tabs": { "admin": ["conn", "perm_admin", ...], "pur": [...], ... } }
+    """
+    data = request.get_json(silent=True) or {}
+    mapping = data.get("role_tabs") or {}
+    if not isinstance(mapping, dict):
+        return jsonify({"ok": False, "message": "role_tabs 必須是 dict"}), 400
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            # 先清掉，再整批重建
+            cur.execute("DELETE FROM rbac_tabs")
+            for role, tabs in mapping.items():
+                if not isinstance(tabs, list):
+                    tabs = []
+                cur.execute(
+                    "INSERT INTO rbac_tabs (role_name, tabs) VALUES (%s, %s)",
+                    (role, Json(tabs)),
+                )
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("[rbac] api_save_role_tabs error:", e)
+        return jsonify({"ok": False, "message": str(e)}), 500
+        
+@app.get("/rbac/module_tabs")
+def api_get_module_tabs():
+    """回傳 module → tabs mapping。"""
+    try:
+        with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT module_name, tabs FROM rbac_modules ORDER BY module_name")
+            rows = cur.fetchall()
+        mapping = {r["module_name"]: r["tabs"] for r in rows}
+        return jsonify({"ok": True, "module_tabs": mapping})
+    except Exception as e:
+        print("[rbac] api_get_module_tabs error:", e)
+        return jsonify({"ok": False, "message": str(e)}), 500
+
+@app.post("/rbac/module_tabs")
+def api_save_module_tabs():
+    """覆蓋整份 module → tabs 設定。"""
+    data = request.get_json(silent=True) or {}
+    mapping = data.get("module_tabs") or {}
+    if not isinstance(mapping, dict):
+        return jsonify({"ok": False, "message": "module_tabs 必須是 dict"}), 400
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM rbac_modules")
+            for module, tabs in mapping.items():
+                if not isinstance(tabs, list):
+                    tabs = []
+                cur.execute(
+                    "INSERT INTO rbac_modules (module_name, tabs) VALUES (%s, %s)",
+                    (module, Json(tabs)),
+                )
+        return jsonify({"ok": True})
+    except Exception as e:
+        print("[rbac] api_save_module_tabs error:", e)
+        return jsonify({"ok": False, "message": str(e)}), 500
 
 @app.route("/check_license", methods=["POST"])
 def check_license():
