@@ -421,10 +421,17 @@ def check_account():
         conn = get_conn()
         cur = conn.cursor()
 
-        # 1) 撈出帳號
+        # 1) 撈出帳號（多撈 expires_at）
         cur.execute(
             """
-            SELECT username, password_hash, role, module, active, expires_enc
+            SELECT
+              username,
+              password_hash,
+              role,
+              module,
+              active,
+              expires_enc,
+              expires_at
             FROM accounts
             WHERE username = %s
             """,
@@ -445,7 +452,7 @@ def check_account():
                 "message": "帳號已停用"
             }), 403
 
-        # 2) 密碼驗證：跟 auth_accounts.py 一樣
+        # 2) 密碼驗證
         if not verify_password(password, row["password_hash"]):
             return jsonify({
                 "ok": False,
@@ -453,7 +460,7 @@ def check_account():
                 "message": "密碼錯誤"
             }), 401
 
-        role_name = row["role"]
+        role_name   = row["role"]
         module_name = row["module"]
 
         # 3) 模組 → tabs（module 限制）
@@ -472,7 +479,7 @@ def check_account():
         r = cur.fetchone()
         role_tabs = r["tabs"] if r else []
 
-        # (安全保險，多數情況下 jsonb 會直接是 list，不會是 str)
+        # jsonb 可能會以文字回傳，保險轉一下
         if isinstance(module_tabs, str):
             module_tabs = json.loads(module_tabs)
         if isinstance(role_tabs, str):
@@ -495,7 +502,7 @@ def check_account():
             elif isinstance(expires_at, datetime):
                 d = expires_at.date()
             else:
-                # 預設當成 date 對待
+                # 預設當成 date 對待（psycopg2 RealDictCursor 通常就是 date 型別）
                 d = expires_at
 
             if d:
@@ -505,9 +512,9 @@ def check_account():
                 expiry_utc_dt = dt_local.astimezone(timezone.utc)
 
         else:
-            # 舊資料仍然可以走舊的 expires_enc 解碼
+            # 舊資料：仍支援 expires_enc
             enc = row.get("expires_enc")
-            s = decode_license_expiry_utc(enc)  # 會回 "YYYY-...Z" 或 None
+            s = decode_license_expiry_utc(enc)  # 回傳 "YYYY-...Z" 或 None
             if s:
                 try:
                     expiry_utc_dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
@@ -536,6 +543,17 @@ def check_account():
             "allowed_tabs": allowed_tabs,
             "license_expiry_utc": license_expiry_utc,
         })
+
+    except Exception as e:
+        print("🔥 [check_account] error:", e)
+        return jsonify({
+            "ok": False,
+            "error": "SERVER_ERROR",
+            "message": str(e),
+        }), 500
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route("/check_license", methods=["POST"])
 def check_license():
