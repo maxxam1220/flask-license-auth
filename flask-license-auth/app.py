@@ -30,43 +30,150 @@ def get_conn():
 
 # ⚠️ 這個 KEY 一定要跟 auth_accounts.py 一樣
 SIGN_KEY = b"invimb-accounts-signature-key-v1"
-
-def hash_password(password: str) -> str:
-    """
-    雖然 /check_account 登入不會用到 hash_password（只用 verify），
-    但保留在這裡，未來你如果想在後台新增帳號可以共用這一套。
-    """
-    salt = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        120_000,
-    )
-    return base64.b64encode(salt + dk).decode("ascii")
-
-def verify_password(password: str, stored_hash: str) -> bool:
-    """驗證輸入密碼是否符合 stored_hash（完全複製 auth_accounts.py 的邏輯）。"""
+# -----------------------------
+# ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
+# -----------------------------
+@app.get("/accounts")
+def api_list_accounts():
     try:
-        raw = base64.b64decode(stored_hash.encode("ascii"))
-    except Exception:
-        return False
-    if len(raw) < 16:
-        return False
-    salt, dk = raw[:16], raw[16:]
-    new_dk = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        120_000,
-    )
-    return hmac.compare_digest(dk, new_dk)
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    username,
+                    role,
+                    module,
+                    active,
+                    expires_enc
+                FROM accounts
+                ORDER BY username
+            """)
+            rows = cur.fetchall()
+
+        accounts = []
+        for row in rows:
+            accounts.append({
+                "username": row["username"],
+                "role": row["role"],
+                "module": row["module"],
+                "active": row["active"],
+                # 前端只看到「解碼後」的 YYYY-MM-DD
+                "expires_at": _decode_expiry(row.get("expires_enc")) or None,
+            })
+
+        return jsonify({"ok": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"讀取帳號失敗：{e}"}), 500
+# -----------------------------
+# ② 新增帳號（PermissionAdminTab.on_add_account）
+# -----------------------------
+@app.post("/accounts")
+def api_add_account():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+    role     = (data.get("role") or "").strip() or "admin"
+    module   = (data.get("module") or "").strip() or "admin"
+    active   = bool(data.get("active", True))
+    expires_at = data.get("expires_at")  # 前端送來的是 YYYY-MM-DD 或 None
+
+    if not username or not password:
+        return jsonify({"ok": False, "message": "username / password 不可空白"}), 400
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM accounts WHERE username = %s", (username,))
+            if cur.fetchone():
+                return jsonify({"ok": False, "message": "帳號已存在"}), 400
+
+            # ✅ 用本檔案裡的 hash_password（你已經在下面定義）
+            pwd_hash = hash_password(password)
+            expires_enc = _encode_expiry(expires_at)
+
+            cur.execute("""
+                INSERT INTO accounts (username, password_hash, role, module, active, expires_enc)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (username, pwd_hash, role, module, active, expires_enc))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"新增帳號失敗：{e}"}), 500
+# -----------------------------
+# ③ 刪除帳號（PermissionAdminTab.on_delete_account）
+# -----------------------------
+@app.post("/accounts/delete")
+def api_delete_account():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+
+    if not username:
+        return jsonify({"ok": False, "message": "缺少 username"}), 400
+    if username == "admin":
+        return jsonify({"ok": False, "message": "admin 不允許刪除"}), 400
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM accounts WHERE username = %s", (username,))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"刪除帳號失敗：{e}"}), 500
+# -----------------------------
+# ④ 重設密碼（PermissionAdminTab.on_reset_password）
+# -----------------------------
+@app.post("/accounts/reset_password")
+def api_reset_password():
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    new_password = data.get("new_password") or ""
+
+    if not username or not new_password:
+        return jsonify({"ok": False, "message": "缺少 username 或 new_password"}), 400
+
+    try:
+        pwd_hash = hash_password(new_password)
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute("""
+                UPDATE accounts
+                SET password_hash = %s
+                WHERE username = %s
+            """, (pwd_hash, username))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"重設密碼失敗：{e}"}), 500
+# -----------------------------
+# ⑤ 批次更新帳號 meta（role/module/expires_at/active）
+#     PermissionAdminTab.on_save_accounts()
+# -----------------------------
+@app.post("/accounts/update_meta")
+def api_update_accounts_meta():
+    data = request.get_json(silent=True) or {}
+    accounts = data.get("accounts") or []
+    if not isinstance(accounts, list):
+        return jsonify({"ok": False, "message": "accounts 必須是 list"}), 400
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            for row in accounts:
+                username = (row.get("username") or "").strip()
+                if not username:
+                    continue
+                role     = (row.get("role") or "").strip()
+                module   = (row.get("module") or "").strip()
+                active   = bool(row.get("active", True))
+                expires_at = row.get("expires_at")  # 前端傳來的
+                expires_enc = _encode_expiry(expires_at)
+
+                cur.execute("""
+                    UPDATE accounts
+                    SET role = %s, module = %s, active = %s, expires_enc = %s
+                    WHERE username = %s
+                """, (role, module, active, expires_enc, username))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"更新帳號設定失敗：{e}"}), 500
+
+SIGN_KEY = b"invimb-accounts-signature-key-v1"
 
 def _decode_expiry(token: str | None) -> str | None:
-    """
-    從 expires_enc 解碼出 'YYYY-MM-DD' 字串。
-    這是直接搬你 auth_accounts.py 的邏輯。
-    """
     if not token:
         return None
     try:
@@ -74,12 +181,26 @@ def _decode_expiry(token: str | None) -> str | None:
         key = SIGN_KEY
         raw = bytes(b ^ key[i % len(key)] for i, b in enumerate(ob))
         s = raw.decode("utf-8")
-        # 簡單檢查一下格式是不是 YYYY-MM-DD
         if len(s) == 10 and s[4] == "-" and s[7] == "-":
             return s
     except Exception:
         pass
     return None
+
+def _encode_expiry(date_str: str | None) -> str | None:
+    """把 'YYYY-MM-DD' 編碼成 expires_enc（跟 _decode_expiry 互為反函式）"""
+    if not date_str:
+        return None
+    try:
+        # 先確認一下格式
+        d = date.fromisoformat(date_str)
+    except Exception:
+        return None
+
+    raw = date_str.encode("utf-8")
+    key = SIGN_KEY
+    ob = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    return base64.b64encode(ob).decode("ascii")
     
 def decode_license_expiry_utc(expires_enc: str | None) -> str | None:
     """
