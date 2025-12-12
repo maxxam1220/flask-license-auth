@@ -187,6 +187,43 @@ def _decode_expiry(token: str | None) -> str | None:
         pass
     return None
 
+import os, base64, hashlib, hmac
+def hash_password(password: str) -> str:
+    """
+    產生密碼雜湊：16 bytes salt + PBKDF2-HMAC-SHA256(120_000 次)，
+    然後整串用 base64 編碼成字串存進 DB。
+    """
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        120_000,
+    )
+    return base64.b64encode(salt + dk).decode("ascii")
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """
+    驗證密碼是否符合 stored_hash。
+    必須跟 INVIMB 以前那套演算法完全相同。
+    """
+    try:
+        raw = base64.b64decode(stored_hash.encode("ascii"))
+    except Exception:
+        return False
+
+    if len(raw) < 16:
+        return False
+
+    salt, dk = raw[:16], raw[16:]
+    new_dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        120_000,
+    )
+    return hmac.compare_digest(dk, new_dk)
+
 def _encode_expiry(date_str: str | None) -> str | None:
     """把 'YYYY-MM-DD' 編碼成 expires_enc（跟 _decode_expiry 互為反函式）"""
     if not date_str:
