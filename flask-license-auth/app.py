@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
-import psycopg2, os
+import psycopg2, os, json, base64, hmac, hashlib
 from psycopg2.extras import RealDictCursor, Json
-from datetime import datetime
+from datetime import datetime, timezone, date
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 from migrations import ensure_audit_login_table
 
 app = Flask(__name__)
@@ -24,6 +25,82 @@ if "sslmode=" not in DATABASE_URL:
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+
+# === 密碼雜湊 / 驗證 & 到期日解碼（跟 auth_accounts.py 保持一致） ===
+
+# ⚠️ 這個 KEY 一定要跟 auth_accounts.py 一樣
+SIGN_KEY = b"invimb-accounts-signature-key-v1"
+
+def hash_password(password: str) -> str:
+    """
+    雖然 /check_account 登入不會用到 hash_password（只用 verify），
+    但保留在這裡，未來你如果想在後台新增帳號可以共用這一套。
+    """
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        120_000,
+    )
+    return base64.b64encode(salt + dk).decode("ascii")
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """驗證輸入密碼是否符合 stored_hash（完全複製 auth_accounts.py 的邏輯）。"""
+    try:
+        raw = base64.b64decode(stored_hash.encode("ascii"))
+    except Exception:
+        return False
+    if len(raw) < 16:
+        return False
+    salt, dk = raw[:16], raw[16:]
+    new_dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        120_000,
+    )
+    return hmac.compare_digest(dk, new_dk)
+
+def _decode_expiry(token: str | None) -> str | None:
+    """
+    從 expires_enc 解碼出 'YYYY-MM-DD' 字串。
+    這是直接搬你 auth_accounts.py 的邏輯。
+    """
+    if not token:
+        return None
+    try:
+        ob = base64.b64decode(token.encode("ascii"))
+        key = SIGN_KEY
+        raw = bytes(b ^ key[i % len(key)] for i, b in enumerate(ob))
+        s = raw.decode("utf-8")
+        # 簡單檢查一下格式是不是 YYYY-MM-DD
+        if len(s) == 10 and s[4] == "-" and s[7] == "-":
+            return s
+    except Exception:
+        pass
+    return None
+    
+def decode_license_expiry_utc(expires_enc: str | None) -> str | None:
+    """
+    提供給 /check_account 回傳的 license_expiry_utc：
+
+    1. 用 _decode_expiry() 還原 'YYYY-MM-DD'
+    2. 視為【台北時間當天 23:59:59】到期
+    3. 轉成 UTC ISO8601 字串，例如 '2099-12-31T15:59:59Z'
+    """
+    expiry_str = _decode_expiry(expires_enc)
+    if not expiry_str:
+        return None
+    try:
+        d = date.fromisoformat(expiry_str)
+    except Exception:
+        return None
+
+    tz = ZoneInfo("Asia/Taipei")
+    dt_local = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=tz)
+    dt_utc = dt_local.astimezone(timezone.utc)
+    return dt_utc.isoformat().replace("+00:00", "Z")
 
 # ✅ 啟動即確保 audit_login 已建立（函式內部自己讀 DATABASE_URL）
 ensure_audit_login_table()
@@ -148,6 +225,127 @@ def get_licenses():
                     data[auth_code]["mac"] = mac
 
     return jsonify(data)
+
+@app.route("/check_account", methods=["POST"])
+def check_account():
+    """
+    給 INVIMB main_gui 用的「線上帳號登入」API。
+
+    Request JSON:
+      {
+        "username": "admin",
+        "password": "xxx"
+      }
+
+    Response JSON (成功範例):
+      {
+        "ok": true,
+        "username": "admin",
+        "role": "admin",
+        "module": "admin",
+        "allowed_tabs": ["sale_hist", "pur_hist", ...],
+        "license_expiry_utc": "2099-12-31T15:59:59Z"  # 或 null (無到期日)
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    if not username or not password:
+        return jsonify({
+            "ok": False,
+            "error": "MISSING_CREDENTIALS",
+            "message": "請提供 username / password"
+        }), 400
+
+    conn = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        # 1) 撈出帳號
+        cur.execute(
+            """
+            SELECT username, password_hash, role, module, active, expires_enc
+            FROM accounts
+            WHERE username = %s
+            """,
+            (username,)
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({
+                "ok": False,
+                "error": "NO_SUCH_USER",
+                "message": "帳號不存在"
+            }), 400
+
+        if not row["active"]:
+            return jsonify({
+                "ok": False,
+                "error": "ACCOUNT_DISABLED",
+                "message": "帳號已停用"
+            }), 403
+
+        # 2) 密碼驗證：跟 auth_accounts.py 一樣
+        if not verify_password(password, row["password_hash"]):
+            return jsonify({
+                "ok": False,
+                "error": "BAD_PASSWORD",
+                "message": "密碼錯誤"
+            }), 401
+
+        role_name = row["role"]
+        module_name = row["module"]
+
+        # 3) 模組 → tabs（module 限制）
+        cur.execute(
+            "SELECT tabs FROM rbac_modules WHERE module_name = %s",
+            (module_name,)
+        )
+        m = cur.fetchone()
+        module_tabs = m["tabs"] if m else []
+
+        # 4) 角色 → tabs（role 限制）
+        cur.execute(
+            "SELECT tabs FROM rbac_tabs WHERE role_name = %s",
+            (role_name,)
+        )
+        r = cur.fetchone()
+        role_tabs = r["tabs"] if r else []
+
+        # (安全保險，多數情況下 jsonb 會直接是 list，不會是 str)
+        if isinstance(module_tabs, str):
+            module_tabs = json.loads(module_tabs)
+        if isinstance(role_tabs, str):
+            role_tabs = json.loads(role_tabs)
+
+        # 5) allowed_tabs = 模組 tabs ∩ 角色 tabs
+        allowed_tabs = sorted(set(module_tabs) & set(role_tabs))
+
+        # 6) 到期日：從 expires_enc 解出 license_expiry_utc
+        license_expiry_utc = decode_license_expiry_utc(row.get("expires_enc"))
+
+        return jsonify({
+            "ok": True,
+            "username": row["username"],
+            "role": role_name,
+            "module": module_name,
+            "allowed_tabs": allowed_tabs,
+            "license_expiry_utc": license_expiry_utc,
+        })
+
+    except Exception as e:
+        print("🔥 [check_account] error:", e)
+        return jsonify({
+            "ok": False,
+            "error": "SERVER_ERROR",
+            "message": str(e),
+        }), 500
+
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.route("/check_license", methods=["POST"])
 def check_license():
