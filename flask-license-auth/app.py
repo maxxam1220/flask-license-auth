@@ -481,8 +481,52 @@ def check_account():
         # 5) allowed_tabs = 模組 tabs ∩ 角色 tabs
         allowed_tabs = sorted(set(module_tabs) & set(role_tabs))
 
-        # 6) 到期日：從 expires_enc 解出 license_expiry_utc
-        license_expiry_utc = decode_license_expiry_utc(row.get("expires_enc"))
+        # 6) 到期日：優先使用 accounts.expires_at，沒有再退回 expires_enc
+        expires_at = row.get("expires_at")   # 可能是 date / datetime / str / None
+        expiry_utc_dt = None
+
+        if expires_at:
+            # 允許三種型別：date / datetime / "YYYY-MM-DD"
+            if isinstance(expires_at, str):
+                try:
+                    d = date.fromisoformat(expires_at)
+                except Exception:
+                    d = None
+            elif isinstance(expires_at, datetime):
+                d = expires_at.date()
+            else:
+                # 預設當成 date 對待
+                d = expires_at
+
+            if d:
+                # 視為【台北時間該日 23:59:59 到期】，再轉成 UTC
+                tz = ZoneInfo("Asia/Taipei")
+                dt_local = datetime(d.year, d.month, d.day, 23, 59, 59, tzinfo=tz)
+                expiry_utc_dt = dt_local.astimezone(timezone.utc)
+
+        else:
+            # 舊資料仍然可以走舊的 expires_enc 解碼
+            enc = row.get("expires_enc")
+            s = decode_license_expiry_utc(enc)  # 會回 "YYYY-...Z" 或 None
+            if s:
+                try:
+                    expiry_utc_dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                except Exception:
+                    expiry_utc_dt = None
+
+        # 6-1) 若已過期 → 直接拒絕登入
+        if expiry_utc_dt and datetime.now(timezone.utc) > expiry_utc_dt:
+            return jsonify({
+                "ok": False,
+                "error": "ACCOUNT_EXPIRED",
+                "message": "帳號已到期，請聯絡管理員。",
+            }), 403
+
+        # 6-2) 給 client 的 ISO 字串（讓 INVIMB 端也可以再做一次檢查）
+        license_expiry_utc = (
+            expiry_utc_dt.isoformat().replace("+00:00", "Z")
+            if expiry_utc_dt else None
+        )
 
         return jsonify({
             "ok": True,
@@ -492,18 +536,6 @@ def check_account():
             "allowed_tabs": allowed_tabs,
             "license_expiry_utc": license_expiry_utc,
         })
-
-    except Exception as e:
-        print("🔥 [check_account] error:", e)
-        return jsonify({
-            "ok": False,
-            "error": "SERVER_ERROR",
-            "message": str(e),
-        }), 500
-
-    finally:
-        if conn is not None:
-            conn.close()
 
 @app.route("/check_license", methods=["POST"])
 def check_license():
