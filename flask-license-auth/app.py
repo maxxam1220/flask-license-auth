@@ -808,6 +808,15 @@ def import_licenses():
 
 AUDIT_API_KEY = os.getenv("AUDIT_API_KEY")  # 在 Render 設環境變數
 
+@app.get("/invimb/latest")
+def invimb_latest():
+    return jsonify({
+        "ok": True,
+        "version": "1.4.3",
+        "url": "https://flask-license-auth.onrender.com/static/INVIMB-setup-1.4.3.exe",
+        "changelog": "1. 系統優化 2. 更新線上授權 3. Bug等問題修正"
+    })
+
 @app.route("/api/audit_log", methods=["POST"])
 def api_audit_log():
     # 用 API key 簡單保護（也可換成你既有的授權驗證）
