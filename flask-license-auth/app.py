@@ -838,92 +838,171 @@ def import_auth_backup():
     if not all(isinstance(x, list) for x in [licenses, bindings, accounts, rbac_tabs, rbac_modules]):
         return jsonify({"ok": False, "error": "payload 格式錯誤，欄位必須是 list"}), 400
 
-    with get_conn() as conn:
-        cur = conn.cursor()
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
 
-        # 1) 先清空（注意順序：有 FK 的先 TRUNCATE 子表）
-        #    bindings -> licenses，有外鍵；用 CASCADE 比較保險
-        cur.execute("TRUNCATE TABLE bindings RESTART IDENTITY CASCADE;")
-        cur.execute("TRUNCATE TABLE licenses RESTART IDENTITY CASCADE;")
-        cur.execute("TRUNCATE TABLE accounts RESTART IDENTITY CASCADE;")
-        cur.execute("TRUNCATE TABLE rbac_tabs RESTART IDENTITY CASCADE;")
-        cur.execute("TRUNCATE TABLE rbac_modules RESTART IDENTITY CASCADE;")
+            # 1) 先清空（注意順序：有 FK 的先 TRUNCATE 子表）
+            #    bindings -> licenses，有外鍵；用 CASCADE 比較保險
+            cur.execute("TRUNCATE TABLE bindings RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE licenses RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE accounts RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE rbac_tabs RESTART IDENTITY CASCADE;")
+            cur.execute("TRUNCATE TABLE rbac_modules RESTART IDENTITY CASCADE;")
 
-        # 2) licenses
-        for row in licenses:
-            cur.execute(
-                """
-                INSERT INTO licenses (auth_code, expiry, remaining, mac)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (
-                    row.get("auth_code"),
-                    row.get("expiry"),
-                    row.get("remaining"),
-                    row.get("mac"),
-                ),
-            )
+            # 2) licenses
+            for row in licenses:
+                code = row.get("auth_code")
+                if not code:
+                    # 沒授權碼就略過，避免塞進 NULL primary key
+                    continue
 
-        # 3) accounts
-        for row in accounts:
-            cur.execute(
-                """
-                INSERT INTO accounts
-                    (username, password_hash, role, module, active, expires_at, expires_enc)
-                VALUES
-                    (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    row.get("username"),
-                    row.get("password_hash"),
-                    row.get("role"),
-                    row.get("module"),
-                    bool(row.get("active", True)),
-                    row.get("expires_at"),   # ISO 字串讓 Postgres 自己 parse
-                    row.get("expires_enc"),
-                ),
-            )
+                expiry = row.get("expiry") or None
+                remaining = row.get("remaining")
+                # 殘次數轉成 int（遇到 None / 空字串就當 0）
+                try:
+                    remaining = int(remaining) if remaining is not None else 0
+                except (TypeError, ValueError):
+                    remaining = 0
 
-        # 4) rbac_tabs
-        for row in rbac_tabs:
-            cur.execute(
-                """
-                INSERT INTO rbac_tabs (role_name, tabs)
-                VALUES (%s, %s)
-                """,
-                (
-                    row.get("role_name"),
-                    Json(row.get("tabs") or []),
-                ),
-            )
+                cur.execute(
+                    """
+                    INSERT INTO licenses (auth_code, expiry, remaining, mac)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        code,
+                        expiry,              # ISO 字串或 date 讓 Postgres 自己處理
+                        remaining,
+                        row.get("mac"),
+                    ),
+                )
 
-        # 5) rbac_modules
-        for row in rbac_modules:
-            cur.execute(
-                """
-                INSERT INTO rbac_modules (module_name, tabs)
-                VALUES (%s, %s)
-                """,
-                (
-                    row.get("module_name"),
-                    Json(row.get("tabs") or []),
-                ),
-            )
+            # 3) accounts
+            for row in accounts:
+                username = (row.get("username") or "").strip()
+                if not username:
+                    # 沒帳號就略過
+                    continue
 
-        # 6) 最後插回 bindings（依賴 licenses）
-        for row in bindings:
-            cur.execute(
-                """
-                INSERT INTO bindings (mac, auth_code)
-                VALUES (%s, %s)
-                """,
-                (
-                    row.get("mac"),
-                    row.get("auth_code"),
-                ),
-            )
+                # role / module 多給一層 fallback（相容舊欄位）
+                role   = (row.get("role") or row.get("role_name") or "admin").strip()
+                module = (row.get("module") or row.get("module_name") or "admin").strip()
 
-        conn.commit()
+                active = bool(row.get("active", True))
+                expires_at = row.get("expires_at")  # str / date / None 都交給 Postgres
+
+                cur.execute(
+                    """
+                    INSERT INTO accounts
+                        (username, password_hash, role, module, active, expires_at, expires_enc)
+                    VALUES
+                        (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        username,
+                        row.get("password_hash"),
+                        role,
+                        module,
+                        active,
+                        expires_at,          # ISO 字串讓 Postgres 自己 parse
+                        row.get("expires_enc"),
+                    ),
+                )
+
+            # 4) rbac_tabs
+            for row in rbac_tabs:
+                role_name = (
+                    row.get("role_name")
+                    or row.get("role")
+                    or row.get("name")
+                )
+                if not role_name:
+                    continue
+
+                tabs = row.get("tabs") or []
+                if isinstance(tabs, str):
+                    # 若不小心存成 JSON 字串，嘗試 parse 一下
+                    try:
+                        import json as _json
+                        tabs = _json.loads(tabs)
+                    except Exception:
+                        tabs = []
+
+                if not isinstance(tabs, list):
+                    tabs = []
+
+                cur.execute(
+                    """
+                    INSERT INTO rbac_tabs (role_name, tabs)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        role_name,
+                        Json(tabs),
+                    ),
+                )
+
+            # 5) rbac_modules
+            for row in rbac_modules:
+                module_name = (
+                    row.get("module_name")
+                    or row.get("module")
+                    or row.get("name")
+                )
+                if not module_name:
+                    continue
+
+                tabs = row.get("tabs") or []
+                if isinstance(tabs, str):
+                    try:
+                        import json as _json
+                        tabs = _json.loads(tabs)
+                    except Exception:
+                        tabs = []
+
+                if not isinstance(tabs, list):
+                    tabs = []
+
+                cur.execute(
+                    """
+                    INSERT INTO rbac_modules (module_name, tabs)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        module_name,
+                        Json(tabs),
+                    ),
+                )
+
+            # 6) 最後插回 bindings（依賴 licenses）
+            for row in bindings:
+                mac = row.get("mac")
+                code = row.get("auth_code")
+                if not mac or not code:
+                    # 缺欄位就略過
+                    continue
+
+                cur.execute(
+                    """
+                    INSERT INTO bindings (mac, auth_code)
+                    VALUES (%s, %s)
+                    """,
+                    (
+                        mac,
+                        code,
+                    ),
+                )
+
+            conn.commit()
+
+    except Exception as e:
+        # 若中途出錯，讓呼叫端知道
+        return jsonify({
+            "ok": False,
+            "error": "IMPORT_FAILED",
+            "message": str(e),
+        }), 500
 
     return jsonify({
         "ok": True,
