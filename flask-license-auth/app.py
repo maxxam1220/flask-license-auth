@@ -273,25 +273,8 @@ ensure_audit_login_table()
 
 # 初始化資料表（首次啟動）
 def init_db():
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS licenses (
-                auth_code TEXT PRIMARY KEY,
-                expiry DATE NOT NULL,
-                remaining INTEGER NOT NULL,
-                mac TEXT
-            )
-        """)
- # 新增 bindings 表，用來限制每台裝置只能綁定一組授權
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS bindings (
-                mac TEXT PRIMARY KEY,
-                auth_code TEXT NOT NULL,
-                FOREIGN KEY (auth_code) REFERENCES licenses(auth_code)
-            )
-        """)
-        conn.commit()
+    # 授權/帳號/RBAC 表已由 migrations.ensure_all_tables() 處理
+    pass
 
 # ✅ 給 Cron-Job.org / 監控用的健康檢查
 @app.route("/health", methods=["GET"])
@@ -1256,6 +1239,6 @@ def audit_prune():
     return redirect(f"/audit?{urlencode(q)}")
 
 if __name__ == "__main__":
-    init_db()
+    ensure_all_tables()  # 或已經在 import 時跑過就不用再呼
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
