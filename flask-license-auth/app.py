@@ -25,11 +25,19 @@ if "sslmode=" not in DATABASE_URL:
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
 # === 密碼雜湊 / 驗證 & 到期日解碼（跟 auth_accounts.py 保持一致） ===
-
 # ⚠️ 這個 KEY 一定要跟 auth_accounts.py 一樣
 SIGN_KEY = b"invimb-accounts-signature-key-v1"
+
+def _row_to_jsonable(row: dict) -> dict:
+    """把 DB 回來的 dict 中的 date/datetime 轉成 ISO 字串，其他原樣丟回。"""
+    out = {}
+    for k, v in row.items():
+        if isinstance(v, (datetime, date)):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 # -----------------------------
 # ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
 # -----------------------------
@@ -771,6 +779,178 @@ def export_licenses():
     return jsonify({
         "licenses": licenses,
         "bindings": bindings
+    })
+
+@app.route("/export_auth_backup", methods=["GET"])
+def export_auth_backup():
+    """一次匯出：licenses + bindings + accounts + rbac_tabs + rbac_modules"""
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # licenses
+        cur.execute("SELECT * FROM licenses ORDER BY auth_code")
+        licenses_rows = cur.fetchall()
+        licenses = [_row_to_jsonable(r) for r in licenses_rows]
+
+        # bindings
+        cur.execute("SELECT * FROM bindings ORDER BY mac")
+        bindings_rows = cur.fetchall()
+        bindings = [_row_to_jsonable(r) for r in bindings_rows]
+
+        # accounts
+        cur.execute("SELECT * FROM accounts ORDER BY username")
+        accounts_rows = cur.fetchall()
+        accounts = [_row_to_jsonable(r) for r in accounts_rows]
+
+        # rbac_tabs
+        cur.execute("SELECT * FROM rbac_tabs ORDER BY role_name")
+        rbac_tabs_rows = cur.fetchall()
+        rbac_tabs = [_row_to_jsonable(r) for r in rbac_tabs_rows]
+
+        # rbac_modules
+        cur.execute("SELECT * FROM rbac_modules ORDER BY module_name")
+        rbac_modules_rows = cur.fetchall()
+        rbac_modules = [_row_to_jsonable(r) for r in rbac_modules_rows]
+
+    return jsonify({
+        "ok": True,
+        "schema_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "licenses": licenses,
+        "bindings": bindings,
+        "accounts": accounts,
+        "rbac_tabs": rbac_tabs,
+        "rbac_modules": rbac_modules,
+    })
+
+@app.route("/import_auth_backup", methods=["POST"])
+def import_auth_backup():
+    """
+    還原整套授權系統：
+    - licenses
+    - bindings
+    - accounts
+    - rbac_tabs
+    - rbac_modules
+
+    ⚠ 會 TRUNCATE 這幾張表再重灌，建議只給 MIS 用。
+    """
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    data = request.get_json(silent=True) or {}
+
+    licenses     = data.get("licenses")     or []
+    bindings     = data.get("bindings")     or []
+    accounts     = data.get("accounts")     or []
+    rbac_tabs    = data.get("rbac_tabs")    or []
+    rbac_modules = data.get("rbac_modules") or []
+
+    # 簡單型別檢查，避免傳錯格式
+    if not all(isinstance(x, list) for x in [licenses, bindings, accounts, rbac_tabs, rbac_modules]):
+        return jsonify({"ok": False, "error": "payload 格式錯誤，欄位必須是 list"}), 400
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # 1) 先清空（注意順序：有 FK 的先 TRUNCATE 子表）
+        #    bindings -> licenses，有外鍵；用 CASCADE 比較保險
+        cur.execute("TRUNCATE TABLE bindings RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE licenses RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE accounts RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE rbac_tabs RESTART IDENTITY CASCADE;")
+        cur.execute("TRUNCATE TABLE rbac_modules RESTART IDENTITY CASCADE;")
+
+        # 2) licenses
+        for row in licenses:
+            cur.execute(
+                """
+                INSERT INTO licenses (auth_code, expiry, remaining, mac)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    row.get("auth_code"),
+                    row.get("expiry"),
+                    row.get("remaining"),
+                    row.get("mac"),
+                ),
+            )
+
+        # 3) accounts
+        for row in accounts:
+            cur.execute(
+                """
+                INSERT INTO accounts
+                    (username, password_hash, role, module, active, expires_at, expires_enc)
+                VALUES
+                    (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row.get("username"),
+                    row.get("password_hash"),
+                    row.get("role"),
+                    row.get("module"),
+                    bool(row.get("active", True)),
+                    row.get("expires_at"),   # ISO 字串讓 Postgres 自己 parse
+                    row.get("expires_enc"),
+                ),
+            )
+
+        # 4) rbac_tabs
+        for row in rbac_tabs:
+            cur.execute(
+                """
+                INSERT INTO rbac_tabs (role_name, tabs)
+                VALUES (%s, %s)
+                """,
+                (
+                    row.get("role_name"),
+                    Json(row.get("tabs") or []),
+                ),
+            )
+
+        # 5) rbac_modules
+        for row in rbac_modules:
+            cur.execute(
+                """
+                INSERT INTO rbac_modules (module_name, tabs)
+                VALUES (%s, %s)
+                """,
+                (
+                    row.get("module_name"),
+                    Json(row.get("tabs") or []),
+                ),
+            )
+
+        # 6) 最後插回 bindings（依賴 licenses）
+        for row in bindings:
+            cur.execute(
+                """
+                INSERT INTO bindings (mac, auth_code)
+                VALUES (%s, %s)
+                """,
+                (
+                    row.get("mac"),
+                    row.get("auth_code"),
+                ),
+            )
+
+        conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "import_counts": {
+            "licenses": len(licenses),
+            "bindings": len(bindings),
+            "accounts": len(accounts),
+            "rbac_tabs": len(rbac_tabs),
+            "rbac_modules": len(rbac_modules),
+        },
     })
 
 @app.route("/import_licenses", methods=["POST"])
