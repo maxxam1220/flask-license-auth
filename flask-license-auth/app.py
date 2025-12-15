@@ -1239,6 +1239,5 @@ def audit_prune():
     return redirect(f"/audit?{urlencode(q)}")
 
 if __name__ == "__main__":
-    ensure_all_tables()  # 或已經在 import 時跑過就不用再呼
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
