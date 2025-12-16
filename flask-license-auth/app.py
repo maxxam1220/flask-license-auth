@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
-import psycopg2, os, json, base64, hmac, hashlib, gspread
+import psycopg2, os, json, base64, hmac, hashlib
 from psycopg2.extras import RealDictCursor, Json
 from datetime import datetime, timezone, date
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from migrations import ensure_audit_login_table
-from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")  # ✅ 改用環境變數
@@ -29,6 +28,8 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SPREADSHEET_ID = os.getenv("PUR_HIST_SPREADSHEET_ID", "16kancLaBQIFwDV-HgDYq40RV-5IUcNGdBEAXNvlMHc4")
 SHEET_NAME = os.getenv("PUR_HIST_SHEET_NAME", "歷史進貨")
 
+import gspread
+from google.oauth2.service_account import Credentials
 def _get_gspread_client():
     # 把 gsheet_service.json 做 base64 後塞到 Render Secret：GSHEET_SA_JSON_B64
     b64 = os.environ["GSHEET_SA_JSON_B64"]
