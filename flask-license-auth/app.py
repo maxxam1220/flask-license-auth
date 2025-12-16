@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
-import psycopg2, os, json, base64, hmac, hashlib
+import psycopg2, os, json, base64, hmac, hashlib, gspread
 from psycopg2.extras import RealDictCursor, Json
 from datetime import datetime, timezone, date
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from migrations import ensure_audit_login_table
+from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")  # ✅ 改用環境變數
@@ -22,6 +23,142 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL 未設定")
 if "sslmode=" not in DATABASE_URL:
     DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
+    
+# ✅ google 雲端
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+SPREADSHEET_ID = os.getenv("PUR_HIST_SPREADSHEET_ID", "16kancLaBQIFwDV-HgDYq40RV-5IUcNGdBEAXNvlMHc4")
+SHEET_NAME = os.getenv("PUR_HIST_SHEET_NAME", "歷史進貨")
+
+def _get_gspread_client():
+    # 把 gsheet_service.json 做 base64 後塞到 Render Secret：GSHEET_SA_JSON_B64
+    b64 = os.environ["GSHEET_SA_JSON_B64"]
+    info = json.loads(base64.b64decode(b64).decode("utf-8"))
+    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+def _col_letter(n0: int) -> str:
+    # 0-based -> A, B, ... AA
+    n = n0 + 1
+    s = ""
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+def _parse_ymd(s: str):
+    s = (s or "").strip()
+    digits = "".join(ch for ch in s if ch.isdigit())
+    if len(digits) == 8:
+        y, m, d = int(digits[:4]), int(digits[4:6]), int(digits[6:8])
+        return date(y, m, d)
+    # 允許 "YYYY/MM/DD"
+    try:
+        return datetime.strptime(s, "%Y/%m/%d").date()
+    except Exception:
+        return None
+
+@app.route("/api/gsheet/pur_hist_upload", methods=["POST"])
+def api_gsheet_pur_hist_upload():
+    # 簡單 API Key 保護（至少別裸奔）
+    api_key = request.headers.get("X-API-KEY", "")
+    if api_key != os.getenv("GSHEET_UPLOAD_API_KEY", ""):
+        return jsonify({"ok": False, "error": "unauthorized"}), 403
+
+    data = request.get_json(silent=True) or {}
+    headers = data.get("headers") or []
+    rows = data.get("rows") or []
+    if not isinstance(headers, list) or not isinstance(rows, list):
+        return jsonify({"ok": False, "error": "bad payload"}), 400
+    if not headers:
+        return jsonify({"ok": False, "error": "empty headers"}), 400
+
+    # 找關鍵欄位（用標題找 index，比硬編碼安全）
+    def idx(name):
+        try: return headers.index(name)
+        except ValueError: return -1
+
+    idx_rcv = idx("驗收日期")
+    idx_inno = idx("進貨單號")
+    idx_item = idx("品號")
+    idx_batch = idx("批號")
+    if min(idx_rcv, idx_inno, idx_item, idx_batch) < 0:
+        return jsonify({"ok": False, "error": "missing required columns"}), 400
+
+    # 連線
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(SPREADSHEET_ID)
+    ws = sh.worksheet(SHEET_NAME)
+
+    # 讀既有
+    existing = ws.get_all_values()
+    existing_headers = existing[0] if existing else []
+    existing_rows = existing[1:] if len(existing) > 1 else []
+
+    # 若表頭不同：以這次上傳的表頭為主
+    if existing_headers != headers:
+        existing_rows = []
+
+    def norm_row(row):
+        row = list(row or [])
+        if len(row) < len(headers):
+            row += [""] * (len(headers) - len(row))
+        elif len(row) > len(headers):
+            row = row[:len(headers)]
+        return row
+
+    def build_key(row):
+        r = norm_row(row)
+        return "|".join([
+            (r[idx_rcv] or "").strip(),
+            (r[idx_inno] or "").strip(),
+            (r[idx_item] or "").strip(),
+            (r[idx_batch] or "").strip(),
+        ])
+
+    # 合併：同 key 以「這次上傳」覆蓋
+    m = {}
+    for r in existing_rows:
+        r = norm_row(r)
+        m[build_key(r)] = r
+    for r in rows:
+        r = norm_row(r)
+        m[build_key(r)] = r
+
+    # 90 天保留
+    today = date.today()
+    cutoff = today - timedelta(days=90)
+
+    def in_window(r):
+        d = _parse_ymd(r[idx_rcv])
+        return (d is not None) and (d >= cutoff)
+
+    all_rows = [r for r in m.values() if in_window(r)]
+
+    # 依驗收日期新到舊排序
+    all_rows.sort(key=lambda r: _parse_ymd(r[idx_rcv]) or date(1900,1,1), reverse=True)
+
+    # 重寫
+    ws.clear()
+    ws.update(values=[headers], range_name="A1")
+    if all_rows:
+        ws.append_rows(all_rows, value_input_option="RAW")
+
+    # 套格式（用欄名定位，不怕欄位移動）
+    fmt_int = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
+    fmt_right = {"horizontalAlignment": "RIGHT"}
+
+    for name in ["驗收量", "金額", "稅額", "含稅金額"]:
+        j = idx(name)
+        if j >= 0:
+            col = _col_letter(j)
+            ws.format(f"{col}2:{col}", fmt_int)
+
+    j = idx("單價")
+    if j >= 0:
+        col = _col_letter(j)
+        ws.format(f"{col}2:{col}", fmt_right)
+
+    return jsonify({"ok": True, "rows_written": len(all_rows)})
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
