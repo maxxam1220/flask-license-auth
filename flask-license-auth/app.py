@@ -346,6 +346,16 @@ def api_sessions_start():
 
     if not username:
         return jsonify({"ok": False, "error": "missing username"}), 400
+    # ✅ 如果 client 沒傳 role/module，就從 accounts 補
+    if (not role) or (not module):
+        try:
+            cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+            acc = cur.fetchone()
+            if acc:
+                role = role or acc.get("role")
+                module = module or acc.get("module")
+        except Exception:
+            pass
 
     public_ip = _get_remote_ip()
 
@@ -433,6 +443,16 @@ def api_sessions_heartbeat():
         return jsonify({"ok": False, "error": "missing session_id"}), 400
     if not username:
         return jsonify({"ok": False, "error": "missing username"}), 400
+    # ✅ 如果 client 沒傳 role/module，就從 accounts 補
+    if (not role) or (not module):
+        try:
+            cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+            acc = cur.fetchone()
+            if acc:
+                role = role or acc.get("role")
+                module = module or acc.get("module")
+        except Exception:
+            pass
 
     public_ip = _get_remote_ip()
 
@@ -538,7 +558,11 @@ def api_sessions_online():
     username = (request.args.get("username") or "").strip() or None
     seat     = (request.args.get("seat") or "").strip() or None
 
-    where = ["app=%s", "ended_at IS NULL", "last_seen_at >= now() - make_interval(secs => %s)"]
+    where = [
+        "app=%s",
+        "ended_at IS NULL",
+        "last_seen_at >= now() - make_interval(secs => %s)"
+    ]
     params = [app_name, window_sec]
 
     if role:
@@ -555,8 +579,11 @@ def api_sessions_online():
           app, seat, session_id::text AS session_id,
           username, role, module,
           machine_name, mac, local_ip, public_ip, client_ver,
-          started_at AT TIME ZONE 'Asia/Taipei' AS started_tw,
-          last_seen_at AT TIME ZONE 'Asia/Taipei' AS last_seen_tw,
+
+          -- ✅ 直接轉成字串，jsonify 才不會炸
+          to_char(started_at  AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
+          to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw,
+
           EXTRACT(EPOCH FROM (now() - last_seen_at))::int AS stale_sec
         FROM app_sessions
         WHERE {" AND ".join(where)}
@@ -569,7 +596,26 @@ def api_sessions_online():
             cur = conn.cursor()
             cur.execute(sql, tuple(params))
             rows = cur.fetchall() or []
-        return jsonify({"ok": True, "config": cfg, "rows": rows})
+
+        # ✅ 給前端「常用欄位別名」(避免你 GUI key 對不到)
+        out = []
+        for r in rows:
+            # status：這支 API 既然已經用 window_sec 過濾，正常都算 online
+            stale = int(r.get("stale_sec") or 999999)
+            status = "online" if stale <= window_sec else "unknown"
+
+            rr = dict(r)
+            rr["status"] = status
+
+            # 常見別名：你 GUI 如果用這些 key 就不會空
+            rr["ip"] = rr.get("local_ip") or rr.get("public_ip") or ""
+            rr["device"] = rr.get("machine_name") or rr.get("mac") or ""
+            rr["login_time"] = rr.get("started_tw") or ""
+            rr["last_heartbeat"] = rr.get("last_seen_tw") or ""
+
+            out.append(rr)
+
+        return jsonify({"ok": True, "config": cfg, "rows": out})
     except Exception as e:
         print("🔥 [sessions/online] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
