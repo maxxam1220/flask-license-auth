@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
 import psycopg2, os, json, base64, hmac, hashlib
 from psycopg2.extras import RealDictCursor, Json
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 from migrations import ensure_audit_login_table
@@ -176,6 +176,227 @@ def _row_to_jsonable(row: dict) -> dict:
         else:
             out[k] = v
     return out
+
+import uuid
+from datetime import timedelta
+
+SESSIONS_API_KEY = os.getenv("SESSIONS_API_KEY")  # Render Secrets 建議設定
+
+def _get_remote_ip():
+    # Render/Cloudflare 常用 X-Forwarded-For
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr
+
+def _require_sessions_api_key():
+    # 若你有設 SESSIONS_API_KEY 才啟用保護；沒設就先放行方便測試
+    if not SESSIONS_API_KEY:
+        return None
+    api_key = request.headers.get("X-API-KEY", "")
+    if api_key != SESSIONS_API_KEY:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return None
+
+def _auto_close_stale_sessions(app_name="INVIMB", minutes=10):
+    """
+    可選：把超過 minutes 沒 heartbeat 的 session 自動結束
+    避免電腦直接斷電導致永遠線上。
+    """
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE app_sessions
+                SET ended_at = now()
+                WHERE app = %s
+                  AND ended_at IS NULL
+                  AND last_seen_at < now() - make_interval(mins => %s)
+            """, (app_name, int(minutes)))
+            conn.commit()
+    except Exception as e:
+        print("⚠️ [sessions] auto_close_stale failed:", e)
+
+# ---------------------------------------------------------
+# 1) /api/sessions/start  (登入/啟動 insert or upsert)
+# ---------------------------------------------------------
+@app.post("/api/sessions/start")
+def api_sessions_start():
+    denied = _require_sessions_api_key()
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+
+    app_name     = (data.get("app") or "INVIMB").strip() or "INVIMB"
+    seat         = (data.get("seat") or "").strip() or None
+    session_id   = (data.get("session_id") or "").strip()
+    username     = (data.get("username") or "").strip()
+    machine_name = (data.get("machine_name") or "").strip() or None
+    mac          = (data.get("mac") or "").strip() or None
+    local_ip     = (data.get("local_ip") or "").strip() or None
+    client_ver   = (data.get("client_ver") or "").strip() or None
+    extra        = data.get("extra") or {}
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+    if not username:
+        return jsonify({"ok": False, "error": "missing username"}), 400
+
+    public_ip = _get_remote_ip()
+
+    # 可選：自動結束太久沒心跳的舊連線（避免假在線）
+    _auto_close_stale_sessions(app_name=app_name, minutes=10)
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO app_sessions
+                  (app, seat, session_id, username, machine_name, mac, local_ip, public_ip, client_ver,
+                   started_at, last_seen_at, ended_at, extra)
+                VALUES
+                  (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   now(), now(), NULL, %s)
+                ON CONFLICT (session_id) DO UPDATE SET
+                  app          = EXCLUDED.app,
+                  seat         = EXCLUDED.seat,
+                  username     = EXCLUDED.username,
+                  machine_name = COALESCE(EXCLUDED.machine_name, app_sessions.machine_name),
+                  mac          = COALESCE(EXCLUDED.mac, app_sessions.mac),
+                  local_ip     = COALESCE(EXCLUDED.local_ip, app_sessions.local_ip),
+                  public_ip    = COALESCE(EXCLUDED.public_ip, app_sessions.public_ip),
+                  client_ver   = COALESCE(EXCLUDED.client_ver, app_sessions.client_ver),
+                  last_seen_at = now(),
+                  ended_at     = NULL,
+                  extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
+                RETURNING
+                  id, session_id,
+                  started_at AT TIME ZONE 'Asia/Taipei' as started_tw,
+                  last_seen_at AT TIME ZONE 'Asia/Taipei' as last_seen_tw
+            """, (
+                app_name, seat, session_id, username, machine_name, mac, local_ip, public_ip, client_ver,
+                Json(extra) if isinstance(extra, dict) else Json({})
+            ))
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({
+            "ok": True,
+            "session_id": row["session_id"],
+            "started_tw": str(row["started_tw"]),
+            "last_seen_tw": str(row["last_seen_tw"]),
+        })
+    except Exception as e:
+        print("🔥 [sessions/start] error:", e)
+        return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
+
+# ---------------------------------------------------------
+# 2) /api/sessions/heartbeat  (心跳 last_seen_at=now())
+#     - 也用 UPSERT：萬一 session 不見了，也會補回來
+# ---------------------------------------------------------
+@app.post("/api/sessions/heartbeat")
+def api_sessions_heartbeat():
+    denied = _require_sessions_api_key()
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+
+    app_name     = (data.get("app") or "INVIMB").strip() or "INVIMB"
+    session_id   = (data.get("session_id") or "").strip()
+    username     = (data.get("username") or "").strip()
+    seat         = (data.get("seat") or "").strip() or None
+    machine_name = (data.get("machine_name") or "").strip() or None
+    mac          = (data.get("mac") or "").strip() or None
+    local_ip     = (data.get("local_ip") or "").strip() or None
+    client_ver   = (data.get("client_ver") or "").strip() or None
+    extra        = data.get("extra") or {}
+
+    if not session_id:
+        return jsonify({"ok": False, "error": "missing session_id"}), 400
+    if not username:
+        return jsonify({"ok": False, "error": "missing username"}), 400
+
+    public_ip = _get_remote_ip()
+
+    _auto_close_stale_sessions(app_name=app_name, minutes=10)
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO app_sessions
+                  (app, seat, session_id, username, machine_name, mac, local_ip, public_ip, client_ver,
+                   started_at, last_seen_at, ended_at, extra)
+                VALUES
+                  (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                   now(), now(), NULL, %s)
+                ON CONFLICT (session_id) DO UPDATE SET
+                  seat         = COALESCE(EXCLUDED.seat, app_sessions.seat),
+                  username     = EXCLUDED.username,
+                  machine_name = COALESCE(EXCLUDED.machine_name, app_sessions.machine_name),
+                  mac          = COALESCE(EXCLUDED.mac, app_sessions.mac),
+                  local_ip     = COALESCE(EXCLUDED.local_ip, app_sessions.local_ip),
+                  public_ip    = COALESCE(EXCLUDED.public_ip, app_sessions.public_ip),
+                  client_ver   = COALESCE(EXCLUDED.client_ver, app_sessions.client_ver),
+                  last_seen_at = now(),
+                  ended_at     = NULL,
+                  extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
+                RETURNING
+                  session_id,
+                  last_seen_at AT TIME ZONE 'Asia/Taipei' as last_seen_tw
+            """, (
+                app_name, seat, session_id, username, machine_name, mac, local_ip, public_ip, client_ver,
+                Json(extra) if isinstance(extra, dict) else Json({})
+            ))
+            row = cur.fetchone()
+            conn.commit()
+
+        return jsonify({"ok": True, "session_id": row["session_id"], "last_seen_tw": str(row["last_seen_tw"])})
+    except Exception as e:
+        print("🔥 [sessions/heartbeat] error:", e)
+        return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
+
+
+# ---------------------------------------------------------
+# 3) /api/sessions/end  (關閉 ended_at=now())
+# ---------------------------------------------------------
+@app.post("/api/sessions/end")
+def api_sessions_end():
+    denied = _require_sessions_api_key()
+    if denied:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    session_id = (data.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"ok": False, "error": "missing session_id"}), 400
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE app_sessions
+                SET ended_at = now(),
+                    last_seen_at = now()
+                WHERE session_id = %s
+                RETURNING
+                  session_id,
+                  ended_at AT TIME ZONE 'Asia/Taipei' as ended_tw
+            """, (session_id,))
+            row = cur.fetchone()
+            conn.commit()
+
+        if not row:
+            return jsonify({"ok": False, "error": "no_such_session"}), 404
+
+        return jsonify({"ok": True, "session_id": row["session_id"], "ended_tw": str(row["ended_tw"])})
+    except Exception as e:
+        print("🔥 [sessions/end] error:", e)
+        return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
+
 # -----------------------------
 # ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
 # -----------------------------
