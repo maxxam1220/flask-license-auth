@@ -22,6 +22,16 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL 未設定")
 if "sslmode=" not in DATABASE_URL:
     DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
+
+ACCOUNTS_API_KEY = os.getenv("ACCOUNTS_API_KEY")  # Render Secrets 設定
+
+def _require_accounts_api_key():
+    if not ACCOUNTS_API_KEY:
+        return None  # 沒設就先放行（方便測試），上線務必設
+    k = request.headers.get("X-API-KEY", "")
+    if k != ACCOUNTS_API_KEY:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    return None
     
 # ✅ google 雲端
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -140,7 +150,7 @@ def api_gsheet_pur_hist_upload():
 
     # 重寫
     ws.clear()
-    ws.update(values=[headers], range_name="A1")
+    ws.update("A1", [headers])
     if all_rows:
         ws.append_rows(all_rows, value_input_option="RAW")
 
@@ -340,7 +350,7 @@ def api_sessions_start():
     public_ip = _get_remote_ip()
 
     # 可選：自動結束太久沒心跳的舊連線（避免假在線）
-    _auto_close_stale_sessions(app_name=app_name, minutes=10)
+    _auto_close_stale_sessions(app_name=app_name)  # 不傳 minutes
 
     try:
         with get_conn() as conn:
