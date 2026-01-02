@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS bindings (
 
 -- 4) accounts：線上帳號登入
 CREATE TABLE IF NOT EXISTS accounts (
-  username     TEXT PRIMARY KEY,
+  username      TEXT PRIMARY KEY,
   password_hash TEXT NOT NULL,
   role          TEXT NOT NULL,
   module        TEXT NOT NULL,
@@ -61,25 +61,29 @@ CREATE TABLE IF NOT EXISTS rbac_modules (
   tabs        JSONB NOT NULL
 );
 
--- 7) app_sessions：上線座位 / 連線狀態
+-- 7) app_sessions：上線/連線狀態（線上清單靠 last_seen_at + ended_at）
 CREATE TABLE IF NOT EXISTS app_sessions (
-  id           BIGSERIAL PRIMARY KEY,
-  app          TEXT NOT NULL DEFAULT 'INVIMB',
-  seat         TEXT,                         -- 座位代號/名稱（需要就用，不需要可留空）
-  session_id   TEXT NOT NULL UNIQUE,         -- 每次啟動/登入生成一個 UUID
-  username     TEXT NOT NULL,
-  machine_name TEXT,
-  mac          TEXT,
-  local_ip     TEXT,
-  public_ip    TEXT,
-  client_ver   TEXT,
-  started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  ended_at     TIMESTAMPTZ,
-  extra        JSONB
+  id            BIGSERIAL PRIMARY KEY,
+  app           TEXT NOT NULL DEFAULT 'INVIMB',
+  seat          TEXT,                          -- 座位代號/名稱（可選）
+  session_id    UUID NOT NULL UNIQUE,          -- 每次登入/啟動產生 UUID（用它當 API key 最穩）
+  username      TEXT NOT NULL,
+  role          TEXT,                          -- ✅ 你要篩 role/module 就要有欄位
+  module        TEXT,
+  machine_name  TEXT,
+  mac           TEXT,
+  local_ip      TEXT,
+  public_ip     TEXT,
+  client_ver    TEXT,
+  user_agent    TEXT,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_at      TIMESTAMPTZ,
+  ended_reason  TEXT,                          -- ✅ 踢下線/正常離開原因
+  extra         JSONB
 );
 
--- 常用索引：查「線上中」很快
+-- 查線上：ended_at IS NULL + last_seen_at 最近
 CREATE INDEX IF NOT EXISTS idx_app_sessions_active
 ON app_sessions(app, last_seen_at DESC)
 WHERE ended_at IS NULL;
@@ -89,6 +93,15 @@ ON app_sessions(username, mac);
 
 CREATE INDEX IF NOT EXISTS idx_app_sessions_seat
 ON app_sessions(seat);
+
+CREATE INDEX IF NOT EXISTS idx_app_sessions_last_seen
+ON app_sessions(last_seen_at DESC);
+
+-- 8) app_settings：線上判定秒數 / 上線限制
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value JSONB NOT NULL
+);
 """
 
 def _get_dsn():
@@ -100,7 +113,7 @@ def _get_dsn():
     return dsn
 
 def ensure_all_tables():
-    """一次把 audit_login + licenses/bindings + accounts + rbac_* 都建好。"""
+    """一次把 audit_login + licenses/bindings + accounts + rbac_* + sessions + settings 都建好。"""
     dsn = _get_dsn()
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
@@ -108,6 +121,28 @@ def ensure_all_tables():
         cur.execute(SQL_CREATE_ALL)
     conn.close()
 
-# 兼容舊名稱：舊程式如果還呼叫 ensure_audit_login_table()，就當成 ensure_all_tables().
+# ✅ 兼容舊名稱：舊程式如果還呼叫 ensure_audit_login_table()，就當成 ensure_all_tables().
 def ensure_audit_login_table():
     ensure_all_tables()
+
+# ✅ 可選：如果你想保留 ensure_sessions_tables(conn) 這個名字，就做「補洞」而不是重建另一份 schema
+def ensure_sessions_tables(conn):
+    """
+    只做補洞（ALTER TABLE ADD COLUMN IF NOT EXISTS），避免跟 SQL_CREATE_ALL 互打。
+    """
+    with conn.cursor() as cur:
+        # 補 app_settings
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value JSONB NOT NULL
+        );
+        """)
+
+        # 補 app_sessions 欄位（就算已存在也不會炸）
+        cur.execute("ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS role TEXT;")
+        cur.execute("ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS module TEXT;")
+        cur.execute("ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS user_agent TEXT;")
+        cur.execute("ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS ended_reason TEXT;")
+
+        conn.commit()
