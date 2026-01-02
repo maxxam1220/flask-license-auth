@@ -112,13 +112,31 @@ def _get_dsn():
         dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
     return dsn
 
+SQL_PATCH = """
+-- accounts 補欄位
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS expires_enc TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS expires_at  DATE;
+
+-- app_sessions 補欄位
+ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS role         TEXT;
+ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS module       TEXT;
+ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS user_agent   TEXT;
+ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS ended_reason TEXT;
+
+-- app_settings 也補（保險）
+CREATE TABLE IF NOT EXISTS app_settings (
+  key   TEXT PRIMARY KEY,
+  value JSONB NOT NULL
+);
+"""
+
 def ensure_all_tables():
-    """一次把 audit_login + licenses/bindings + accounts + rbac_* + sessions + settings 都建好。"""
     dsn = _get_dsn()
     conn = psycopg2.connect(dsn)
     conn.autocommit = True
     with conn, conn.cursor() as cur:
         cur.execute(SQL_CREATE_ALL)
+        cur.execute(SQL_PATCH)   # ✅ 補洞
     conn.close()
 
 # ✅ 兼容舊名稱：舊程式如果還呼叫 ensure_audit_login_table()，就當成 ensure_all_tables().
