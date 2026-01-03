@@ -372,6 +372,9 @@ def api_sessions_start():
                         module = module or acc.get("module")
                 except Exception:
                     pass
+                    
+             # ✅ enforce 上限（放在 INSERT 前）
+             _enforce_limits(cur, app_name=app_name, username=username)
 
             cur.execute("""
                 INSERT INTO app_sessions
@@ -737,6 +740,52 @@ def api_sessions_config_alias():
     if request.method == "GET":
         return api_sessions_config_get()
     return api_sessions_config_set()
+
+def _enforce_limits(cur, *, app_name: str, username: str):
+    cfg = _get_sessions_cfg()
+    window_sec = int(cfg.get("online_window_sec") or 180)
+
+    # 只把「還在線上」的算進來（跟 /online 一致）
+    def _get_online_ids(where_extra_sql="", params_extra=()):
+        cur.execute(f"""
+            SELECT session_id::text AS session_id
+            FROM app_sessions
+            WHERE app=%s
+              AND ended_at IS NULL
+              AND last_seen_at >= now() - make_interval(secs => %s)
+              {where_extra_sql}
+            ORDER BY last_seen_at ASC   -- 最舊在前面，優先踢
+        """, (app_name, window_sec, *params_extra))
+        rows = cur.fetchall() or []
+        return [r["session_id"] for r in rows]
+
+    # 1) 全系統上限
+    max_online = int(cfg.get("max_online") or 0)
+    if max_online > 0:
+        ids = _get_online_ids()
+        if len(ids) >= max_online:
+            need = (len(ids) - max_online) + 1  # 騰出 1 個給新登入
+            kick_ids = ids[:need]
+            cur.execute("""
+                UPDATE app_sessions
+                SET ended_at=now(), last_seen_at=now(), ended_reason='max_online'
+                WHERE session_id::text = ANY(%s::text[])
+                  AND ended_at IS NULL
+            """, (kick_ids,))
+
+    # 2) 同帳號上限
+    max_per_user = int(cfg.get("max_online_per_user") or 0)
+    if max_per_user > 0:
+        ids = _get_online_ids("AND username=%s", (username,))
+        if len(ids) >= max_per_user:
+            need = (len(ids) - max_per_user) + 1
+            kick_ids = ids[:need]
+            cur.execute("""
+                UPDATE app_sessions
+                SET ended_at=now(), last_seen_at=now(), ended_reason='max_per_user'
+                WHERE session_id::text = ANY(%s::text[])
+                  AND ended_at IS NULL
+            """, (kick_ids,))
 
 # -----------------------------
 # ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
