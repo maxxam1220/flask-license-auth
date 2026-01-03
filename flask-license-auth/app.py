@@ -362,6 +362,46 @@ def api_sessions_start():
     # 可選：自動結束太久沒心跳的舊連線（避免假在線）
     _auto_close_stale_sessions(app_name=app_name)  # 不傳 minutes
 
+    cfg = _get_sessions_cfg()
+    window_sec = int(cfg["online_window_sec"])
+    max_online = int(cfg["max_online"] or 0)
+    max_user   = int(cfg["max_online_per_user"] or 0)
+    
+    # 計算目前線上（同 app）
+    cur.execute("""
+        SELECT COUNT(*)::int AS c
+        FROM app_sessions
+        WHERE app=%s
+          AND ended_at IS NULL
+          AND last_seen_at >= now() - make_interval(secs => %s)
+    """, (app_name, window_sec))
+    online_total = (cur.fetchone() or {}).get("c", 0)
+    
+    # 計算同帳號線上
+    cur.execute("""
+        SELECT COUNT(*)::int AS c
+        FROM app_sessions
+        WHERE app=%s
+          AND username=%s
+          AND ended_at IS NULL
+          AND last_seen_at >= now() - make_interval(secs => %s)
+    """, (app_name, username, window_sec))
+    online_user = (cur.fetchone() or {}).get("c", 0)
+    
+    if max_online > 0 and online_total >= max_online:
+        return jsonify({
+            "ok": False,
+            "error": "MAX_ONLINE_REACHED",
+            "message": f"系統線上人數已達上限 ({max_online})"
+        }), 429
+    
+    if max_user > 0 and online_user >= max_user:
+        return jsonify({
+            "ok": False,
+            "error": "MAX_ONLINE_PER_USER_REACHED",
+            "message": f"帳號同時登入數已達上限 ({max_user})"
+        }), 429
+    
     try:
         with get_conn() as conn:
             cur = conn.cursor()
