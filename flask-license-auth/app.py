@@ -373,8 +373,8 @@ def api_sessions_start():
                 except Exception:
                     pass
                     
-             # ✅ enforce 上限（放在 INSERT 前）
-             _enforce_limits(cur, app_name=app_name, username=username)
+            # ✅ enforce 上限（放在 INSERT 前）
+            _enforce_limits(cur, app_name=app_name, username=username)
 
             cur.execute("""
                 INSERT INTO app_sessions
