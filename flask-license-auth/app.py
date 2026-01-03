@@ -413,8 +413,8 @@ def api_sessions_start():
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
 
 # ---------------------------------------------------------
-# 2) /api/sessions/heartbeat  (心跳 last_seen_at=now())
-#     - 也用 UPSERT：萬一 session 不見了，也會補回來
+# 2) /api/sessions/heartbeat  (只 UPDATE，不允許 UPSERT)
+#     - 若 session 已 ended -> 409 (讓客戶端登出)
 # ---------------------------------------------------------
 @app.post("/api/sessions/heartbeat")
 def api_sessions_heartbeat():
@@ -427,6 +427,7 @@ def api_sessions_heartbeat():
     app_name     = (data.get("app") or "INVIMB").strip() or "INVIMB"
     session_id   = (data.get("session_id") or "").strip()
     username     = (data.get("username") or "").strip()
+
     seat         = (data.get("seat") or "").strip() or None
     machine_name = (data.get("machine_name") or "").strip() or None
     mac          = (data.get("mac") or "").strip() or None
@@ -434,7 +435,6 @@ def api_sessions_heartbeat():
     client_ver   = (data.get("client_ver") or "").strip() or None
     extra        = data.get("extra") or {}
 
-    # ✅ 補齊（不然下面 SQL 會 NameError）
     role       = (data.get("role") or "").strip() or None
     module     = (data.get("module") or "").strip() or None
     user_agent = request.headers.get("User-Agent") or (data.get("user_agent") or "").strip() or None
@@ -443,60 +443,102 @@ def api_sessions_heartbeat():
         return jsonify({"ok": False, "error": "missing session_id"}), 400
     if not username:
         return jsonify({"ok": False, "error": "missing username"}), 400
-    # ✅ 如果 client 沒傳 role/module，就從 accounts 補
-    if (not role) or (not module):
-        try:
-            cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
-            acc = cur.fetchone()
-            if acc:
-                role = role or acc.get("role")
-                module = module or acc.get("module")
-        except Exception:
-            pass
 
     public_ip = _get_remote_ip()
 
-    _auto_close_stale_sessions(app_name=app_name)  # ←下面第2點會一起改
+    # 可選：自動關閉太久沒心跳的（你有就留）
+    _auto_close_stale_sessions(app_name=app_name)
 
     try:
         with get_conn() as conn:
             cur = conn.cursor()
+
+            # ✅ 如果 client 沒傳 role/module，就從 accounts 補
+            if (not role) or (not module):
+                try:
+                    cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+                    acc = cur.fetchone()
+                    if acc:
+                        role = role or acc.get("role")
+                        module = module or acc.get("module")
+                except Exception:
+                    pass
+
+            has_extra = isinstance(extra, dict) and bool(extra)
+            extra_json = Json(extra) if isinstance(extra, dict) else Json({})
+
+            # ✅ 只 UPDATE：不允許復活 ended 的 session
             cur.execute("""
-                INSERT INTO app_sessions
-                  (app, seat, session_id, username, role, module,
-                   machine_name, mac, local_ip, public_ip, client_ver, user_agent,
-                   started_at, last_seen_at, ended_at, ended_reason, extra)
-                VALUES
-                  (%s, %s, %s::uuid, %s, %s, %s,
-                   %s, %s, %s, %s, %s, %s,
-                   now(), now(), NULL, NULL, %s)
-                ON CONFLICT (session_id) DO UPDATE SET
-                  seat         = COALESCE(EXCLUDED.seat, app_sessions.seat),
-                  username     = EXCLUDED.username,
-                  role         = COALESCE(EXCLUDED.role, app_sessions.role),
-                  module       = COALESCE(EXCLUDED.module, app_sessions.module),
-                  machine_name = COALESCE(EXCLUDED.machine_name, app_sessions.machine_name),
-                  mac          = COALESCE(EXCLUDED.mac, app_sessions.mac),
-                  local_ip     = COALESCE(EXCLUDED.local_ip, app_sessions.local_ip),
-                  public_ip    = COALESCE(EXCLUDED.public_ip, app_sessions.public_ip),
-                  client_ver   = COALESCE(EXCLUDED.client_ver, app_sessions.client_ver),
-                  user_agent   = COALESCE(EXCLUDED.user_agent, app_sessions.user_agent),
+                UPDATE app_sessions
+                SET
                   last_seen_at = now(),
-                  ended_at     = NULL,
-                  ended_reason = NULL,
-                  extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
+                  seat         = COALESCE(%s, seat),
+                  role         = COALESCE(%s, role),
+                  module       = COALESCE(%s, module),
+                  machine_name = COALESCE(%s, machine_name),
+                  mac          = COALESCE(%s, mac),
+                  local_ip     = COALESCE(%s, local_ip),
+                  public_ip    = COALESCE(%s, public_ip),
+                  client_ver   = COALESCE(%s, client_ver),
+                  user_agent   = COALESCE(%s, user_agent),
+                  extra        = CASE
+                                   WHEN %s THEN COALESCE(extra, '{}'::jsonb) || %s::jsonb
+                                   ELSE extra
+                                 END
+                WHERE app = %s
+                  AND session_id = %s::uuid
+                  AND username = %s
+                  AND ended_at IS NULL
                 RETURNING
-                  session_id,
+                  session_id::text AS session_id,
                   last_seen_at AT TIME ZONE 'Asia/Taipei' as last_seen_tw
             """, (
-                app_name, seat, session_id, username, role, module,
+                seat, role, module,
                 machine_name, mac, local_ip, public_ip, client_ver, user_agent,
-                Json(extra) if isinstance(extra, dict) else Json({})
+                has_extra, extra_json,
+                app_name, session_id, username
             ))
             row = cur.fetchone()
             conn.commit()
 
-        return jsonify({"ok": True, "session_id": row["session_id"], "last_seen_tw": str(row["last_seen_tw"])})
+            if row:
+                return jsonify({
+                    "ok": True,
+                    "session_id": row["session_id"],
+                    "last_seen_tw": str(row["last_seen_tw"]),
+                })
+
+            # ✅ 沒更新到：要嘛被踢/已結束、要嘛 session 不存在、要嘛 username 不匹配
+            cur.execute("""
+                SELECT ended_at, ended_reason, username
+                FROM app_sessions
+                WHERE app = %s AND session_id = %s::uuid
+                LIMIT 1
+            """, (app_name, session_id))
+            srow = cur.fetchone()
+
+            if not srow:
+                # session 被清掉或不存在：一律當作要登出
+                return jsonify({
+                    "ok": False,
+                    "error": "NO_SUCH_SESSION",
+                    "reason": "session_missing"
+                }), 409
+
+            if srow.get("ended_at"):
+                return jsonify({
+                    "ok": False,
+                    "error": "SESSION_ENDED",
+                    "reason": srow.get("ended_reason") or "ended"
+                }), 409
+
+            # 還存在但沒更新到，多半是 username 不同（安全起見也登出）
+            return jsonify({
+                "ok": False,
+                "error": "SESSION_MISMATCH",
+                "reason": "username_mismatch"
+            }), 409
+
     except Exception as e:
         print("🔥 [sessions/heartbeat] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
