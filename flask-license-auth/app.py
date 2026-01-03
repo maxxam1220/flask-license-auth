@@ -424,9 +424,9 @@ def api_sessions_heartbeat():
 
     data = request.get_json(silent=True) or {}
 
-    app_name     = (data.get("app") or "INVIMB").strip() or "INVIMB"
-    session_id   = (data.get("session_id") or "").strip()
-    username     = (data.get("username") or "").strip()
+    app_name   = (data.get("app") or "INVIMB").strip() or "INVIMB"
+    session_id = (data.get("session_id") or "").strip()
+    username   = (data.get("username") or "").strip()
 
     seat         = (data.get("seat") or "").strip() or None
     machine_name = (data.get("machine_name") or "").strip() or None
@@ -446,14 +446,13 @@ def api_sessions_heartbeat():
 
     public_ip = _get_remote_ip()
 
-    # 可選：自動關閉太久沒心跳的（你有就留）
     _auto_close_stale_sessions(app_name=app_name)
 
     try:
         with get_conn() as conn:
             cur = conn.cursor()
 
-            # ✅ 如果 client 沒傳 role/module，就從 accounts 補
+            # client 沒傳 role/module -> 從 accounts 補
             if (not role) or (not module):
                 try:
                     cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
@@ -467,7 +466,6 @@ def api_sessions_heartbeat():
             has_extra = isinstance(extra, dict) and bool(extra)
             extra_json = Json(extra) if isinstance(extra, dict) else Json({})
 
-            # ✅ 只 UPDATE：不允許復活 ended 的 session
             cur.execute("""
                 UPDATE app_sessions
                 SET
@@ -486,7 +484,7 @@ def api_sessions_heartbeat():
                                    ELSE extra
                                  END
                 WHERE app = %s
-                  AND session_id = %s::uuid
+                  AND session_id = %s          -- ✅ 這裡改掉：不要 ::uuid
                   AND username = %s
                   AND ended_at IS NULL
                 RETURNING
@@ -508,36 +506,22 @@ def api_sessions_heartbeat():
                     "last_seen_tw": str(row["last_seen_tw"]),
                 })
 
-            # ✅ 沒更新到：要嘛被踢/已結束、要嘛 session 不存在、要嘛 username 不匹配
+            # 沒更新到：補查原因
             cur.execute("""
                 SELECT ended_at, ended_reason, username
                 FROM app_sessions
-                WHERE app = %s AND session_id = %s::uuid
+                WHERE app = %s AND session_id = %s   -- ✅ 這裡也改掉：不要 ::uuid
                 LIMIT 1
             """, (app_name, session_id))
             srow = cur.fetchone()
 
             if not srow:
-                # session 被清掉或不存在：一律當作要登出
-                return jsonify({
-                    "ok": False,
-                    "error": "NO_SUCH_SESSION",
-                    "reason": "session_missing"
-                }), 409
+                return jsonify({"ok": False, "error": "NO_SUCH_SESSION", "reason": "session_missing"}), 409
 
             if srow.get("ended_at"):
-                return jsonify({
-                    "ok": False,
-                    "error": "SESSION_ENDED",
-                    "reason": srow.get("ended_reason") or "ended"
-                }), 409
+                return jsonify({"ok": False, "error": "SESSION_ENDED", "reason": srow.get("ended_reason") or "ended"}), 409
 
-            # 還存在但沒更新到，多半是 username 不同（安全起見也登出）
-            return jsonify({
-                "ok": False,
-                "error": "SESSION_MISMATCH",
-                "reason": "username_mismatch"
-            }), 409
+            return jsonify({"ok": False, "error": "SESSION_MISMATCH", "reason": "username_mismatch"}), 409
 
     except Exception as e:
         print("🔥 [sessions/heartbeat] error:", e)
