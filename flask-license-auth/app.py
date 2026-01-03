@@ -341,70 +341,38 @@ def api_sessions_start():
     module       = (data.get("module") or "").strip() or None
     user_agent   = request.headers.get("User-Agent") or (data.get("user_agent") or "").strip() or None
 
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
     if not username:
         return jsonify({"ok": False, "error": "missing username"}), 400
-    # ✅ 如果 client 沒傳 role/module，就從 accounts 補
-    if (not role) or (not module):
-        try:
-            cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
-            acc = cur.fetchone()
-            if acc:
-                role = role or acc.get("role")
-                module = module or acc.get("module")
-        except Exception:
-            pass
+
+    # session_id：若 client 沒給或亂給 -> 這裡統一生成 UUID
+    import uuid
+    try:
+        if session_id:
+            uuid.UUID(session_id)  # 驗證
+        else:
+            session_id = str(uuid.uuid4())
+    except Exception:
+        session_id = str(uuid.uuid4())
 
     public_ip = _get_remote_ip()
 
-    # 可選：自動結束太久沒心跳的舊連線（避免假在線）
-    _auto_close_stale_sessions(app_name=app_name)  # 不傳 minutes
+    _auto_close_stale_sessions(app_name=app_name)
 
-    cfg = _get_sessions_cfg()
-    window_sec = int(cfg["online_window_sec"])
-    max_online = int(cfg["max_online"] or 0)
-    max_user   = int(cfg["max_online_per_user"] or 0)
-    
-    # 計算目前線上（同 app）
-    cur.execute("""
-        SELECT COUNT(*)::int AS c
-        FROM app_sessions
-        WHERE app=%s
-          AND ended_at IS NULL
-          AND last_seen_at >= now() - make_interval(secs => %s)
-    """, (app_name, window_sec))
-    online_total = (cur.fetchone() or {}).get("c", 0)
-    
-    # 計算同帳號線上
-    cur.execute("""
-        SELECT COUNT(*)::int AS c
-        FROM app_sessions
-        WHERE app=%s
-          AND username=%s
-          AND ended_at IS NULL
-          AND last_seen_at >= now() - make_interval(secs => %s)
-    """, (app_name, username, window_sec))
-    online_user = (cur.fetchone() or {}).get("c", 0)
-    
-    if max_online > 0 and online_total >= max_online:
-        return jsonify({
-            "ok": False,
-            "error": "MAX_ONLINE_REACHED",
-            "message": f"系統線上人數已達上限 ({max_online})"
-        }), 429
-    
-    if max_user > 0 and online_user >= max_user:
-        return jsonify({
-            "ok": False,
-            "error": "MAX_ONLINE_PER_USER_REACHED",
-            "message": f"帳號同時登入數已達上限 ({max_user})"
-        }), 429
-    
     try:
         with get_conn() as conn:
             cur = conn.cursor()
+
+            # ✅ role/module 補值一定要在這裡才有 cur
+            if (not role) or (not module):
+                try:
+                    cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+                    acc = cur.fetchone()
+                    if acc:
+                        role = role or acc.get("role")
+                        module = module or acc.get("module")
+                except Exception:
+                    pass
+
             cur.execute("""
                 INSERT INTO app_sessions
                   (app, seat, session_id, username, role, module,
@@ -431,9 +399,9 @@ def api_sessions_start():
                   ended_reason = NULL,
                   extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
                 RETURNING
-                  id, session_id,
-                  started_at AT TIME ZONE 'Asia/Taipei' as started_tw,
-                  last_seen_at AT TIME ZONE 'Asia/Taipei' as last_seen_tw
+                  session_id::text AS session_id,
+                  to_char(started_at  AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
+                  to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
             """, (
                 app_name, seat, session_id, username, role, module,
                 machine_name, mac, local_ip, public_ip, client_ver, user_agent,
@@ -445,8 +413,8 @@ def api_sessions_start():
         return jsonify({
             "ok": True,
             "session_id": row["session_id"],
-            "started_tw": str(row["started_tw"]),
-            "last_seen_tw": str(row["last_seen_tw"]),
+            "started_tw": row["started_tw"],
+            "last_seen_tw": row["last_seen_tw"],
         })
     except Exception as e:
         print("🔥 [sessions/start] error:", e)
