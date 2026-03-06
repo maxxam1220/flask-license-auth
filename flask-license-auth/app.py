@@ -230,45 +230,47 @@ DEFAULT_SESSIONS_CFG = {
     "max_online_per_user": 0,        # 0=不限（同帳號）
 }
 
-def _get_sessions_cfg() -> dict:
-    """從 app_settings 讀取 sessions 設定；不存在就寫入預設。"""
-    try:
-        with db_conn() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT value FROM app_settings WHERE key=%s", ("sessions",))
-                row = cur.fetchone()
+def _get_sessions_cfg_from_cur(cur) -> dict:
+    cur.execute("SELECT value FROM app_settings WHERE key=%s", ("sessions",))
+    row = cur.fetchone()
 
-                if not row:
-                    cur.execute(
-                        "INSERT INTO app_settings(key, value) VALUES(%s, %s) ON CONFLICT (key) DO NOTHING",
-                        ("sessions", Json(DEFAULT_SESSIONS_CFG)),
-                    )
-                    return dict(DEFAULT_SESSIONS_CFG)
-
-                val = row.get("value") if isinstance(row, dict) else row[0]
-                if isinstance(val, str):
-                    try:
-                        val = json.loads(val)
-                    except Exception:
-                        val = {}
-
-                cfg = dict(DEFAULT_SESSIONS_CFG)
-                if isinstance(val, dict):
-                    cfg.update({k: val.get(k) for k in DEFAULT_SESSIONS_CFG.keys()})
-
-                def _to_int(x, default):
-                    try:
-                        return int(x)
-                    except Exception:
-                        return default
-
-                cfg["online_window_sec"] = max(10, min(_to_int(cfg["online_window_sec"], 120), 3600))
-                cfg["max_online"] = max(0, _to_int(cfg["max_online"], 0))
-                cfg["max_online_per_user"] = max(0, _to_int(cfg["max_online_per_user"], 0))
-                return cfg
-    except Exception as e:
-        print("⚠️ [sessions] get cfg failed:", e)
+    if not row:
+        cur.execute(
+            """
+            INSERT INTO app_settings(key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO NOTHING
+            """,
+            ("sessions", Json(DEFAULT_SESSIONS_CFG)),
+        )
         return dict(DEFAULT_SESSIONS_CFG)
+
+    val = row.get("value") if isinstance(row, dict) else row[0]
+
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except Exception:
+            val = {}
+
+    cfg = dict(DEFAULT_SESSIONS_CFG)
+    if isinstance(val, dict):
+        cfg.update({
+            k: val.get(k)
+            for k in DEFAULT_SESSIONS_CFG.keys()
+            if k in val
+        })
+
+    def _to_int(x, default):
+        try:
+            return int(x)
+        except Exception:
+            return default
+
+    cfg["online_window_sec"] = max(10, min(_to_int(cfg.get("online_window_sec"), 120), 3600))
+    cfg["max_online"] = max(0, _to_int(cfg.get("max_online"), 0))
+    cfg["max_online_per_user"] = max(0, _to_int(cfg.get("max_online_per_user"), 0))
+    return cfg
 
 def _set_sessions_cfg(new_cfg: dict) -> dict:
     cfg = dict(DEFAULT_SESSIONS_CFG)
@@ -299,10 +301,7 @@ SESSIONS_STALE_MINUTES = int(os.getenv("SESSIONS_STALE_MINUTES", "0"))
 
 def _auto_close_stale_sessions(cur, *, app_name="INVIMB", minutes: int | None = None):
     """
-    minutes:
-      - None：用環境變數 SESSIONS_STALE_MINUTES
-      - >0  ：強制用這個分鐘數
-      - <=0 ：不做自動結束
+    使用目前 request 的同一個 cursor，不再另外開 DB 連線。
     """
     if minutes is None:
         minutes = SESSIONS_STALE_MINUTES
