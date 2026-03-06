@@ -1149,9 +1149,6 @@ def check_account():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    denied = _require_accounts_api_key()
-    if denied:
-        return denied
 
     if not username or not password:
         return jsonify({
