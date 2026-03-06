@@ -1032,7 +1032,12 @@ def decode_license_expiry_utc(expires_enc: str | None) -> str | None:
     return dt_utc.isoformat().replace("+00:00", "Z")
 
 # ✅ 啟動即確保 audit_login 已建立（函式內部自己讀 DATABASE_URL）
-ensure_audit_login_table()
+try:
+    print(">>> before ensure_audit_login_table")
+    ensure_audit_login_table()
+    print(">>> after ensure_audit_login_table")
+except Exception as e:
+    print("🔥 ensure_audit_login_table failed:", e)
 
 # 初始化資料表（首次啟動）
 def init_db():
