@@ -272,6 +272,11 @@ def _get_sessions_cfg_from_cur(cur) -> dict:
     cfg["max_online_per_user"] = max(0, _to_int(cfg.get("max_online_per_user"), 0))
     return cfg
 
+def _get_sessions_cfg():
+    with db_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            return _get_sessions_cfg_from_cur(cur)
+
 def _set_sessions_cfg(new_cfg: dict) -> dict:
     cfg = dict(DEFAULT_SESSIONS_CFG)
     if isinstance(new_cfg, dict):
