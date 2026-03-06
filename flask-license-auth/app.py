@@ -621,58 +621,60 @@ def api_sessions_online():
     if denied:
         return denied
 
-    cfg = _get_sessions_cfg()
-    window_sec = int(cfg["online_window_sec"])
-
     app_name = (request.args.get("app") or "INVIMB").strip() or "INVIMB"
     role     = (request.args.get("role") or "").strip() or None
     module   = (request.args.get("module") or "").strip() or None
     username = (request.args.get("username") or "").strip() or None
     seat     = (request.args.get("seat") or "").strip() or None
 
-    where = [
-        "app=%s",
-        "ended_at IS NULL",
-        "last_seen_at >= now() - make_interval(secs => %s)"
-    ]
-    params = [app_name, window_sec]
-
-    if role:
-        where.append("role=%s"); params.append(role)
-    if module:
-        where.append("module=%s"); params.append(module)
-    if username:
-        where.append("username=%s"); params.append(username)
-    if seat:
-        where.append("seat=%s"); params.append(seat)
-
-    sql = f"""
-        SELECT
-          app, seat, session_id::text AS session_id,
-          username, role, module,
-          machine_name, mac, local_ip, public_ip, client_ver,
-          to_char(started_at  AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
-          to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw,
-          EXTRACT(EPOCH FROM (now() - last_seen_at))::int AS stale_sec
-        FROM app_sessions
-        WHERE {" AND ".join(where)}
-        ORDER BY last_seen_at DESC
-        LIMIT 500
-    """
-
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cfg = _get_sessions_cfg_from_cur(cur)
+                window_sec = int(cfg["online_window_sec"])
+
+                where = [
+                    "app=%s",
+                    "ended_at IS NULL",
+                    "last_seen_at >= now() - make_interval(secs => %s)"
+                ]
+                params = [app_name, window_sec]
+
+                if role:
+                    where.append("role=%s")
+                    params.append(role)
+                if module:
+                    where.append("module=%s")
+                    params.append(module)
+                if username:
+                    where.append("username=%s")
+                    params.append(username)
+                if seat:
+                    where.append("seat=%s")
+                    params.append(seat)
+
+                sql = f"""
+                    SELECT
+                      app, seat, session_id::text AS session_id,
+                      username, role, module,
+                      machine_name, mac, local_ip, public_ip, client_ver,
+                      to_char(started_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
+                      to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw,
+                      EXTRACT(EPOCH FROM (now() - last_seen_at))::int AS stale_sec
+                    FROM app_sessions
+                    WHERE {" AND ".join(where)}
+                    ORDER BY last_seen_at DESC
+                    LIMIT 500
+                """
+
                 cur.execute(sql, tuple(params))
                 rows = cur.fetchall() or []
 
         out = []
         for r in rows:
-            stale = int(r.get("stale_sec") or 999999)
-            status = "online" if stale <= window_sec else "unknown"
-
             rr = dict(r)
-            rr["status"] = status
+            stale = int(rr.get("stale_sec") or 999999)
+            rr["status"] = "online" if stale <= window_sec else "unknown"
             rr["ip"] = rr.get("local_ip") or rr.get("public_ip") or ""
             rr["device"] = rr.get("machine_name") or rr.get("mac") or ""
             rr["login_time"] = rr.get("started_tw") or ""
@@ -680,6 +682,7 @@ def api_sessions_online():
             out.append(rr)
 
         return jsonify({"ok": True, "config": cfg, "rows": out})
+
     except Exception as e:
         print("🔥 [sessions/online] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
