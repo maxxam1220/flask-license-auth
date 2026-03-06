@@ -297,7 +297,7 @@ def _set_sessions_cfg(new_cfg: dict) -> dict:
 # 預設不自動 ended（你要清理再開）
 SESSIONS_STALE_MINUTES = int(os.getenv("SESSIONS_STALE_MINUTES", "0"))
 
-def _auto_close_stale_sessions(app_name="INVIMB", minutes: int | None = None):
+def _auto_close_stale_sessions(cur, *, app_name="INVIMB", minutes: int | None = None):
     """
     minutes:
       - None：用環境變數 SESSIONS_STALE_MINUTES
@@ -306,26 +306,23 @@ def _auto_close_stale_sessions(app_name="INVIMB", minutes: int | None = None):
     """
     if minutes is None:
         minutes = SESSIONS_STALE_MINUTES
+
     try:
         minutes = int(minutes)
     except Exception:
         minutes = 0
+
     if minutes <= 0:
         return
 
-    try:
-        with db_conn() as conn:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
-                    UPDATE app_sessions
-                    SET ended_at = now(),
-                        ended_reason = COALESCE(ended_reason, 'stale_timeout')
-                    WHERE app = %s
-                      AND ended_at IS NULL
-                      AND last_seen_at < now() - make_interval(mins => %s)
-                """, (app_name, minutes))
-    except Exception as e:
-        print("⚠️ [sessions] auto_close_stale failed:", e)
+    cur.execute("""
+        UPDATE app_sessions
+        SET ended_at = now(),
+            ended_reason = COALESCE(ended_reason, 'stale_timeout')
+        WHERE app = %s
+          AND ended_at IS NULL
+          AND last_seen_at < now() - make_interval(mins => %s)
+    """, (app_name, minutes))
 
 import uuid
 
@@ -384,14 +381,19 @@ def api_sessions_start():
 
     public_ip = _get_remote_ip()
 
-    _auto_close_stale_sessions(app_name=app_name)
-
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cfg = _get_sessions_cfg_from_cur(cur)
+
+                _auto_close_stale_sessions(cur, app_name=app_name)
+
                 if (not role) or (not module):
                     try:
-                        cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+                        cur.execute(
+                            "SELECT role, module FROM accounts WHERE username=%s",
+                            (username,)
+                        )
                         acc = cur.fetchone()
                         if acc:
                             role = role or acc.get("role")
@@ -399,7 +401,7 @@ def api_sessions_start():
                     except Exception:
                         pass
 
-                _enforce_limits(cur, app_name=app_name, username=username)
+                _enforce_limits(cur, cfg=cfg, app_name=app_name, username=username)
 
                 cur.execute("""
                     INSERT INTO app_sessions
@@ -428,7 +430,7 @@ def api_sessions_start():
                       extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
                     RETURNING
                       session_id::text AS session_id,
-                      to_char(started_at  AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
+                      to_char(started_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
                       to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
                 """, (
                     app_name, seat, session_id, username, role, module,
@@ -481,14 +483,17 @@ def api_sessions_heartbeat():
 
     public_ip = _get_remote_ip()
 
-    _auto_close_stale_sessions(app_name=app_name)
-
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _auto_close_stale_sessions(cur, app_name=app_name)
+
                 if (not role) or (not module):
                     try:
-                        cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+                        cur.execute(
+                            "SELECT role, module FROM accounts WHERE username=%s",
+                            (username,)
+                        )
                         acc = cur.fetchone()
                         if acc:
                             role = role or acc.get("role")
@@ -522,7 +527,7 @@ def api_sessions_heartbeat():
                       AND ended_at IS NULL
                     RETURNING
                       session_id::text AS session_id,
-                      last_seen_at AT TIME ZONE 'Asia/Taipei' as last_seen_tw
+                      to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
                 """, (
                     seat, role, module,
                     machine_name, mac, local_ip, public_ip, client_ver, user_agent,
@@ -535,7 +540,7 @@ def api_sessions_heartbeat():
                     return jsonify({
                         "ok": True,
                         "session_id": row["session_id"],
-                        "last_seen_tw": str(row["last_seen_tw"]),
+                        "last_seen_tw": row["last_seen_tw"],
                     })
 
                 cur.execute("""
@@ -547,12 +552,24 @@ def api_sessions_heartbeat():
                 srow = cur.fetchone()
 
                 if not srow:
-                    return jsonify({"ok": False, "error": "NO_SUCH_SESSION", "reason": "session_missing"}), 409
+                    return jsonify({
+                        "ok": False,
+                        "error": "NO_SUCH_SESSION",
+                        "reason": "session_missing"
+                    }), 409
 
                 if srow.get("ended_at"):
-                    return jsonify({"ok": False, "error": "SESSION_ENDED", "reason": srow.get("ended_reason") or "ended"}), 409
+                    return jsonify({
+                        "ok": False,
+                        "error": "SESSION_ENDED",
+                        "reason": srow.get("ended_reason") or "ended"
+                    }), 409
 
-                return jsonify({"ok": False, "error": "SESSION_MISMATCH", "reason": "username_mismatch"}), 409
+                return jsonify({
+                    "ok": False,
+                    "error": "SESSION_MISMATCH",
+                    "reason": "username_mismatch"
+                }), 409
 
     except Exception as e:
         print("🔥 [sessions/heartbeat] error:", e)
@@ -751,11 +768,9 @@ def api_sessions_config_alias():
         return api_sessions_config_get()
     return api_sessions_config_set()
 
-def _enforce_limits(cur, *, app_name: str, username: str):
-    cfg = _get_sessions_cfg()
+def _enforce_limits(cur, *, cfg: dict, app_name: str, username: str):
     window_sec = int(cfg.get("online_window_sec") or 180)
 
-    # 只把「還在線上」的算進來（跟 /online 一致）
     def _get_online_ids(where_extra_sql="", params_extra=()):
         cur.execute(f"""
             SELECT session_id::text AS session_id
@@ -764,26 +779,26 @@ def _enforce_limits(cur, *, app_name: str, username: str):
               AND ended_at IS NULL
               AND last_seen_at >= now() - make_interval(secs => %s)
               {where_extra_sql}
-            ORDER BY last_seen_at ASC   -- 最舊在前面，優先踢
+            ORDER BY last_seen_at ASC
         """, (app_name, window_sec, *params_extra))
         rows = cur.fetchall() or []
         return [r["session_id"] for r in rows]
 
-    # 1) 全系統上限
     max_online = int(cfg.get("max_online") or 0)
     if max_online > 0:
         ids = _get_online_ids()
         if len(ids) >= max_online:
-            need = (len(ids) - max_online) + 1  # 騰出 1 個給新登入
+            need = (len(ids) - max_online) + 1
             kick_ids = ids[:need]
             cur.execute("""
                 UPDATE app_sessions
-                SET ended_at=now(), last_seen_at=now(), ended_reason='max_online'
+                SET ended_at = now(),
+                    last_seen_at = now(),
+                    ended_reason = 'max_online'
                 WHERE session_id::text = ANY(%s::text[])
                   AND ended_at IS NULL
             """, (kick_ids,))
 
-    # 2) 同帳號上限
     max_per_user = int(cfg.get("max_online_per_user") or 0)
     if max_per_user > 0:
         ids = _get_online_ids("AND username=%s", (username,))
@@ -792,7 +807,9 @@ def _enforce_limits(cur, *, app_name: str, username: str):
             kick_ids = ids[:need]
             cur.execute("""
                 UPDATE app_sessions
-                SET ended_at=now(), last_seen_at=now(), ended_reason='max_per_user'
+                SET ended_at = now(),
+                    last_seen_at = now(),
+                    ended_reason = 'max_per_user'
                 WHERE session_id::text = ANY(%s::text[])
                   AND ended_at IS NULL
             """, (kick_ids,))
