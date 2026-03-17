@@ -2063,6 +2063,127 @@ def audit_prune():
     from urllib.parse import urlencode
     return redirect(f"/audit?{urlencode(q)}")
 
+@app.route("/export_barcode53_backup", methods=["GET"])
+def export_barcode53_backup():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    try:
+        with db_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute('SELECT * FROM barcode53."BcMst" ORDER BY "CodeNo"')
+                bcmst = [_row_to_jsonable(r) for r in cur.fetchall()]
+
+                cur.execute('SELECT * FROM barcode53."BcDtl" ORDER BY "CodeNo", "Seq"')
+                bcdtl = [_row_to_jsonable(r) for r in cur.fetchall()]
+
+                cur.execute('SELECT * FROM barcode53."BcLog" ORDER BY "PrnDate" DESC, "PrnTime" DESC')
+                bclog = [_row_to_jsonable(r) for r in cur.fetchall()]
+
+                cur.execute('SELECT * FROM barcode53."Barcode" ORDER BY "Barcode"')
+                barcode_rows = [_row_to_jsonable(r) for r in cur.fetchall()]
+
+        return jsonify({
+            "ok": True,
+            "schema_version": 1,
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "barcode53": {
+                "BcMst": bcmst,
+                "BcDtl": bcdtl,
+                "BcLog": bclog,
+                "Barcode": barcode_rows,
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "EXPORT_FAILED",
+            "message": str(e),
+        }), 500
+
+@app.route("/import_barcode53_backup", methods=["POST"])
+def import_barcode53_backup():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    data = request.get_json(silent=True) or {}
+    payload = data.get("barcode53") or {}
+
+    bcmst = payload.get("BcMst") or []
+    bcdtl = payload.get("BcDtl") or []
+    bclog = payload.get("BcLog") or []
+    barcode_rows = payload.get("Barcode") or []
+
+    if not all(isinstance(x, list) for x in [bcmst, bcdtl, bclog, barcode_rows]):
+        return jsonify({"ok": False, "error": "payload 格式錯誤"}), 400
+
+    try:
+        with db_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 先清明細，再清主檔，比較保險
+                cur.execute('TRUNCATE TABLE barcode53."BcDtl" RESTART IDENTITY CASCADE;')
+                cur.execute('TRUNCATE TABLE barcode53."BcLog" RESTART IDENTITY CASCADE;')
+                cur.execute('TRUNCATE TABLE barcode53."Barcode" RESTART IDENTITY CASCADE;')
+                cur.execute('TRUNCATE TABLE barcode53."BcMst" RESTART IDENTITY CASCADE;')
+
+                # BcMst
+                for row in bcmst:
+                    cols = list(row.keys())
+                    vals = [row[c] for c in cols]
+                    sql = f'''
+                        INSERT INTO barcode53."BcMst" ({",".join(f'"{c}"' for c in cols)})
+                        VALUES ({",".join(["%s"] * len(cols))})
+                    '''
+                    cur.execute(sql, vals)
+
+                # BcDtl
+                for row in bcdtl:
+                    cols = list(row.keys())
+                    vals = [row[c] for c in cols]
+                    sql = f'''
+                        INSERT INTO barcode53."BcDtl" ({",".join(f'"{c}"' for c in cols)})
+                        VALUES ({",".join(["%s"] * len(cols))})
+                    '''
+                    cur.execute(sql, vals)
+
+                # BcLog
+                for row in bclog:
+                    cols = list(row.keys())
+                    vals = [row[c] for c in cols]
+                    sql = f'''
+                        INSERT INTO barcode53."BcLog" ({",".join(f'"{c}"' for c in cols)})
+                        VALUES ({",".join(["%s"] * len(cols))})
+                    '''
+                    cur.execute(sql, vals)
+
+                # Barcode
+                for row in barcode_rows:
+                    cols = list(row.keys())
+                    vals = [row[c] for c in cols]
+                    sql = f'''
+                        INSERT INTO barcode53."Barcode" ({",".join(f'"{c}"' for c in cols)})
+                        VALUES ({",".join(["%s"] * len(cols))})
+                    '''
+                    cur.execute(sql, vals)
+
+        return jsonify({
+            "ok": True,
+            "import_counts": {
+                "BcMst": len(bcmst),
+                "BcDtl": len(bcdtl),
+                "BcLog": len(bclog),
+                "Barcode": len(barcode_rows),
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "IMPORT_FAILED",
+            "message": str(e),
+        }), 500
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
