@@ -2177,16 +2177,24 @@ def import_barcode53_backup():
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("SET statement_timeout = 300000;")
-        
+
                 cur.execute('TRUNCATE TABLE barcode53."BcDtl" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."Barcode" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."BcMst" RESTART IDENTITY CASCADE;')
-        
-                ins_mst, skip_mst = _insert_rows_by_existing_columns(cur, "barcode53", "BcMst", bcmst, conn=conn, batch_size=200)
-                ins_dtl, skip_dtl = _insert_rows_by_existing_columns(cur, "barcode53", "BcDtl", bcdtl, conn=conn, batch_size=300)
-                ins_bar, skip_bar = _insert_rows_by_existing_columns(cur, "barcode53", "Barcode", barcode_rows, conn=conn, batch_size=300)
-        
+
+                ins_mst, skip_mst = _insert_rows_by_existing_columns(
+                    cur, "barcode53", "BcMst", bcmst, batch_size=200
+                )
+                ins_dtl, skip_dtl = _insert_rows_by_existing_columns(
+                    cur, "barcode53", "BcDtl", bcdtl, batch_size=300
+                )
+                ins_bar, skip_bar = _insert_rows_by_existing_columns(
+                    cur, "barcode53", "Barcode", barcode_rows, batch_size=300
+                )
+
                 ins_log, skip_log = 0, len(bclog)
+
+            conn.commit()
 
         return jsonify({
             "ok": True,
