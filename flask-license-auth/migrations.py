@@ -164,3 +164,93 @@ def ensure_sessions_tables(conn):
         cur.execute("ALTER TABLE app_sessions ADD COLUMN IF NOT EXISTS ended_reason TEXT;")
 
         conn.commit()
+
+SQL_CREATE_BARCODE53 = """
+CREATE SCHEMA IF NOT EXISTS barcode53;
+
+CREATE TABLE IF NOT EXISTS barcode53."BcMst" (
+  "CodeNo"         TEXT PRIMARY KEY,
+  "CodeName"       TEXT,
+  "TypesOfBarcode" TEXT,
+  "Barcode"        TEXT,
+  "KeepDays"       INTEGER,
+  "LabelHeight"    DOUBLE PRECISION,
+  "LabelWide"      DOUBLE PRECISION,
+  "LabelSpacing"   DOUBLE PRECISION,
+  "FrontCode"      TEXT,
+  "BehindCode"     TEXT,
+  "SunDay"         TEXT,
+  "SunPos"         INTEGER,
+  "PriceLen"       TEXT,
+  "SalePrice"      DOUBLE PRECISION,
+  "CalcCheckSum"   TEXT,
+  "PrtDir"         TEXT,
+  "WideBarRatio"   DOUBLE PRECISION,
+  "Remark"         TEXT,
+  "ClientNo"       TEXT,
+  "PrdLine"        TEXT,
+  "TopMargin"      INTEGER,
+  "LeftMargin"     INTEGER,
+  "Confirm"        TEXT,
+  "ShowBarText"    TEXT,
+  "DoubleRow"      TEXT,
+  "DefPrinter"     TEXT,
+  "IsLocked"       TEXT DEFAULT 'N',
+  "Modifier"       TEXT,
+  "ModiDate"       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS barcode53."BcDtl" (
+  "CodeNo"      TEXT NOT NULL,
+  "Seq"         TEXT NOT NULL,
+  "Attr"        TEXT,
+  "ObjContent"  TEXT,
+  "PosX"        INTEGER,
+  "PosY"        INTEGER,
+  "FontName"    TEXT,
+  "FontSize"    DOUBLE PRECISION,
+  "Bold"        TEXT,
+  "ObjHeight"   INTEGER,
+  "ObjWide"     INTEGER,
+  "CharSpacing" DOUBLE PRECISION,
+  "GapX"        DOUBLE PRECISION,
+  "HighLight"   TEXT,
+  "FrameLine"   TEXT,
+  "ShiftDate"   INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS barcode53."BcLog" (
+  "UsrNo"       TEXT,
+  "NIC"         TEXT,
+  "LoginDate"   TEXT,
+  "LoginTime"   TEXT,
+  "BarcodeDate" TEXT,
+  "CodeNo"      TEXT,
+  "CodeName"    TEXT,
+  "Barcode"     TEXT,
+  "PrnPieces"   INTEGER,
+  "PrnDate"     TEXT,
+  "PrnTime"     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS barcode53."Barcode" (
+  "CustName"  TEXT,
+  "SaveDays"  INTEGER,
+  "FirstCode" TEXT,
+  "Barcode"   TEXT,
+  "SolarDay"  TEXT,
+  "LastCode"  TEXT,
+  "ProdName"  TEXT,
+  "Price"     DOUBLE PRECISION,
+  "PriceLen"  TEXT
+);
+"""
+
+def ensure_barcode53_tables():
+    dsn = _get_dsn()
+    conn = psycopg2.connect(dsn)
+    conn.autocommit = True
+    with conn, conn.cursor() as cur:
+        cur.execute(SQL_CREATE_BARCODE53)
+    conn.close()
+
