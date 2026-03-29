@@ -210,6 +210,50 @@ def db_conn():
     else:
         pool.putconn(conn)
 
+def _get_table_columns(cur, schema_name: str, table_name: str) -> set[str]:
+    cur.execute("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+    """, (schema_name, table_name))
+    rows = cur.fetchall() or []
+    out = set()
+    for r in rows:
+        if isinstance(r, dict):
+            out.add(r["column_name"])
+        else:
+            out.add(r[0])
+    return out
+
+def _insert_rows_by_existing_columns(cur, schema_name: str, table_name: str, rows: list[dict]):
+    existing_cols = _get_table_columns(cur, schema_name, table_name)
+    if not existing_cols:
+        raise RuntimeError(f'{schema_name}.{table_name} 找不到任何欄位，請先確認資料表已建立。')
+
+    inserted = 0
+    skipped = 0
+
+    for row in rows:
+        if not isinstance(row, dict):
+            skipped += 1
+            continue
+
+        cols = [c for c in row.keys() if c in existing_cols]
+        if not cols:
+            skipped += 1
+            continue
+
+        vals = [row[c] for c in cols]
+        sql = f'''
+            INSERT INTO {schema_name}."{table_name}" ({",".join(f'"{c}"' for c in cols)})
+            VALUES ({",".join(["%s"] * len(cols))})
+        '''
+        cur.execute(sql, vals)
+        inserted += 1
+
+    return inserted, skipped
+
 # === 密碼雜湊 / 驗證 & 到期日解碼（跟 auth_accounts.py 保持一致） ===
 # ⚠️ 這個 KEY 一定要跟 auth_accounts.py 一樣
 SIGN_KEY = b"invimb-accounts-signature-key-v1"
@@ -2137,49 +2181,24 @@ def import_barcode53_backup():
                 cur.execute('TRUNCATE TABLE barcode53."Barcode" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."BcMst" RESTART IDENTITY CASCADE;')
 
-                for row in bcmst:
-                    cols = list(row.keys())
-                    vals = [row[c] for c in cols]
-                    sql = f'''
-                        INSERT INTO barcode53."BcMst" ({",".join(f'"{c}"' for c in cols)})
-                        VALUES ({",".join(["%s"] * len(cols))})
-                    '''
-                    cur.execute(sql, vals)
-
-                for row in bcdtl:
-                    cols = list(row.keys())
-                    vals = [row[c] for c in cols]
-                    sql = f'''
-                        INSERT INTO barcode53."BcDtl" ({",".join(f'"{c}"' for c in cols)})
-                        VALUES ({",".join(["%s"] * len(cols))})
-                    '''
-                    cur.execute(sql, vals)
-
-                for row in bclog:
-                    cols = list(row.keys())
-                    vals = [row[c] for c in cols]
-                    sql = f'''
-                        INSERT INTO barcode53."BcLog" ({",".join(f'"{c}"' for c in cols)})
-                        VALUES ({",".join(["%s"] * len(cols))})
-                    '''
-                    cur.execute(sql, vals)
-
-                for row in barcode_rows:
-                    cols = list(row.keys())
-                    vals = [row[c] for c in cols]
-                    sql = f'''
-                        INSERT INTO barcode53."Barcode" ({",".join(f'"{c}"' for c in cols)})
-                        VALUES ({",".join(["%s"] * len(cols))})
-                    '''
-                    cur.execute(sql, vals)
+                ins_mst, skip_mst = _insert_rows_by_existing_columns(cur, "barcode53", "BcMst", bcmst)
+                ins_dtl, skip_dtl = _insert_rows_by_existing_columns(cur, "barcode53", "BcDtl", bcdtl)
+                ins_log, skip_log = _insert_rows_by_existing_columns(cur, "barcode53", "BcLog", bclog)
+                ins_bar, skip_bar = _insert_rows_by_existing_columns(cur, "barcode53", "Barcode", barcode_rows)
 
         return jsonify({
             "ok": True,
             "import_counts": {
-                "BcMst": len(bcmst),
-                "BcDtl": len(bcdtl),
-                "BcLog": len(bclog),
-                "Barcode": len(barcode_rows),
+                "BcMst": ins_mst,
+                "BcDtl": ins_dtl,
+                "BcLog": ins_log,
+                "Barcode": ins_bar,
+            },
+            "skipped_unknown_columns_rows": {
+                "BcMst": skip_mst,
+                "BcDtl": skip_dtl,
+                "BcLog": skip_log,
+                "Barcode": skip_bar,
             }
         })
     except Exception as e:
