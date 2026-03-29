@@ -4,7 +4,7 @@ from psycopg2.extras import RealDictCursor, Json
 from datetime import datetime, timezone, date, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
-from migrations import ensure_audit_login_table
+from migrations import ensure_audit_login_table, ensure_barcode53_tables
 from contextlib import contextmanager
 from psycopg2.pool import ThreadedConnectionPool
 
@@ -1057,11 +1057,12 @@ def decode_license_expiry_utc(expires_enc: str | None) -> str | None:
 
 # ✅ 啟動即確保 audit_login 已建立（函式內部自己讀 DATABASE_URL）
 try:
-    print(">>> before ensure_audit_login_table")
+    print(">>> before ensure tables")
     ensure_audit_login_table()
-    print(">>> after ensure_audit_login_table")
+    ensure_barcode53_tables()
+    print(">>> after ensure tables")
 except Exception as e:
-    print("🔥 ensure_audit_login_table failed:", e)
+    print("🔥 ensure tables failed:", e)
 
 # 初始化資料表（首次啟動）
 def init_db():
@@ -2108,6 +2109,15 @@ def import_barcode53_backup():
     if token != "Bearer max-lic-8899-secret":
         return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
 
+    try:
+        ensure_barcode53_tables()
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "INIT_BARCODE53_FAILED",
+            "message": str(e),
+        }), 500
+
     data = request.get_json(silent=True) or {}
     payload = data.get("barcode53") or {}
 
@@ -2122,13 +2132,11 @@ def import_barcode53_backup():
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 先清明細，再清主檔，比較保險
                 cur.execute('TRUNCATE TABLE barcode53."BcDtl" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."BcLog" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."Barcode" RESTART IDENTITY CASCADE;')
                 cur.execute('TRUNCATE TABLE barcode53."BcMst" RESTART IDENTITY CASCADE;')
 
-                # BcMst
                 for row in bcmst:
                     cols = list(row.keys())
                     vals = [row[c] for c in cols]
@@ -2138,7 +2146,6 @@ def import_barcode53_backup():
                     '''
                     cur.execute(sql, vals)
 
-                # BcDtl
                 for row in bcdtl:
                     cols = list(row.keys())
                     vals = [row[c] for c in cols]
@@ -2148,7 +2155,6 @@ def import_barcode53_backup():
                     '''
                     cur.execute(sql, vals)
 
-                # BcLog
                 for row in bclog:
                     cols = list(row.keys())
                     vals = [row[c] for c in cols]
@@ -2158,7 +2164,6 @@ def import_barcode53_backup():
                     '''
                     cur.execute(sql, vals)
 
-                # Barcode
                 for row in barcode_rows:
                     cols = list(row.keys())
                     vals = [row[c] for c in cols]
