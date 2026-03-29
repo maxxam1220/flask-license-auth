@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, render_template, redirect, session, render_template_string
 import os, json, base64, hmac, hashlib
-from psycopg2.extras import RealDictCursor, Json
+from psycopg2.extras import RealDictCursor, Json, execute_values
 from datetime import datetime, timezone, date, timedelta
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
@@ -2215,6 +2215,125 @@ def import_barcode53_backup():
         return jsonify({
             "ok": False,
             "error": "IMPORT_FAILED",
+            "message": str(e),
+        }), 500
+
+def _insert_rows_by_existing_columns_bulk(
+    cur,
+    schema_name: str,
+    table_name: str,
+    rows: list[dict],
+    page_size: int = 1000,
+):
+    existing_cols = _get_table_columns(cur, schema_name, table_name)
+    if not existing_cols:
+        raise RuntimeError(f'{schema_name}.{table_name} 找不到任何欄位，請先確認資料表已建立。')
+
+    inserted = 0
+    skipped = 0
+
+    union_cols = []
+    seen = set()
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for c in row.keys():
+            if c in existing_cols and c not in seen:
+                seen.add(c)
+                union_cols.append(c)
+
+    if not union_cols:
+        return 0, len(rows)
+
+    prepared_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            skipped += 1
+            continue
+
+        matched = any(c in existing_cols for c in row.keys())
+        if not matched:
+            skipped += 1
+            continue
+
+        prepared_rows.append(tuple(row.get(c) for c in union_cols))
+
+    if not prepared_rows:
+        return 0, skipped
+
+    col_sql = ",".join(f'"{c}"' for c in union_cols)
+    sql = f'INSERT INTO {schema_name}."{table_name}" ({col_sql}) VALUES %s'
+
+    for i in range(0, len(prepared_rows), page_size):
+        chunk = prepared_rows[i:i + page_size]
+        execute_values(cur, sql, chunk, page_size=page_size)
+        inserted += len(chunk)
+
+    return inserted, skipped
+
+@app.route("/import_barcode53_bclog_reset", methods=["POST"])
+def import_barcode53_bclog_reset():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    try:
+        ensure_barcode53_tables()
+        with db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 300000;")
+                cur.execute('TRUNCATE TABLE barcode53."BcLog" RESTART IDENTITY;')
+            conn.commit()
+
+        return jsonify({"ok": True, "message": "BcLog 已清空"})
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "RESET_BCLOG_FAILED",
+            "message": str(e),
+        }), 500
+
+@app.route("/import_barcode53_bclog_chunk", methods=["POST"])
+def import_barcode53_bclog_chunk():
+    token = request.headers.get("Authorization", "")
+    if token != "Bearer max-lic-8899-secret":
+        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+
+    try:
+        ensure_barcode53_tables()
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "INIT_BARCODE53_FAILED",
+            "message": str(e),
+        }), 500
+
+    data = request.get_json(silent=True) or {}
+    payload = data.get("barcode53") or {}
+    rows = payload.get("BcLog") or []
+
+    if not isinstance(rows, list):
+        return jsonify({"ok": False, "error": "payload 格式錯誤"}), 400
+
+    try:
+        with db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 900000;")
+                ins_log, skip_log = _insert_rows_by_existing_columns_bulk(
+                    cur, "barcode53", "BcLog", rows, page_size=1000
+                )
+            conn.commit()
+
+        return jsonify({
+            "ok": True,
+            "import_counts": {"BcLog": ins_log},
+            "skipped_unknown_columns_rows": {"BcLog": skip_log},
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": "IMPORT_BCLOG_FAILED",
             "message": str(e),
         }), 500
 
