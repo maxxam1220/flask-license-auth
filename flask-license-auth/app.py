@@ -1847,10 +1847,10 @@ AUDIT_API_KEY = os.getenv("AUDIT_API_KEY")  # 在 Render 設環境變數
 def invimb_latest():
     return jsonify({
         "ok": True,
-        "version": "2.0.1",
+        "version": "2.0.2",
         # 內網共享路徑，只是當成字串給客戶端用，不是給 Flask 自己用
-        "exe_path": r"\\192.168.10.183\公共資料夾\Reports\INVIMB-setup-2.0.1.exe",
-        "changelog": "1. 介面優化大改版 2. 新增各通路訂單匯入和總表匯出 3. DB提升為正式版更穩定"
+        "exe_path": r"\\192.168.10.183\公共資料夾\Reports\INVIMB-update-2.0.2.exe",
+        "changelog": "1. 更新優化"
     })
 
 @app.route("/api/audit_log", methods=["POST"])
