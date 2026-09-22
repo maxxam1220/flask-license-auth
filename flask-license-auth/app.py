@@ -392,6 +392,102 @@ def _require_sessions_api_key():
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     return None
 
+SESSIONS_IDLE_THRESHOLD_SEC = 300
+SESSIONS_ONLINE_LIMIT = 500
+
+
+def _session_text(data, key, default=""):
+    value = data.get(key)
+    return str(value).strip() if value is not None else default
+
+
+def _normalize_session_extra(extra):
+    """Invalid/legacy activity stays unknown; unrelated extra fields are retained.
+
+    Always replace activity on each report: otherwise a legacy heartbeat would
+    incorrectly refresh an activity measurement from an older report.
+    Client time is informational; online output uses DB receipt time minus idle.
+    """
+    result = dict(extra) if isinstance(extra, dict) else {}
+    activity = result.get("activity")
+    result["activity"] = None
+    if not isinstance(activity, dict):
+        return result
+    idle = activity.get("idle_sec")
+    if (type(activity.get("version")) is not int or activity["version"] != 1
+            or type(idle) is not int or not 0 <= idle <= 2147483647):
+        return result
+    try:
+        reported_at = datetime.fromisoformat(str(activity.get("last_active_at", "")).replace("Z", "+00:00"))
+        if reported_at.tzinfo is None or reported_at.utcoffset() is None:
+            return result
+        reported_at_utc = reported_at.astimezone(timezone.utc).isoformat()
+    except (ValueError, TypeError, OverflowError):
+        return result
+    result["activity"] = {
+        "version": 1,
+        "last_active_at": reported_at_utc,
+        "idle_sec": idle,
+        "idle_threshold_sec": SESSIONS_IDLE_THRESHOLD_SEC,
+        "state": "idle" if idle >= SESSIONS_IDLE_THRESHOLD_SEC else "active",
+    }
+    return result
+
+
+def _session_activity_fields(extra, last_seen_at, stale_sec):
+    activity = _normalize_session_extra(extra)["activity"]
+    fields = {
+        "activity_status": "unknown", "idle_sec": None,
+        "last_active_tw": None, "idle_threshold_sec": SESSIONS_IDLE_THRESHOLD_SEC,
+    }
+    if activity is None or not isinstance(last_seen_at, datetime):
+        return fields
+    if last_seen_at.tzinfo is None:
+        last_seen_at = last_seen_at.replace(tzinfo=timezone.utc)
+    idle = activity["idle_sec"] + max(0, stale_sec)
+    last_active_at = last_seen_at - timedelta(seconds=activity["idle_sec"])
+    fields.update({
+        "activity_status": "idle" if idle >= SESSIONS_IDLE_THRESHOLD_SEC else "active",
+        "idle_sec": idle,
+        "last_active_tw": last_active_at.astimezone(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return fields
+
+
+def _lock_session_app(cur, app_name):
+    # Serialize admission/reactivation within one app across server workers.
+    # A stable DB hash is used instead of Python's process-randomized hash().
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("sessions:" + app_name,))
+
+
+def _session_account_details(cur, username, role, module):
+    if role and module:
+        return role, module
+    # A failed optional lookup must not leave PostgreSQL's transaction aborted.
+    cur.execute("SAVEPOINT session_account_lookup")
+    try:
+        cur.execute("SELECT role, module FROM accounts WHERE username=%s", (username,))
+        account = cur.fetchone()
+        if account:
+            role = role or account.get("role")
+            module = module or account.get("module")
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT session_account_lookup")
+    finally:
+        cur.execute("RELEASE SAVEPOINT session_account_lookup")
+    return role, module
+
+
+def _session_unavailable(row, app_name, username):
+    if row is None:
+        return jsonify({"ok": False, "error": "NO_SUCH_SESSION", "reason": "session_missing"}), 409
+    if row.get("app") != app_name or row.get("username") != username:
+        return jsonify({"ok": False, "error": "SESSION_MISMATCH", "reason": "session_mismatch"}), 409
+    if row.get("ended_at") is not None:
+        return jsonify({"ok": False, "error": "SESSION_ENDED", "reason": row.get("ended_reason") or "ended"}), 409
+    return None
+
+
 # ---------------------------------------------------------
 # 1) /api/sessions/start  (登入/啟動 insert or upsert)
 # ---------------------------------------------------------
@@ -400,70 +496,64 @@ def api_sessions_start():
     denied = _require_sessions_api_key()
     if denied:
         return denied
-
     data = request.get_json(silent=True) or {}
-
-    app_name     = (data.get("app") or "INVIMB").strip() or "INVIMB"
-    seat         = (data.get("seat") or "").strip() or None
-    session_id   = (data.get("session_id") or "").strip()
-    username     = (data.get("username") or "").strip()
-    machine_name = (data.get("machine_name") or "").strip() or None
-    mac          = (data.get("mac") or "").strip() or None
-    local_ip     = (data.get("local_ip") or "").strip() or None
-    client_ver   = (data.get("client_ver") or "").strip() or None
-    extra        = data.get("extra") or {}
-    role         = (data.get("role") or "").strip() or None
-    module       = (data.get("module") or "").strip() or None
-    user_agent   = request.headers.get("User-Agent") or (data.get("user_agent") or "").strip() or None
-
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "body must be an object"}), 400
+    app_name = _session_text(data, "app") or "INVIMB"
+    username = _session_text(data, "username")
     if not username:
         return jsonify({"ok": False, "error": "missing username"}), 400
-
     try:
-        if session_id:
-            uuid.UUID(session_id)
-        else:
-            session_id = str(uuid.uuid4())
-    except Exception:
-        session_id = str(uuid.uuid4())
+        session_id = _session_text(data, "session_id")
+        session_id = str(uuid.UUID(session_id)) if session_id else str(uuid.uuid4())
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"ok": False, "error": "invalid session_id"}), 400
 
+    seat = _session_text(data, "seat") or None
+    role = _session_text(data, "role") or None
+    module = _session_text(data, "module") or None
+    machine_name = _session_text(data, "machine_name") or None
+    mac = _session_text(data, "mac") or None
+    local_ip = _session_text(data, "local_ip") or None
+    client_ver = _session_text(data, "client_ver") or None
+    user_agent = request.headers.get("User-Agent") or _session_text(data, "user_agent") or None
+    extra = _normalize_session_extra(data.get("extra"))
     public_ip = _get_remote_ip()
 
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _lock_session_app(cur, app_name)
+                # A UUID is globally unique, including attempts under another app.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", ("session:" + session_id,))
                 cfg = _get_sessions_cfg_from_cur(cur)
-
                 _auto_close_stale_sessions(cur, app_name=app_name)
-
-                if (not role) or (not module):
-                    try:
-                        cur.execute(
-                            "SELECT role, module FROM accounts WHERE username=%s",
-                            (username,)
-                        )
-                        acc = cur.fetchone()
-                        if acc:
-                            role = role or acc.get("role")
-                            module = module or acc.get("module")
-                    except Exception:
-                        pass
-
-                _enforce_limits(cur, cfg=cfg, app_name=app_name, username=username)
-
+                cur.execute("""
+                    SELECT app, username, ended_at, ended_reason,
+                      last_seen_at >= now() - make_interval(secs => %s) AS is_online
+                    FROM app_sessions WHERE session_id = %s FOR UPDATE
+                """, (cfg["online_window_sec"], session_id))
+                existing = cur.fetchone()
+                if existing is not None:
+                    unavailable = _session_unavailable(existing, app_name, username)
+                    if unavailable:
+                        return unavailable
+                # Successful start retries update their own session without
+                # consuming a second slot or kicking another connected user.
+                if existing is None or not existing.get("is_online"):
+                    _enforce_limits(cur, cfg=cfg, app_name=app_name, username=username)
+                role, module = _session_account_details(cur, username, role, module)
                 cur.execute("""
                     INSERT INTO app_sessions
                       (app, seat, session_id, username, role, module,
                        machine_name, mac, local_ip, public_ip, client_ver, user_agent,
                        started_at, last_seen_at, ended_at, ended_reason, extra)
                     VALUES
-                      (%s, %s, %s::uuid, %s, %s, %s,
+                      (%s, %s, %s, %s, %s, %s,
                        %s, %s, %s, %s, %s, %s,
                        now(), now(), NULL, NULL, %s)
                     ON CONFLICT (session_id) DO UPDATE SET
-                      app          = EXCLUDED.app,
-                      seat         = EXCLUDED.seat,
-                      username     = EXCLUDED.username,
+                      seat         = COALESCE(EXCLUDED.seat, app_sessions.seat),
                       role         = COALESCE(EXCLUDED.role, app_sessions.role),
                       module       = COALESCE(EXCLUDED.module, app_sessions.module),
                       machine_name = COALESCE(EXCLUDED.machine_name, app_sessions.machine_name),
@@ -473,26 +563,21 @@ def api_sessions_start():
                       client_ver   = COALESCE(EXCLUDED.client_ver, app_sessions.client_ver),
                       user_agent   = COALESCE(EXCLUDED.user_agent, app_sessions.user_agent),
                       last_seen_at = now(),
-                      ended_at     = NULL,
-                      ended_reason = NULL,
-                      extra        = COALESCE(EXCLUDED.extra, app_sessions.extra)
+                      extra        = COALESCE(app_sessions.extra, '{}'::jsonb) || EXCLUDED.extra
+                    WHERE app_sessions.ended_at IS NULL
+                      AND app_sessions.app = EXCLUDED.app
+                      AND app_sessions.username = EXCLUDED.username
                     RETURNING
                       session_id::text AS session_id,
                       to_char(started_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
                       to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
-                """, (
-                    app_name, seat, session_id, username, role, module,
-                    machine_name, mac, local_ip, public_ip, client_ver, user_agent,
-                    Json(extra) if isinstance(extra, dict) else Json({})
-                ))
+                """, (app_name, seat, session_id, username, role, module,
+                      machine_name, mac, local_ip, public_ip, client_ver, user_agent, Json(extra)))
                 row = cur.fetchone()
-
-        return jsonify({
-            "ok": True,
-            "session_id": row["session_id"],
-            "started_tw": row["started_tw"],
-            "last_seen_tw": row["last_seen_tw"],
-        })
+                if not row:
+                    return jsonify({"ok": False, "error": "SESSION_ENDED", "reason": "ended"}), 409
+        return jsonify({"ok": True, "session_id": row["session_id"],
+                        "started_tw": row["started_tw"], "last_seen_tw": row["last_seen_tw"]})
     except Exception as e:
         print("🔥 [sessions/start] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
@@ -506,119 +591,65 @@ def api_sessions_heartbeat():
     denied = _require_sessions_api_key()
     if denied:
         return denied
-
     data = request.get_json(silent=True) or {}
-
-    app_name   = (data.get("app") or "INVIMB").strip() or "INVIMB"
-    session_id = (data.get("session_id") or "").strip()
-    username   = (data.get("username") or "").strip()
-
-    seat         = (data.get("seat") or "").strip() or None
-    machine_name = (data.get("machine_name") or "").strip() or None
-    mac          = (data.get("mac") or "").strip() or None
-    local_ip     = (data.get("local_ip") or "").strip() or None
-    client_ver   = (data.get("client_ver") or "").strip() or None
-    extra        = data.get("extra") or {}
-
-    role       = (data.get("role") or "").strip() or None
-    module     = (data.get("module") or "").strip() or None
-    user_agent = request.headers.get("User-Agent") or (data.get("user_agent") or "").strip() or None
-
-    if not session_id:
-        return jsonify({"ok": False, "error": "missing session_id"}), 400
-    if not username:
-        return jsonify({"ok": False, "error": "missing username"}), 400
-
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "body must be an object"}), 400
+    app_name = _session_text(data, "app") or "INVIMB"
+    username = _session_text(data, "username")
+    session_id = _session_text(data, "session_id")
+    if not session_id or not username:
+        return jsonify({"ok": False, "error": "missing session_id or username"}), 400
+    try:
+        session_id = str(uuid.UUID(session_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"ok": False, "error": "invalid session_id"}), 400
+    seat = _session_text(data, "seat") or None
+    role = _session_text(data, "role") or None
+    module = _session_text(data, "module") or None
+    machine_name = _session_text(data, "machine_name") or None
+    mac = _session_text(data, "mac") or None
+    local_ip = _session_text(data, "local_ip") or None
+    client_ver = _session_text(data, "client_ver") or None
+    user_agent = request.headers.get("User-Agent") or _session_text(data, "user_agent") or None
+    extra = _normalize_session_extra(data.get("extra"))
     public_ip = _get_remote_ip()
-
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                _lock_session_app(cur, app_name)
+                cfg = _get_sessions_cfg_from_cur(cur)
                 _auto_close_stale_sessions(cur, app_name=app_name)
-
-                if (not role) or (not module):
-                    try:
-                        cur.execute(
-                            "SELECT role, module FROM accounts WHERE username=%s",
-                            (username,)
-                        )
-                        acc = cur.fetchone()
-                        if acc:
-                            role = role or acc.get("role")
-                            module = module or acc.get("module")
-                    except Exception:
-                        pass
-
-                has_extra = isinstance(extra, dict) and bool(extra)
-                extra_json = Json(extra) if isinstance(extra, dict) else Json({})
-
                 cur.execute("""
-                    UPDATE app_sessions
-                    SET
+                    SELECT app, username, ended_at, ended_reason,
+                      last_seen_at >= now() - make_interval(secs => %s) AS is_online
+                    FROM app_sessions WHERE session_id = %s FOR UPDATE
+                """, (cfg["online_window_sec"], session_id))
+                existing = cur.fetchone()
+                unavailable = _session_unavailable(existing, app_name, username)
+                if unavailable:
+                    return unavailable
+                if not existing.get("is_online"):
+                    _enforce_limits(cur, cfg=cfg, app_name=app_name, username=username)
+                role, module = _session_account_details(cur, username, role, module)
+                cur.execute("""
+                    UPDATE app_sessions SET
                       last_seen_at = now(),
-                      seat         = COALESCE(%s, seat),
-                      role         = COALESCE(%s, role),
-                      module       = COALESCE(%s, module),
-                      machine_name = COALESCE(%s, machine_name),
-                      mac          = COALESCE(%s, mac),
-                      local_ip     = COALESCE(%s, local_ip),
-                      public_ip    = COALESCE(%s, public_ip),
-                      client_ver   = COALESCE(%s, client_ver),
-                      user_agent   = COALESCE(%s, user_agent),
-                      extra        = CASE
-                                       WHEN %s THEN COALESCE(extra, '{}'::jsonb) || %s::jsonb
-                                       ELSE extra
-                                     END
-                    WHERE app = %s
-                      AND session_id = %s
-                      AND username = %s
-                      AND ended_at IS NULL
-                    RETURNING
-                      session_id::text AS session_id,
-                      to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
-                """, (
-                    seat, role, module,
-                    machine_name, mac, local_ip, public_ip, client_ver, user_agent,
-                    has_extra, extra_json,
-                    app_name, session_id, username
-                ))
-                row = cur.fetchone()
-
-                if row:
-                    return jsonify({
-                        "ok": True,
-                        "session_id": row["session_id"],
-                        "last_seen_tw": row["last_seen_tw"],
-                    })
-
-                cur.execute("""
-                    SELECT ended_at, ended_reason, username
-                    FROM app_sessions
+                      seat = COALESCE(%s, seat), role = COALESCE(%s, role),
+                      module = COALESCE(%s, module), machine_name = COALESCE(%s, machine_name),
+                      mac = COALESCE(%s, mac), local_ip = COALESCE(%s, local_ip),
+                      public_ip = COALESCE(%s, public_ip), client_ver = COALESCE(%s, client_ver),
+                      user_agent = COALESCE(%s, user_agent),
+                      extra = COALESCE(extra, '{}'::jsonb) || %s::jsonb
                     WHERE app = %s AND session_id = %s
-                    LIMIT 1
-                """, (app_name, session_id))
-                srow = cur.fetchone()
-
-                if not srow:
-                    return jsonify({
-                        "ok": False,
-                        "error": "NO_SUCH_SESSION",
-                        "reason": "session_missing"
-                    }), 409
-
-                if srow.get("ended_at"):
-                    return jsonify({
-                        "ok": False,
-                        "error": "SESSION_ENDED",
-                        "reason": srow.get("ended_reason") or "ended"
-                    }), 409
-
-                return jsonify({
-                    "ok": False,
-                    "error": "SESSION_MISMATCH",
-                    "reason": "username_mismatch"
-                }), 409
-
+                      AND username = %s AND ended_at IS NULL
+                    RETURNING session_id::text AS session_id,
+                      to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw
+                """, (seat, role, module, machine_name, mac, local_ip, public_ip,
+                      client_ver, user_agent, Json(extra), app_name, session_id, username))
+                row = cur.fetchone()
+                if not row:
+                    return jsonify({"ok": False, "error": "SESSION_ENDED", "reason": "ended"}), 409
+                return jsonify({"ok": True, "session_id": row["session_id"], "last_seen_tw": row["last_seen_tw"]})
     except Exception as e:
         print("🔥 [sessions/heartbeat] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
@@ -631,29 +662,33 @@ def api_sessions_end():
     denied = _require_sessions_api_key()
     if denied:
         return denied
-
     data = request.get_json(silent=True) or {}
-    session_id = (data.get("session_id") or "").strip()
+    if not isinstance(data, dict):
+        return jsonify({"ok": False, "error": "body must be an object"}), 400
+    session_id = _session_text(data, "session_id")
     if not session_id:
         return jsonify({"ok": False, "error": "missing session_id"}), 400
-
+    try:
+        session_id = str(uuid.UUID(session_id))
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"ok": False, "error": "invalid session_id"}), 400
+    reason = _session_text(data, "reason") or "client_exit"
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute("""
                     UPDATE app_sessions
-                    SET ended_at = now(),
-                        last_seen_at = now()
+                    SET ended_at = COALESCE(ended_at, now()),
+                        ended_reason = CASE WHEN ended_at IS NULL
+                                            THEN COALESCE(ended_reason, %s)
+                                            ELSE ended_reason END
                     WHERE session_id = %s
-                    RETURNING
-                      session_id::text AS session_id,
-                      ended_at AT TIME ZONE 'Asia/Taipei' as ended_tw
-                """, (session_id,))
+                    RETURNING session_id::text AS session_id,
+                      ended_at AT TIME ZONE 'Asia/Taipei' AS ended_tw
+                """, (reason, session_id))
                 row = cur.fetchone()
-
         if not row:
             return jsonify({"ok": False, "error": "no_such_session"}), 404
-
         return jsonify({"ok": True, "session_id": row["session_id"], "ended_tw": str(row["ended_tw"])})
     except Exception as e:
         print("🔥 [sessions/end] error:", e)
@@ -669,69 +704,60 @@ def api_sessions_online():
     denied = _require_sessions_api_key()
     if denied:
         return denied
-
     app_name = (request.args.get("app") or "INVIMB").strip() or "INVIMB"
-    role     = (request.args.get("role") or "").strip() or None
-    module   = (request.args.get("module") or "").strip() or None
-    username = (request.args.get("username") or "").strip() or None
-    seat     = (request.args.get("seat") or "").strip() or None
-
+    include_stale = (request.args.get("include_stale") or "").lower() in ("1", "true", "yes")
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cfg = _get_sessions_cfg_from_cur(cur)
+                cfg = dict(_get_sessions_cfg_from_cur(cur))
+                cfg["idle_threshold_sec"] = SESSIONS_IDLE_THRESHOLD_SEC
                 window_sec = int(cfg["online_window_sec"])
-
-                where = [
-                    "app=%s",
-                    "ended_at IS NULL",
-                    "last_seen_at >= now() - make_interval(secs => %s)"
-                ]
-                params = [app_name, window_sec]
-
-                if role:
-                    where.append("role=%s")
-                    params.append(role)
-                if module:
-                    where.append("module=%s")
-                    params.append(module)
-                if username:
-                    where.append("username=%s")
-                    params.append(username)
-                if seat:
-                    where.append("seat=%s")
-                    params.append(seat)
-
+                _auto_close_stale_sessions(cur, app_name=app_name)
+                where = ["app=%s", "ended_at IS NULL"]
+                params = [app_name]
+                if not include_stale:
+                    where.append("last_seen_at >= now() - make_interval(secs => %s)")
+                    params.append(window_sec)
+                for field in ("role", "module", "username", "seat"):
+                    value = (request.args.get(field) or "").strip()
+                    if value:
+                        where.append(field + "=%s")
+                        params.append(value)
                 sql = f"""
-                    SELECT
-                      app, seat, session_id::text AS session_id,
+                    SELECT app, seat, session_id::text AS session_id,
                       username, role, module,
-                      machine_name, mac, local_ip, public_ip, client_ver,
+                      machine_name, mac, local_ip, public_ip, client_ver, extra,
+                      last_seen_at AS _last_seen_at,
                       to_char(started_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS started_tw,
                       to_char(last_seen_at AT TIME ZONE 'Asia/Taipei','YYYY-MM-DD HH24:MI:SS') AS last_seen_tw,
-                      EXTRACT(EPOCH FROM (now() - last_seen_at))::int AS stale_sec
+                      GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - last_seen_at))))::bigint AS stale_sec,
+                      last_seen_at >= now() - make_interval(secs => %s) AS _is_online,
+                      COUNT(*) OVER() AS _total
                     FROM app_sessions
                     WHERE {" AND ".join(where)}
-                    ORDER BY last_seen_at DESC
-                    LIMIT 500
+                    ORDER BY last_seen_at DESC, session_id
+                    LIMIT %s
                 """
-
-                cur.execute(sql, tuple(params))
+                cur.execute(sql, (window_sec, *params, SESSIONS_ONLINE_LIMIT))
                 rows = cur.fetchall() or []
-
+        total = int(rows[0]["_total"]) if rows else 0
         out = []
-        for r in rows:
-            rr = dict(r)
-            stale = int(rr.get("stale_sec") or 999999)
-            rr["status"] = "online" if stale <= window_sec else "unknown"
+        for row in rows:
+            rr = dict(row)
+            stale_raw = rr.get("stale_sec")
+            stale = max(0, int(stale_raw)) if stale_raw is not None else 999999
+            rr["stale_sec"] = stale
+            rr["status"] = "online" if rr.pop("_is_online", stale <= window_sec) else "stale"
+            rr.update(_session_activity_fields(rr.get("extra"), rr.pop("_last_seen_at", None), stale))
+            rr.pop("_total", None)
             rr["ip"] = rr.get("local_ip") or rr.get("public_ip") or ""
             rr["device"] = rr.get("machine_name") or rr.get("mac") or ""
             rr["login_time"] = rr.get("started_tw") or ""
             rr["last_heartbeat"] = rr.get("last_seen_tw") or ""
             out.append(rr)
-
-        return jsonify({"ok": True, "config": cfg, "rows": out})
-
+        return jsonify({"ok": True, "config": cfg, "rows": out,
+                        "total": total, "returned": len(out),
+                        "truncated": total > len(out), "include_stale": include_stale})
     except Exception as e:
         print("🔥 [sessions/online] error:", e)
         return jsonify({"ok": False, "error": "server_error", "message": str(e)}), 500
@@ -768,7 +794,6 @@ def api_sessions_kick():
                 cur.execute("""
                     UPDATE app_sessions
                     SET ended_at = now(),
-                        last_seen_at = now(),
                         ended_reason = %s
                     WHERE session_id::text = ANY(%s::text[])
                       AND ended_at IS NULL
@@ -820,50 +845,32 @@ def api_sessions_config_alias():
     return api_sessions_config_set()
 
 def _enforce_limits(cur, *, cfg: dict, app_name: str, username: str):
-    window_sec = int(cfg.get("online_window_sec") or 180)
+    # Called while holding the app admission lock, only for a newly online slot.
+    window_sec = int(cfg.get("online_window_sec") or 120)
 
-    def _get_online_ids(where_extra_sql="", params_extra=()):
+    def _evict_overflow(limit, reason, *, for_user=False):
+        if limit <= 0:
+            return
+        extra_where = "AND username=%s" if for_user else ""
+        params = (app_name, window_sec, username) if for_user else (app_name, window_sec)
         cur.execute(f"""
-            SELECT session_id::text AS session_id
-            FROM app_sessions
-            WHERE app=%s
-              AND ended_at IS NULL
+            SELECT session_id::text AS session_id FROM app_sessions
+            WHERE app=%s AND ended_at IS NULL
               AND last_seen_at >= now() - make_interval(secs => %s)
-              {where_extra_sql}
-            ORDER BY last_seen_at ASC
-        """, (app_name, window_sec, *params_extra))
-        rows = cur.fetchall() or []
-        return [r["session_id"] for r in rows]
-
-    max_online = int(cfg.get("max_online") or 0)
-    if max_online > 0:
-        ids = _get_online_ids()
-        if len(ids) >= max_online:
-            need = (len(ids) - max_online) + 1
-            kick_ids = ids[:need]
+              {extra_where}
+            ORDER BY last_seen_at ASC, session_id
+        """, params)
+        ids = [row["session_id"] for row in (cur.fetchall() or [])]
+        need = len(ids) - limit + 1
+        if need > 0:
             cur.execute("""
-                UPDATE app_sessions
-                SET ended_at = now(),
-                    last_seen_at = now(),
-                    ended_reason = 'max_online'
-                WHERE session_id::text = ANY(%s::text[])
-                  AND ended_at IS NULL
-            """, (kick_ids,))
+                UPDATE app_sessions SET ended_at = now(), ended_reason = %s
+                WHERE session_id::text = ANY(%s::text[]) AND ended_at IS NULL
+            """, (reason, ids[:need]))
 
-    max_per_user = int(cfg.get("max_online_per_user") or 0)
-    if max_per_user > 0:
-        ids = _get_online_ids("AND username=%s", (username,))
-        if len(ids) >= max_per_user:
-            need = (len(ids) - max_per_user) + 1
-            kick_ids = ids[:need]
-            cur.execute("""
-                UPDATE app_sessions
-                SET ended_at = now(),
-                    last_seen_at = now(),
-                    ended_reason = 'max_per_user'
-                WHERE session_id::text = ANY(%s::text[])
-                  AND ended_at IS NULL
-            """, (kick_ids,))
+    # Removing this user's overflow first can also free the global slot.
+    _evict_overflow(int(cfg.get("max_online_per_user") or 0), "max_per_user", for_user=True)
+    _evict_overflow(int(cfg.get("max_online") or 0), "max_online")
 
 # -----------------------------
 # ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
