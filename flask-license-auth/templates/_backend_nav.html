@@ -1,0 +1,34 @@
+{# Shared, self-contained navigation for the backend pages. #}
+{% macro styles() -%}
+<style>
+  .backend-nav { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+  .backend-tabs { display: flex; gap: 5px; padding: 4px; border: 1px solid #304058; border-radius: 12px; background: #0e1724; }
+  .backend-link, .backend-logout {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 42px; padding: 9px 16px; border: 1px solid transparent;
+    border-radius: 8px; color: #b5c4d9; font-size: 13px; font-weight: 600;
+    line-height: 1.45; text-decoration: none; text-align: center;
+  }
+  .backend-link:hover { color: #eef5ff; background: #1c2c42; }
+  .backend-link[aria-current="page"] { color: #bddcff; background: #203651; border-color: #41658e; }
+  .backend-logout { color: #d0bfd0; border-color: #4c4458; background: transparent; }
+  .backend-logout:hover { color: #fff0f4; background: #342939; border-color: #866d80; }
+  .backend-nav a:focus-visible { outline: 3px solid #75b4ff; outline-offset: 3px; }
+  @media (max-width: 700px) {
+    .backend-nav { width: 100%; gap: 10px; }
+    .backend-tabs { flex: 1; min-width: 0; }
+    .backend-link { flex: 1; min-width: 0; padding: 9px 8px; }
+    .backend-logout { min-height: 44px; padding: 9px 13px; flex: none; }
+  }
+</style>
+{%- endmacro %}
+
+{% macro navigation(active_page) -%}
+<nav class="backend-nav" aria-label="後台導覽">
+  <div class="backend-tabs">
+    <a class="backend-link" href="/admin"{% if active_page == 'admin' %} aria-current="page"{% endif %}>授權管理</a>
+    <a class="backend-link" href="/audit"{% if active_page == 'audit' %} aria-current="page"{% endif %}>登入紀錄</a>
+  </div>
+  <a class="backend-logout" href="/logout">登出</a>
+</nav>
+{%- endmacro %}
