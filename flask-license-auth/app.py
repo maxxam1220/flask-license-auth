@@ -7,13 +7,16 @@ from zoneinfo import ZoneInfo
 from migrations import ensure_audit_login_table, ensure_barcode53_tables
 from contextlib import contextmanager
 from psycopg2.pool import ThreadedConnectionPool
+from security import configure_security, api_key_required, require_api_key, csrf_token, valid_csrf_token
+from backup_validation import validate_auth_backup, validate_licenses_backup, validate_barcode_backup
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-only-change-me")  # ✅ 改用環境變數
+configure_security(app)
+app.jinja_env.globals["csrf_token"] = csrf_token
 
 # ✅ 登入帳密
 USERNAME = os.getenv("ADMIN_USER", "admin")
-PASSWORD = os.getenv("ADMIN_PASS", "Aa721220")
+PASSWORD = os.getenv("ADMIN_PASS", "")
 
 # ✅ 給外部 ping 的 health token（可選，沒設就不檢查）
 PING_TOKEN = os.getenv("PING_TOKEN")  # ✅ Render Secrets 設 PING_TOKEN=xxx
@@ -29,16 +32,6 @@ if "sslmode=" not in DATABASE_URL:
 if "connect_timeout=" not in DATABASE_URL:
     DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "connect_timeout=3"
 
-ACCOUNTS_API_KEY = os.getenv("ACCOUNTS_API_KEY")  # Render Secrets 設定
-
-def _require_accounts_api_key():
-    if not ACCOUNTS_API_KEY:
-        return None  # 沒設就先放行（方便測試），上線務必設
-    k = request.headers.get("X-API-KEY", "")
-    if k != ACCOUNTS_API_KEY:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    return None
-    
 # ✅ google 雲端
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SPREADSHEET_ID = os.getenv("PUR_HIST_SPREADSHEET_ID", "16kancLaBQIFwDV-HgDYq40RV-5IUcNGdBEAXNvlMHc4")
@@ -76,10 +69,10 @@ def _parse_ymd(s: str):
 
 @app.route("/api/gsheet/pur_hist_upload", methods=["POST"])
 def api_gsheet_pur_hist_upload():
-    # 簡單 API Key 保護（至少別裸奔）
-    api_key = request.headers.get("X-API-KEY", "")
-    if api_key != os.getenv("GSHEET_UPLOAD_API_KEY", ""):
-        return jsonify({"ok": False, "error": "unauthorized"}), 403
+    app.config["GSHEET_UPLOAD_API_KEY"] = os.getenv("GSHEET_UPLOAD_API_KEY", "")
+    denied = require_api_key("GSHEET_UPLOAD_API_KEY")
+    if denied is not None:
+        return denied
 
     data = request.get_json(silent=True) or {}
     headers = data.get("headers") or []
@@ -236,13 +229,11 @@ def _insert_rows_by_existing_columns(cur, schema_name: str, table_name: str, row
 
     for row in rows:
         if not isinstance(row, dict):
-            skipped += 1
-            continue
+            raise ValueError("Backup rows must be objects")
 
         cols = [c for c in row.keys() if c in existing_cols]
         if not cols:
-            skipped += 1
-            continue
+            raise ValueError("Backup row has no compatible table columns")
 
         vals = [row[c] for c in cols]
         sql = f'''
@@ -384,13 +375,8 @@ def _get_remote_ip():
     return request.remote_addr
 
 def _require_sessions_api_key():
-    # 若你有設 SESSIONS_API_KEY 才啟用保護；沒設就先放行方便測試
-    if not SESSIONS_API_KEY:
-        return None
-    api_key = request.headers.get("X-API-KEY", "")
-    if api_key != SESSIONS_API_KEY:
-        return jsonify({"ok": False, "error": "unauthorized"}), 401
-    return None
+    app.config["SESSIONS_API_KEY"] = SESSIONS_API_KEY or ""
+    return require_api_key("SESSIONS_API_KEY")
 
 SESSIONS_IDLE_THRESHOLD_SEC = 300
 SESSIONS_ONLINE_LIMIT = 500
@@ -773,11 +759,8 @@ def api_sessions_online_alias():
 #     或   { "session_ids": ["...","..."], "reason": "..." }
 # ---------------------------------------------------------
 @app.post("/api/sessions/kick")
+@api_key_required("ADMIN_API_KEY")
 def api_sessions_kick():
-    denied = _require_sessions_api_key()
-    if denied:
-        return denied
-
     data = request.get_json(silent=True) or {}
     session_id  = (data.get("session_id") or "").strip()
     session_ids = data.get("session_ids") or []
@@ -821,11 +804,8 @@ def api_sessions_config_get():
     return jsonify({"ok": True, "config": _get_sessions_cfg()})
 
 @app.post("/api/sessions/config")
+@api_key_required("ADMIN_API_KEY")
 def api_sessions_config_set():
-    denied = _require_sessions_api_key()
-    if denied:
-        return denied
-
     data = request.get_json(silent=True) or {}
     cfg = data.get("config") or {}
     if not isinstance(cfg, dict):
@@ -876,6 +856,7 @@ def _enforce_limits(cur, *, cfg: dict, app_name: str, username: str):
 # ① 讀取所有帳號（給 PermissionAdminTab 顯示用）
 # -----------------------------
 @app.get("/accounts")
+@api_key_required("ADMIN_API_KEY")
 def api_list_accounts():
     try:
         with db_conn() as conn:
@@ -910,6 +891,7 @@ def api_list_accounts():
 # ② 新增帳號（PermissionAdminTab.on_add_account）
 # -----------------------------
 @app.post("/accounts")
+@api_key_required("ADMIN_API_KEY")
 def api_add_account():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
@@ -944,6 +926,7 @@ def api_add_account():
 # ③ 刪除帳號（PermissionAdminTab.on_delete_account）
 # -----------------------------
 @app.post("/accounts/delete")
+@api_key_required("ADMIN_API_KEY")
 def api_delete_account():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
@@ -964,6 +947,7 @@ def api_delete_account():
 # ④ 重設密碼（PermissionAdminTab.on_reset_password）
 # -----------------------------
 @app.post("/accounts/reset_password")
+@api_key_required("ADMIN_API_KEY")
 def api_reset_password():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
@@ -990,6 +974,7 @@ def api_reset_password():
 #     PermissionAdminTab.on_save_accounts()
 # -----------------------------
 @app.post("/accounts/update_meta")
+@api_key_required("ADMIN_API_KEY")
 def api_update_accounts_meta():
     data = request.get_json(silent=True) or {}
     accounts = data.get("accounts") or []
@@ -1150,14 +1135,22 @@ def health():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if not PASSWORD:
+        return "後台登入尚未設定，請聯絡管理員", 503
     if request.method == "POST":
-        if request.form["username"] == USERNAME and request.form["password"] == PASSWORD:
+        if not valid_csrf_token():
+            return "登入表單已失效，請重新整理後再試", 400
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if hmac.compare_digest(username.encode(), USERNAME.encode()) and hmac.compare_digest(password.encode(), PASSWORD.encode()):
+            session.clear()
             session["logged_in"] = True
             return redirect("/admin")
         return "❌ 帳號或密碼錯誤", 401
     return render_template_string("""
         <form method="post" style="margin: 80px auto; width: 300px;">
             <h2>授權後台登入</h2>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input name="username" placeholder="帳號"><br><br>
             <input name="password" type="password" placeholder="密碼"><br><br>
             <button type="submit">登入</button>
@@ -1180,11 +1173,8 @@ def admin():
     return render_template("admin.html", licenses=licenses)
 
 @app.route("/get_licenses", methods=["GET"])
+@api_key_required("ADMIN_API_KEY")
 def get_licenses():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"error": "無效 API 金鑰"}), 403
-
     with db_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 取出所有授權資料
@@ -1369,6 +1359,7 @@ def api_get_role_tabs():
         return jsonify({"ok": False, "message": str(e)}), 500
 
 @app.post("/rbac/role_tabs")
+@api_key_required("ADMIN_API_KEY")
 def api_save_role_tabs():
     """
     覆蓋整份 role → tabs 設定。
@@ -1412,6 +1403,7 @@ def api_get_module_tabs():
         return jsonify({"ok": False, "message": str(e)}), 500
 
 @app.post("/rbac/module_tabs")
+@api_key_required("ADMIN_API_KEY")
 def api_save_module_tabs():
     """覆蓋整份 module → tabs 設定。"""
     data = request.get_json(silent=True) or {}
@@ -1494,6 +1486,7 @@ def check_license():
         return jsonify({"error": "伺服器錯誤", "message": str(e)}), 500
 
 @app.route("/update_license", methods=["POST"])
+@api_key_required("ADMIN_API_KEY")
 def update_license():
     data = request.get_json()
     code = data.get("auth_code")
@@ -1516,6 +1509,7 @@ def update_license():
     return jsonify({"success": True})
 
 @app.route("/delete_license", methods=["POST"])
+@api_key_required("ADMIN_API_KEY")
 def delete_license():
     code = request.get_json().get("auth_code")
     with db_conn() as conn:
@@ -1524,11 +1518,8 @@ def delete_license():
     return jsonify({"success": True})
 
 @app.route("/reset_mac", methods=["POST"])
+@api_key_required("ADMIN_API_KEY")
 def reset_mac():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"error": "無效 API 金鑰"}), 403
-
     code = request.get_json().get("auth_code")
 
     if not code:
@@ -1555,10 +1546,8 @@ def reset_mac():
     return jsonify({"success": True})
 
 @app.route("/export_licenses", methods=["GET"])
+@api_key_required("BACKUP_READ_API_KEY")
 def export_licenses():
-    if request.headers.get("Authorization", "") != "Bearer max-lic-8899-secret":
-        return jsonify({"error": "無效 API 金鑰"}), 403
-
     with db_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("SELECT * FROM licenses")
@@ -1571,12 +1560,9 @@ def export_licenses():
     })
 
 @app.route("/export_auth_backup", methods=["GET"])
+@api_key_required("BACKUP_READ_API_KEY")
 def export_auth_backup():
     """一次匯出：licenses + bindings + accounts + rbac_tabs + rbac_modules"""
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
-
     with db_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # licenses
@@ -1616,6 +1602,7 @@ def export_auth_backup():
     })
 
 @app.route("/import_auth_backup", methods=["POST"])
+@api_key_required("BACKUP_RESTORE_API_KEY")
 def import_auth_backup():
     """
     還原整套授權系統：
@@ -1627,21 +1614,16 @@ def import_auth_backup():
 
     ⚠ 會 TRUNCATE 這幾張表再重灌，建議只給 MIS 用。
     """
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+    try:
+        data = validate_auth_backup(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify(ok=False, error="INVALID_BACKUP", message=str(exc)), 400
 
-    data = request.get_json(silent=True) or {}
-
-    licenses     = data.get("licenses")     or []
-    bindings     = data.get("bindings")     or []
-    accounts     = data.get("accounts")     or []
-    rbac_tabs    = data.get("rbac_tabs")    or []
-    rbac_modules = data.get("rbac_modules") or []
-
-    # 簡單型別檢查，避免傳錯格式
-    if not all(isinstance(x, list) for x in [licenses, bindings, accounts, rbac_tabs, rbac_modules]):
-        return jsonify({"ok": False, "error": "payload 格式錯誤，欄位必須是 list"}), 400
+    licenses = data["licenses"]
+    bindings = data["bindings"]
+    accounts = data["accounts"]
+    rbac_tabs = data["rbac_tabs"]
+    rbac_modules = data["rbac_modules"]
 
     try:
         with db_conn() as conn:
@@ -1818,13 +1800,14 @@ def import_auth_backup():
     })
 
 @app.route("/import_licenses", methods=["POST"])
+@api_key_required("BACKUP_RESTORE_API_KEY")
 def import_licenses():
-    if request.headers.get("Authorization", "") != "Bearer max-lic-8899-secret":
-        return jsonify({"error": "無效 API 金鑰"}), 403
-
-    data = request.get_json()
-    licenses = data.get("licenses", [])
-    bindings = data.get("bindings", [])
+    try:
+        data = validate_licenses_backup(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify(ok=False, error="INVALID_BACKUP", message=str(exc)), 400
+    licenses = data["licenses"]
+    bindings = data["bindings"]
 
     with db_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2020,6 +2003,7 @@ def audit_list():
         <button class="pill" type="submit"
                 formmethod="post"
                 formaction="/audit/prune{% if current_qs %}?{{ current_qs }}{% endif %}"
+                name="csrf_token" value="{{ csrf_token() }}"
                 onclick="return confirm('確定要清除舊紀錄嗎？此動作無法復原。');">
           清除(天)
         </button>
@@ -2086,6 +2070,8 @@ def audit_export_csv():
 def audit_prune():
     if not session.get("logged_in"):
         return redirect("/login")
+    if not valid_csrf_token():
+        return "表單已失效，請重新整理後再試", 400
 
     # 限制 days 範圍，避免誤刪或注入
     try:
@@ -2116,11 +2102,8 @@ def audit_prune():
     return redirect(f"/audit?{urlencode(q)}")
 
 @app.route("/export_barcode53_backup", methods=["GET"])
+@api_key_required("BACKUP_READ_API_KEY")
 def export_barcode53_backup():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
-
     try:
         with db_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2155,30 +2138,20 @@ def export_barcode53_backup():
         }), 500
 
 @app.route("/import_barcode53_backup", methods=["POST"])
+@api_key_required("BACKUP_RESTORE_API_KEY")
 def import_barcode53_backup():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+    try:
+        data = validate_barcode_backup(request.get_json(silent=True))
+    except ValueError as exc:
+        return jsonify(ok=False, error="INVALID_BACKUP", message=str(exc)), 400
+    payload = data["barcode53"]
+    bcmst, bcdtl = payload["BcMst"], payload["BcDtl"]
+    bclog, barcode_rows = payload["BcLog"], payload["Barcode"]
 
     try:
         ensure_barcode53_tables()
-    except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": "INIT_BARCODE53_FAILED",
-            "message": str(e),
-        }), 500
-
-    data = request.get_json(silent=True) or {}
-    payload = data.get("barcode53") or {}
-
-    bcmst = payload.get("BcMst") or []
-    bcdtl = payload.get("BcDtl") or []
-    bclog = payload.get("BcLog") or []
-    barcode_rows = payload.get("Barcode") or []
-
-    if not all(isinstance(x, list) for x in [bcmst, bcdtl, bclog, barcode_rows]):
-        return jsonify({"ok": False, "error": "payload 格式錯誤"}), 400
+    except Exception:
+        return jsonify(ok=False, error="INIT_BARCODE53_FAILED"), 500
 
     try:
         with db_conn() as conn:
@@ -2280,10 +2253,11 @@ def _insert_rows_by_existing_columns_bulk(
     return inserted, skipped
 
 @app.route("/import_barcode53_bclog_reset", methods=["POST"])
+@api_key_required("BACKUP_RESTORE_API_KEY")
 def import_barcode53_bclog_reset():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("confirm") != "reset_bclog":
+        return jsonify(ok=False, error="RESET_CONFIRMATION_REQUIRED"), 400
 
     try:
         ensure_barcode53_tables()
@@ -2302,11 +2276,8 @@ def import_barcode53_bclog_reset():
         }), 500
 
 @app.route("/import_barcode53_bclog_chunk", methods=["POST"])
+@api_key_required("BACKUP_RESTORE_API_KEY")
 def import_barcode53_bclog_chunk():
-    token = request.headers.get("Authorization", "")
-    if token != "Bearer max-lic-8899-secret":
-        return jsonify({"ok": False, "error": "無效 API 金鑰"}), 403
-
     try:
         ensure_barcode53_tables()
     except Exception as e:
