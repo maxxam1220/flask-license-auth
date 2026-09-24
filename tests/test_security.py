@@ -220,15 +220,28 @@ class SecurityTests(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/admin")
 
     def test_audit_prune_rejects_missing_csrf_before_delete(self):
+        from jinja2 import FileSystemLoader
+        self.enterContext(patch.object(self.app, "jinja_loader",
+            FileSystemLoader(str(ROOT / "flask-license-auth" / "templates"))))
         with self.client.session_transaction() as session:
             session["logged_in"] = True
             session["csrf_token"] = "test-csrf"
         self.assertEqual(self.client.post("/audit/prune", data={"days": 180}).status_code, 400)
         self.db.assert_not_called()
         with self.fake_database() as cur:
-            response = self.client.post("/audit/prune", data={"days": 180, "csrf_token": "test-csrf"})
+            cur.fetchone.side_effect = [{"count": 2, "max_id": 44}, None]
+            response = self.client.post("/audit/prune", data={
+                "operation": "preview", "days": 180, "csrf_token": "test-csrf"})
+            self.assertEqual(response.status_code, 302)
+            self.assertFalse(any("DELETE FROM audit_login" in call.args[0] for call in cur.execute.call_args_list))
+            with self.client.session_transaction() as session:
+                token = session["_audit_prune_preview"]["token"]
+            response = self.client.post("/audit/prune", data={
+                "operation": "confirm", "preview_token": token,
+                "confirm_scope": "all_users", "csrf_token": "test-csrf"})
             self.assertEqual(response.status_code, 302)
             self.assertTrue(any("DELETE FROM audit_login" in call.args[0] for call in cur.execute.call_args_list))
+            self.assertTrue(any("INSERT INTO audit_login" in call.args[0] for call in cur.execute.call_args_list))
 
     def test_public_login_and_license_contracts_still_reach_validation(self):
         for route in ("/check_account", "/check_license"):

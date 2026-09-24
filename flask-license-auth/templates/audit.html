@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>登入紀錄 ｜ INVIMB 授權後台</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=2" type="image/x-icon">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b111b;
+      --panel: #121c2a;
+      --input: #0e1724;
+      --line: #2b394b;
+      --text: #eef3fa;
+      --muted: #a7b6c9;
+      --accent: #75b4ff;
+      --success: #73dfb0;
+      --danger: #ffacac;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif;
+    }
+    a { color: var(--accent); }
+    button, input, select { font: inherit; }
+    button, a, input, select, summary { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: clamp(26px, 4vw, 34px); line-height: 1.3; letter-spacing: .02em; }
+    h2 { font-size: 18px; line-height: 1.4; }
+    .shell { width: min(1600px, 100%); margin: 0 auto; padding: 28px 32px 48px; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .eyebrow { margin-bottom: 8px; color: var(--muted); font-size: 12px; letter-spacing: .1em; }
+    .subtitle { margin-top: 8px; color: var(--muted); }
+    .nav-actions, .form-actions, .pagination-links { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .btn {
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+      padding: 9px 16px;
+      border: 1px solid #40516a;
+      border-radius: 9px;
+      background: #192637;
+      color: var(--text);
+      font-weight: 600;
+      line-height: 1.45;
+      text-decoration: none;
+      text-align: center;
+      cursor: pointer;
+      transition: background-color .15s, border-color .15s;
+    }
+    .btn:hover { background: #24364e; border-color: #6a86aa; }
+    .btn-primary { background: #86bcff; color: #091c34; border-color: #86bcff; }
+    .btn-primary:hover { background: #b2d4ff; border-color: #b2d4ff; }
+    .btn-quiet { background: transparent; }
+    .btn-danger { background: #80343f; color: #fff; border-color: #bb6572; }
+    .btn-danger:hover { background: #9b3f4c; border-color: #e38b98; }
+    .btn.disabled, .btn:disabled { color: #8290a4; background: #101925; border-color: #293748; cursor: default; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+    .stat { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 22px; background: var(--panel); }
+    .stat-label { color: var(--muted); font-size: 13px; }
+    .stat-value { display: block; margin-top: 4px; font-size: clamp(26px, 3vw, 34px); font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+    .stat-success .stat-value { color: var(--success); }
+    .stat-failed .stat-value { color: var(--danger); }
+    .panel { margin-bottom: 20px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    .filter-panel { padding: 22px; }
+    .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .hint { color: var(--muted); font-size: 12px; }
+    .filter-grid { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(140px, .85fr) minmax(210px, 1.2fr) minmax(210px, 1.2fr) minmax(100px, .55fr); gap: 14px; margin-top: 18px; }
+    .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    .field > label { color: #d4deed; font-size: 13px; font-weight: 600; }
+    .optional { color: var(--muted); font-size: 12px; font-weight: 400; }
+    input:not([type="hidden"]):not([type="checkbox"]), select {
+      width: 100%;
+      min-width: 0;
+      min-height: 44px;
+      border: 1px solid #41516a;
+      border-radius: 9px;
+      padding: 9px 11px;
+      background: var(--input);
+      color: var(--text);
+    }
+    input::placeholder { color: #8597b0; opacity: 1; }
+    input:hover, select:hover { border-color: #6a86aa; }
+    .filter-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; margin-top: 18px; }
+    .notice { margin-bottom: 20px; padding: 14px 18px; border: 1px solid; border-radius: 12px; overflow-wrap: anywhere; }
+    .notice-error { color: #ffd2d2; background: #351e29; border-color: #854956; }
+    .notice-success { color: #bdedd9; background: #142f2c; border-color: #386b60; }
+    .results-panel { overflow: hidden; }
+    .results-heading { padding: 20px 22px; border-bottom: 1px solid var(--line); }
+    .export-group { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+    .range-label { margin-top: 5px; color: var(--muted); font-size: 13px; }
+    .table-scroll { width: 100%; overflow-x: auto; }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
+    caption { padding: 0; }
+    th { background: #172333; padding: 13px 16px; color: #b8c7db; font-size: 12px; font-weight: 600; text-align: left; }
+    td { padding: 17px 16px; vertical-align: top; border-top: 1px solid #243246; font-size: 13px; overflow-wrap: anywhere; }
+    tbody tr:first-child td { border-top: 0; }
+    tbody tr:hover { background: #172536; }
+    .col-time { width: 170px; }
+    .col-account { width: 130px; }
+    .col-event { width: 140px; }
+    .col-device { width: 150px; }
+    .col-network { width: 180px; }
+    .col-client { width: 150px; }
+    .col-note { width: auto; }
+    .mono { font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+    .timestamp { white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .account-name { font-weight: 650; color: #f3f7fc; }
+    .badge { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border: 1px solid #4e627c; border-radius: 99px; color: #d8e3f3; background: #233247; font-size: 12px; font-weight: 600; }
+    .badge::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; }
+    .badge-success { color: #91e6bf; border-color: #356856; background: #16352e; }
+    .badge-failed { color: #ffc0c0; border-color: #7a424c; background: #3e252f; }
+    .detail-line { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+    .detail-line:first-child { margin-top: 0; }
+    .detail-label { display: inline-block; min-width: 34px; color: #99abc3; font: 12px/1.6 system-ui, sans-serif; }
+    .note { color: #cbd6e6; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .note-expand summary { color: var(--accent); cursor: pointer; min-height: 28px; }
+    .note-expand[open] summary { margin-bottom: 8px; }
+    .empty-state { padding: 56px 20px; text-align: center; }
+    .empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin-bottom: 14px; border: 1px solid #3b526f; border-radius: 14px; color: #93b7e4; font-size: 26px; }
+    .empty-state h3 { margin: 0 0 8px; font-size: 18px; }
+    .empty-state p { color: var(--muted); margin-bottom: 18px; }
+    .pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 17px 22px; border-top: 1px solid var(--line); }
+    .pagination-status { color: var(--muted); font-size: 13px; }
+    .pagination-status strong { color: var(--text); }
+    .pagination-links { gap: 7px; }
+    .pagination-links .btn { min-height: 40px; padding: 7px 13px; font-size: 13px; }
+    .cleanup { border: 1px solid #55414a; border-radius: var(--radius); background: #181c29; }
+    .cleanup > summary { padding: 18px 22px; color: #f0d4d6; cursor: pointer; font-size: 15px; font-weight: 600; }
+    .cleanup > summary::marker { color: #c78c96; }
+    .cleanup-summary-hint { margin-left: 12px; color: #b4a6b4; font-size: 12px; font-weight: 400; }
+    .cleanup-body { padding: 0 22px 22px; border-top: 1px solid #41313e; }
+    .cleanup-scope { margin-top: 18px; color: #d3bbc3; font-size: 13px; }
+    .cleanup-form { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+    .cleanup-days { width: 170px; }
+    .preview { margin-top: 20px; padding: 18px; border: 1px solid #895465; border-radius: 12px; background: #2b202c; }
+    .preview h3 { margin: 0 0 9px; font-size: 16px; color: #ffd0d5; }
+    .preview p { color: #ddc9d0; font-size: 13px; overflow-wrap: anywhere; }
+    .preview strong { color: #fff0f2; }
+    .confirm-check { display: flex; align-items: flex-start; gap: 10px; margin: 18px 0; color: #ffe0e5; cursor: pointer; font-size: 13px; }
+    .confirm-check input { width: 18px; height: 18px; flex: none; margin: 2px 0 0; accent-color: #f3a0ac; }
+    .page-footer { margin-top: 20px; color: #8295af; font-size: 12px; text-align: center; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    @media (max-width: 1120px) {
+      .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .field-limit { max-width: 170px; }
+    }
+    @media (max-width: 700px) {
+      .shell { padding: 20px 16px 32px; }
+      .page-header { align-items: flex-start; flex-direction: column; gap: 16px; }
+      .nav-actions { width: 100%; }
+      .nav-actions .btn { flex: 1; }
+      .stats { gap: 8px; }
+      .stat { padding: 13px 10px; border-radius: 12px; }
+      .stat-label { font-size: 11px; }
+      .stat-value { font-size: 27px; overflow-wrap: anywhere; }
+      .filter-panel { padding: 18px 16px; }
+      .filter-grid { gap: 14px 12px; }
+      .filter-footer { align-items: flex-start; flex-direction: column-reverse; gap: 12px; }
+      .form-actions { width: 100%; }
+      .form-actions .btn { flex: 1; }
+      .results-heading { align-items: flex-start; flex-direction: column; padding: 18px 16px; }
+      .export-group { width: 100%; align-items: flex-start; }
+      .export-group .btn { width: 100%; }
+      .table-scroll { overflow: visible; }
+      table { display: block; min-width: 0; }
+      colgroup { display: none; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+      tbody { display: block; padding: 0 14px; }
+      tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 16px; padding: 20px 2px; border-top: 1px solid var(--line); }
+      tbody tr:first-child { border-top: 0; }
+      td { display: block; padding: 0; border: 0; min-width: 0; }
+      td::before { content: attr(data-label); display: block; margin-bottom: 5px; color: #96abc7; font-size: 11px; font-weight: 400; }
+      td.cell-time { grid-column: 1 / -1; }
+      td.cell-note { grid-column: 1 / -1; padding-top: 12px; border-top: 1px dashed #324157; }
+      .timestamp { white-space: normal; }
+      .pagination { justify-content: center; padding: 16px 12px; }
+      .pagination-status { width: 100%; text-align: center; }
+      .pagination-links { width: 100%; justify-content: center; gap: 6px; }
+      .pagination-links .btn { flex: 1; padding: 9px 5px; min-height: 44px; }
+      .cleanup > summary { padding: 17px 16px; }
+      .cleanup-summary-hint { display: block; margin-left: 17px; margin-top: 4px; }
+      .cleanup-body { padding: 0 16px 18px; }
+      .preview { padding: 15px; }
+    }
+    @media (max-width: 460px) {
+      .filter-grid { grid-template-columns: minmax(0, 1fr); }
+      .field-limit { max-width: none; }
+      .cleanup-form { align-items: stretch; flex-direction: column; }
+      .cleanup-days { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">INVIMB / 授權後台</p>
+        <h1>登入紀錄</h1>
+        <p class="subtitle">查詢帳號登入、追蹤使用裝置與異常事件。</p>
+      </div>
+      <nav class="nav-actions" aria-label="後台導覽">
+        <a class="btn btn-quiet" href="/admin">返回授權管理</a>
+        <a class="btn btn-quiet" href="/logout">登出</a>
+      </nav>
+    </header>
+
+    {% if error %}<div class="notice notice-error" role="alert">{{ error }}</div>{% endif %}
+    {% if message %}<div class="notice notice-success" role="status">{{ message }}</div>{% endif %}
+
+    <section class="stats" aria-label="目前篩選結果統計">
+      <div class="stat">
+        <span class="stat-label">目前篩選筆數</span>
+        <strong class="stat-value">{{ "{:,}".format(summary.total) }}</strong>
+      </div>
+      <div class="stat stat-success">
+        <span class="stat-label">登入成功</span>
+        <strong class="stat-value">{{ "{:,}".format(summary.success) }}</strong>
+      </div>
+      <div class="stat stat-failed">
+        <span class="stat-label">登入失敗</span>
+        <strong class="stat-value">{{ "{:,}".format(summary.failed) }}</strong>
+      </div>
+    </section>
+
+    <section class="panel filter-panel" aria-labelledby="filter-heading">
+      <h2 id="filter-heading">篩選紀錄</h2>
+      <form method="get" action="/audit">
+        <div class="filter-grid">
+          <div class="field">
+            <label for="username">使用者帳號 <span class="optional">精確比對</span></label>
+            <input id="username" name="username" type="text" value="{{ filters.username }}" placeholder="輸入完整帳號" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="action">登入事件</label>
+            <select id="action" name="action">
+              <option value="" {% if not filters.action %}selected{% endif %}>全部事件</option>
+              {% for value, label in action_labels.items() %}
+              <option value="{{ value }}" {% if filters.action == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+              {% if filters.action and filters.action not in action_labels %}
+              <option value="{{ filters.action }}" selected>其他事件：{{ filters.action }}</option>
+              {% endif %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="from">開始時間</label>
+            <input id="from" name="from" type="datetime-local" value="{{ filters['from'] }}" step="60" aria-describedby="timezone-hint">
+          </div>
+          <div class="field">
+            <label for="to">結束時間</label>
+            <input id="to" name="to" type="datetime-local" value="{{ filters['to'] }}" step="60" aria-describedby="timezone-hint">
+          </div>
+          <div class="field field-limit">
+            <label for="limit">每頁筆數</label>
+            <select id="limit" name="limit">
+              {% for size in [25, 50, 100, 250, 500] %}
+              <option value="{{ size }}" {% if filters.limit == size %}selected{% endif %}>{{ size }} 筆</option>
+              {% endfor %}
+              {% if filters.limit not in [25, 50, 100, 250, 500] %}
+              <option value="{{ filters.limit }}" selected>{{ filters.limit }} 筆</option>
+              {% endif %}
+            </select>
+          </div>
+        </div>
+        <div class="filter-footer">
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit">查詢紀錄</button>
+            <a class="btn btn-quiet" href="{{ reset_url }}">清除篩選</a>
+          </div>
+          <p class="hint" id="timezone-hint">時間皆為台北時間（UTC+8）；結束時間包含所選分鐘。</p>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel results-panel" aria-labelledby="results-heading">
+      <div class="section-heading results-heading">
+        <div>
+          <h2 id="results-heading">查詢結果</h2>
+          <p class="range-label">{% if summary.total %}顯示第 {{ "{:,}".format(start_row) }}–{{ "{:,}".format(end_row) }} 筆，共 {{ "{:,}".format(summary.total) }} 筆{% else %}目前篩選條件下共 0 筆{% endif %}</p>
+        </div>
+        <div class="export-group">
+          <a class="btn" href="{{ export_url }}">匯出篩選結果 CSV</a>
+          <p class="hint">單次最多 5,000 筆（包含其他分頁），超過請縮小範圍。</p>
+        </div>
+      </div>
+      {% if rows %}
+      <div class="table-scroll" role="region" aria-label="登入紀錄明細，可左右捲動" tabindex="0">
+        <table>
+          <caption class="sr-only">登入紀錄明細，依登入時間由新到舊排列</caption>
+          <colgroup>
+            <col class="col-time"><col class="col-account"><col class="col-event"><col class="col-device"><col class="col-network"><col class="col-client"><col class="col-note">
+          </colgroup>
+          <thead>
+            <tr><th scope="col">時間（台北）</th><th scope="col">使用者帳號</th><th scope="col">登入事件</th><th scope="col">裝置名稱</th><th scope="col">網路位址</th><th scope="col">程式 / 系統</th><th scope="col">備註</th></tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr>
+              <td class="cell-time" data-label="時間（台北）"><span class="timestamp mono">{{ row.event_time or '—' }}</span></td>
+              <td data-label="使用者帳號"><span class="account-name">{{ row.username or '—' }}</span></td>
+              <td data-label="登入事件">
+                <span class="badge{% if row.action == 'login_success' %} badge-success{% elif row.action == 'login_fail' %} badge-failed{% endif %}">{{ action_labels.get(row.action, '其他事件') }}</span>
+                {% if row.action not in ['login_success', 'login_fail'] %}<span class="detail-line mono">{{ row.action or '未提供事件名稱' }}</span>{% endif %}
+              </td>
+              <td data-label="裝置名稱">{{ row.machine_name or '—' }}</td>
+              <td data-label="網路位址">
+                <span class="detail-line mono"><span class="detail-label">內網</span> {{ row.local_ip or '—' }}</span>
+                <span class="detail-line mono"><span class="detail-label">外網</span> {{ row.public_ip or '—' }}</span>
+              </td>
+              <td data-label="程式 / 系統">
+                <span>{{ row.app_version or '未提供版本' }}</span>
+                <span class="detail-line">{{ row.client_os or '未提供系統' }}</span>
+              </td>
+              <td class="cell-note" data-label="備註">
+                {% if row.note and row.note|length > 80 %}
+                <details class="note-expand"><summary>展開完整備註（{{ row.note|length }} 字）</summary><div class="note">{{ row.note }}</div></details>
+                {% else %}<div class="note">{{ row.note or '—' }}</div>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-state">
+        <span class="empty-icon" aria-hidden="true">⌕</span>
+        <h3>沒有符合條件的登入紀錄</h3>
+        <p>請確認完整帳號，或放寬事件與時間範圍後再查詢。</p>
+        <a class="btn btn-quiet" href="{{ reset_url }}">查看全部紀錄</a>
+      </div>
+      {% endif %}
+      <nav class="pagination" aria-label="查詢結果分頁">
+        <p class="pagination-status">第 <strong>{{ page }}</strong> / {{ total_pages }} 頁</p>
+        <div class="pagination-links">
+          {% for label, href in [('第一頁', first_url), ('上一頁', prev_url), ('下一頁', next_url), ('最後頁', last_url)] %}
+          {% if href %}<a class="btn btn-quiet" href="{{ href }}">{{ label }}</a>{% else %}<span class="btn disabled" aria-disabled="true">{{ label }}</span>{% endif %}
+          {% endfor %}
+        </div>
+      </nav>
+    </section>
+
+    <details class="cleanup" {% if prune_preview %}open{% endif %}>
+      <summary>清理舊紀錄 <span class="cleanup-summary-hint">先預覽，再確認清除範圍</span></summary>
+      <div class="cleanup-body">
+        <p class="cleanup-scope">此操作會清除<strong>全部使用者</strong>早於保留天數的登入紀錄，<strong>不受上方篩選條件影響</strong>。清除後無法復原；如需留存，請先匯出所需紀錄。</p>
+        <form class="cleanup-form" method="post" action="{{ prune_url }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="operation" value="preview">
+          {% for key in ['username', 'action', 'from', 'to', 'limit'] %}<input type="hidden" name="{{ key }}" value="{{ filters[key] }}">{% endfor %}
+          <input type="hidden" name="page" value="{{ page }}">
+          <div class="field cleanup-days">
+            <label for="days">保留最近幾天</label>
+            <input id="days" type="number" name="days" min="1" max="3650" step="1" value="{{ prune_preview.days if prune_preview else 180 }}" required aria-describedby="days-hint">
+          </div>
+          <button class="btn btn-quiet" type="submit">預覽清除範圍</button>
+          <p class="hint" id="days-hint">可設定 1–3,650 天</p>
+        </form>
+        {% if prune_preview %}
+        <div class="preview" role="region" aria-labelledby="prune-heading">
+          <h3 id="prune-heading">待確認：{{ "{:,}".format(prune_preview.count) }} 筆舊紀錄</h3>
+          <p>範圍：全部使用者，早於 <strong>{{ prune_preview.cutoff_display }}（台北時間）</strong> 的紀錄。</p>
+          <p>本次保留最近 {{ prune_preview.days }} 天，確認時使用上方固定截止時間。預覽有效 10 分鐘，逾時請重新預覽。</p>
+          <form method="post" action="{{ prune_url }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="preview_token" value="{{ prune_preview.token }}">
+            {% for key in ['username', 'action', 'from', 'to', 'limit'] %}<input type="hidden" name="{{ key }}" value="{{ filters[key] }}">{% endfor %}
+            <input type="hidden" name="page" value="{{ page }}">
+            <label class="confirm-check"><input type="checkbox" name="confirm_scope" value="all_users" required><span>我確認清除範圍涵蓋全部使用者，與目前查詢條件無關，且清除後無法復原。</span></label>
+            <div class="form-actions">
+              <button class="btn btn-danger" type="submit" name="operation" value="confirm" {% if prune_preview.count == 0 %}disabled{% endif %}>確認清除 {{ "{:,}".format(prune_preview.count) }} 筆</button>
+              <button class="btn btn-quiet" type="submit" name="operation" value="cancel" formnovalidate>取消清理</button>
+            </div>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+    </details>
+    <footer class="page-footer">登入紀錄僅供管理人員查詢 · 所有時間以台北時間（UTC+8）顯示</footer>
+  </main>
+</body>
+</html>
