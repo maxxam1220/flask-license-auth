@@ -11,6 +11,7 @@ from security import configure_security, api_key_required, require_api_key, csrf
 from backup_validation import validate_auth_backup, validate_licenses_backup, validate_barcode_backup
 from audit_views import register_audit_routes
 from admin_views import register_admin_routes
+from web_auth import register_web_auth
 
 app = Flask(__name__)
 configure_security(app)
@@ -18,7 +19,6 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 # ✅ 登入帳密
 USERNAME = os.getenv("ADMIN_USER", "admin")
-PASSWORD = os.getenv("ADMIN_PASS", "")
 
 # ✅ 給外部 ping 的 health token（可選，沒設就不檢查）
 PING_TOKEN = os.getenv("PING_TOKEN")  # ✅ Render Secrets 設 PING_TOKEN=xxx
@@ -1135,34 +1135,7 @@ def health():
         "db": db_ok,
     }), 200 if db_ok else 500
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if not PASSWORD:
-        return "後台登入尚未設定，請聯絡管理員", 503
-    if request.method == "POST":
-        if not valid_csrf_token():
-            return "登入表單已失效，請重新整理後再試", 400
-        username = request.form.get("username", "")
-        password = request.form.get("password", "")
-        if hmac.compare_digest(username.encode(), USERNAME.encode()) and hmac.compare_digest(password.encode(), PASSWORD.encode()):
-            session.clear()
-            session["logged_in"] = True
-            return redirect("/admin")
-        return "❌ 帳號或密碼錯誤", 401
-    return render_template_string("""
-        <form method="post" style="margin: 80px auto; width: 300px;">
-            <h2>授權後台登入</h2>
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input name="username" placeholder="帳號"><br><br>
-            <input name="password" type="password" placeholder="密碼"><br><br>
-            <button type="submit">登入</button>
-        </form>
-    """)
-
-@app.route("/logout")
-def logout():
-    session.pop("logged_in", None)
-    return redirect("/login")
+register_web_auth(app, lambda: db_conn(), USERNAME, os.getenv("ADMIN_PASS", ""))
 
 register_admin_routes(app, lambda: db_conn())
 

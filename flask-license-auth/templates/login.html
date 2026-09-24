@@ -1,0 +1,38 @@
+{% import '_backend_nav.html' as backend %}
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>登入 ｜ INVIMB 授權後台</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=2" type="image/x-icon">
+  {{ backend.auth_styles() }}
+  <script src="{{ url_for('static', filename='web_auth.js') }}" defer></script>
+</head>
+<body>
+  <main class="auth-shell">
+    <div class="auth-brand"><span class="brand-mark" aria-hidden="true">I</span><div><span class="brand-name">INVIMB</span><span class="brand-caption">授權管理中心</span></div></div>
+    <section class="auth-card" aria-labelledby="login-heading">
+      <h1 id="login-heading">登入授權後台</h1>
+      <p class="auth-subtitle">查看授權、登入紀錄與後台安全設定。</p>
+      {% if error or retry_after %}<div class="auth-notice auth-error" role="alert">{% if error %}<p>{{ error }}</p>{% endif %}{% if retry_after %}<p class="auth-retry">請等待約 {{ retry_after }} 秒後再試。</p>{% endif %}</div>{% endif %}
+      {% if message %}<div class="auth-notice auth-success" role="status">{{ message }}</div>{% endif %}
+      <form class="auth-form" method="post" action="/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="auth-field">
+          <label for="username">管理員帳號</label>
+          <input id="username" name="username" type="text" value="{{ username }}" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="auth-field">
+          <label for="password">密碼</label>
+          <div class="password-control"><input id="password" name="password" type="password" autocomplete="current-password" required><button class="password-toggle" type="button" data-toggle-password="password" data-password-label="密碼" aria-controls="password" aria-pressed="false" aria-label="顯示密碼" hidden>顯示</button></div>
+        </div>
+        <label class="remember-row"><input type="checkbox" name="remember_username" value="1" {% if remember_username %}checked{% endif %}><span>記住帳號<span class="remember-help">僅記住此瀏覽器的帳號。密碼可由瀏覽器密碼管理員保存。</span></span></label>
+        <button class="auth-btn" type="submit">登入後台</button>
+      </form>
+    </section>
+    <footer class="auth-footer">INVIMB 授權後台 · 管理人員專用</footer>
+  </main>
+</body>
+</html>

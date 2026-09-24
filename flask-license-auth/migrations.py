@@ -102,6 +102,17 @@ CREATE TABLE IF NOT EXISTS app_settings (
   key   TEXT PRIMARY KEY,
   value JSONB NOT NULL
 );
+
+-- 9) Website administrator credential and shared login throttle.
+-- NULL hash uses ADMIN_PASS only until the first website password change.
+CREATE TABLE IF NOT EXISTS web_admin_auth (
+  username        TEXT PRIMARY KEY,
+  password_hash   TEXT,
+  session_version BIGINT NOT NULL DEFAULT 1,
+  failed_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until    TIMESTAMPTZ,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 def _get_dsn():
@@ -133,11 +144,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
 def ensure_all_tables():
     dsn = _get_dsn()
     conn = psycopg2.connect(dsn)
-    conn.autocommit = True
-    with conn, conn.cursor() as cur:
-        cur.execute(SQL_CREATE_ALL)
-        cur.execute(SQL_PATCH)   # ✅ 補洞
-    conn.close()
+    conn.autocommit = False
+    try:
+        with conn, conn.cursor() as cur:
+            # Serialize worker startup before acquiring any schema locks.
+            cur.execute("SELECT pg_advisory_xact_lock(746392158012)")
+            cur.execute(SQL_CREATE_ALL)
+            cur.execute(SQL_PATCH)   # ✅ 補洞
+    finally:
+        conn.close()
 
 # ✅ 兼容舊名稱：舊程式如果還呼叫 ensure_audit_login_table()，就當成 ensure_all_tables().
 def ensure_audit_login_table():

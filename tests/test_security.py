@@ -205,8 +205,16 @@ class SecurityTests(unittest.TestCase):
         self.db.assert_not_called()
 
     def test_login_requires_csrf_and_sets_secure_cookie(self):
+        from jinja2 import FileSystemLoader
+        from test_web_auth import AuthDatabase
+        self.enterContext(patch.object(self.app, "jinja_loader",
+            FileSystemLoader(str(ROOT / "flask-license-auth" / "templates"))))
+        self.enterContext(patch.object(self.module, "db_conn", AuthDatabase(username=ENV["ADMIN_USER"])))
         self.assertEqual(self.client.post("/login", data={"username": ENV["ADMIN_USER"],
                                                          "password": ENV["ADMIN_PASS"]}).status_code, 400)
+        # The styled CSRF error now renders a fresh token; check first-visit
+        # cookie flags with a new browser rather than expecting reissuance.
+        self.client = self.app.test_client()
         response = self.client.get("/login")
         self.assertIn(b'name="csrf_token"', response.data)
         cookie = response.headers["Set-Cookie"]
@@ -221,27 +229,28 @@ class SecurityTests(unittest.TestCase):
 
     def test_audit_prune_rejects_missing_csrf_before_delete(self):
         from jinja2 import FileSystemLoader
+        from test_web_auth import AuthDatabase, seed_authenticated
         self.enterContext(patch.object(self.app, "jinja_loader",
             FileSystemLoader(str(ROOT / "flask-license-auth" / "templates"))))
+        database = AuthDatabase(username=ENV["ADMIN_USER"], initialized=True)
+        self.enterContext(patch.object(self.module, "db_conn", database))
+        seed_authenticated(self.client, username=ENV["ADMIN_USER"])
         with self.client.session_transaction() as session:
-            session["logged_in"] = True
             session["csrf_token"] = "test-csrf"
         self.assertEqual(self.client.post("/audit/prune", data={"days": 180}).status_code, 400)
-        self.db.assert_not_called()
-        with self.fake_database() as cur:
-            cur.fetchone.side_effect = [{"count": 2, "max_id": 44}, None]
-            response = self.client.post("/audit/prune", data={
-                "operation": "preview", "days": 180, "csrf_token": "test-csrf"})
-            self.assertEqual(response.status_code, 302)
-            self.assertFalse(any("DELETE FROM audit_login" in call.args[0] for call in cur.execute.call_args_list))
-            with self.client.session_transaction() as session:
-                token = session["_audit_prune_preview"]["token"]
-            response = self.client.post("/audit/prune", data={
-                "operation": "confirm", "preview_token": token,
-                "confirm_scope": "all_users", "csrf_token": "test-csrf"})
-            self.assertEqual(response.status_code, 302)
-            self.assertTrue(any("DELETE FROM audit_login" in call.args[0] for call in cur.execute.call_args_list))
-            self.assertTrue(any("INSERT INTO audit_login" in call.args[0] for call in cur.execute.call_args_list))
+        self.assertFalse(any("DELETE" in sql for sql, _ in database.calls))
+        response = self.client.post("/audit/prune", data={
+            "operation": "preview", "days": 180, "csrf_token": "test-csrf"})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(any("DELETE FROM audit_login" in sql for sql, _ in database.calls))
+        with self.client.session_transaction() as session:
+            token = session["_audit_prune_preview"]["token"]
+        response = self.client.post("/audit/prune", data={
+            "operation": "confirm", "preview_token": token,
+            "confirm_scope": "all_users", "csrf_token": "test-csrf"})
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(any("DELETE FROM audit_login" in sql for sql, _ in database.calls))
+        self.assertTrue(any("INSERT INTO audit_login" in sql for sql, _ in database.calls))
 
     def test_public_login_and_license_contracts_still_reach_validation(self):
         for route in ("/check_account", "/check_license"):

@@ -23,6 +23,8 @@ ACTION_LABELS = {
     "login_success": "登入成功",
     "login_fail": "登入失敗",
     "audit_prune": "清除紀錄",
+    "password_change": "後台密碼變更",
+    "password_change_fail": "後台密碼變更失敗",
 }
 TIME_HELP = "時間條件採台北時間；結束時間包含所選分鐘，例如 18:30 包含到 18:30:59。"
 _ROWS_SQL = """
