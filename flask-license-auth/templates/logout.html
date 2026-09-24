@@ -1,0 +1,27 @@
+{% import '_backend_nav.html' as backend %}
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>登出 ｜ INVIMB 授權後台</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}?v=2" type="image/x-icon">
+  {{ backend.auth_styles() }}
+</head>
+<body>
+  <main class="auth-shell">
+    <div class="auth-brand"><span class="brand-mark" aria-hidden="true">I</span><div><span class="brand-name">INVIMB</span><span class="brand-caption">授權管理中心</span></div></div>
+    <section class="auth-card" aria-labelledby="logout-heading">
+      <h1 id="logout-heading">確認登出</h1>
+      <p class="auth-subtitle">登出後，需要重新登入才能查看授權與登入紀錄。</p>
+      {% if error %}<div class="auth-notice auth-error" role="alert">{{ error }}</div>{% endif %}
+      <form class="auth-form" method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="auth-actions"><button class="auth-btn" type="submit">確認登出</button><a class="auth-btn auth-btn-secondary" href="/admin">繼續使用後台</a></div>
+      </form>
+    </section>
+    <footer class="auth-footer">INVIMB 授權後台 · 管理人員專用</footer>
+  </main>
+</body>
+</html>
