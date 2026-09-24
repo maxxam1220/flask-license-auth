@@ -10,6 +10,7 @@ from psycopg2.pool import ThreadedConnectionPool
 from security import configure_security, api_key_required, require_api_key, csrf_token, valid_csrf_token
 from backup_validation import validate_auth_backup, validate_licenses_backup, validate_barcode_backup
 from audit_views import register_audit_routes
+from admin_views import register_admin_routes
 
 app = Flask(__name__)
 configure_security(app)
@@ -1163,15 +1164,7 @@ def logout():
     session.pop("logged_in", None)
     return redirect("/login")
 
-@app.route("/admin")
-def admin():
-    if not session.get("logged_in"):
-        return redirect("/login")
-    with db_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT * FROM licenses ORDER BY auth_code")
-            licenses = cur.fetchall()
-    return render_template("admin.html", licenses=licenses)
+register_admin_routes(app, lambda: db_conn())
 
 @app.route("/get_licenses", methods=["GET"])
 @api_key_required("ADMIN_API_KEY")

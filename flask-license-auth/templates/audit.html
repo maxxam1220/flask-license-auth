@@ -1,3 +1,4 @@
+{% import '_backend_nav.html' as backend %}
 <!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -200,6 +201,7 @@
     }
     @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
   </style>
+  {{ backend.styles() }}
 </head>
 <body>
   <main class="shell">
@@ -209,10 +211,7 @@
         <h1>登入紀錄</h1>
         <p class="subtitle">查詢帳號登入、追蹤使用裝置與異常事件。</p>
       </div>
-      <nav class="nav-actions" aria-label="後台導覽">
-        <a class="btn btn-quiet" href="/admin">返回授權管理</a>
-        <a class="btn btn-quiet" href="/logout">登出</a>
-      </nav>
+      {{ backend.navigation('audit') }}
     </header>
 
     {% if error %}<div class="notice notice-error" role="alert">{{ error }}</div>{% endif %}
