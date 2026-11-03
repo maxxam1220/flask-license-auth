@@ -62,6 +62,37 @@ def test_transparent_image_uses_white_background():
         assert min(decoded.getpixel((6, 6))) >= 250
 
 
+@pytest.mark.parametrize("mode,color,transparent", [("RGB", (255, 0, 0), (255, 0, 0)), ("L", 0, 0)])
+def test_png_color_key_transparency_uses_white_background(mode, color, transparent):
+    raw = io.BytesIO()
+    source = Image.new(mode, (40, 20), color)
+    source.paste((0, 0, 255) if mode == "RGB" else 100, (20, 0, 40, 20))
+    source.save(raw, format="PNG", transparency=transparent)
+    result = process_uploads([upload(raw.getvalue(), name="transparent.png")])[0]
+    with Image.open(io.BytesIO(result["data"])) as decoded:
+        assert min(decoded.getpixel((10, 10))) >= 250
+        opaque = decoded.getpixel((30, 10))
+        if mode == "RGB":
+            assert opaque[2] >= 245 and max(opaque[:2]) <= 10
+        else:
+            assert all(95 <= value <= 105 for value in opaque)
+
+
+def test_resized_png_transparent_color_does_not_bleed_into_edges():
+    raw = io.BytesIO()
+    source = Image.new("RGB", (3200, 1200), (255, 0, 0))
+    source.paste((0, 0, 255), (1600, 0, 3200, 1200))
+    source.save(raw, format="PNG", transparency=(255, 0, 0))
+    result = process_uploads([upload(raw.getvalue(), name="large-transparent.png")])[0]
+    with Image.open(io.BytesIO(result["data"])) as decoded:
+        assert decoded.size == (1600, 600)
+        assert min(decoded.getpixel((700, 300))) >= 250
+        # Blue blended over white has equal red/green channels. The invisible
+        # red source must not become a red or purple fringe during thumbnailing.
+        edge = [decoded.getpixel((x, 300)) for x in range(790, 810)]
+        assert max(abs(red - green) for red, green, _ in edge) <= 10
+
+
 @pytest.mark.parametrize("placeholder", [False, True])
 def test_no_photo_checkin_does_not_wait_for_other_image_processing(placeholder):
     files = [upload(b"", name="")] if placeholder else []

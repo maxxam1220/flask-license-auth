@@ -106,7 +106,7 @@ def normalise_return_to(value, user):
                 return None
             elif key == "abnormal" and item not in ("0", "1"):
                 return None
-            elif key == "frequency" and item not in ("daily", "daily2", "weekly"):
+            elif key == "frequency" and item not in ("daily", "daily2", "weekly", "daily_all"):
                 return None
             elif key == "status" and item not in ("open", "resolved", "all"):
                 return None
@@ -307,6 +307,18 @@ def create_app(config=None):
         if user.role != "admin":
             abort(403, description="管理員權限已更新，請重新登入後再試。")
         return user
+
+    def lock_admin_users(*target_ids):
+        # Admin actions can touch two accounts. Always take every User lock in
+        # primary-key order, including the actor, so opposing admin actions do
+        # not deadlock or both succeed after one actor has lost authority.
+        actor_id = g.user.id
+        locked = {user_id: lock_user(user_id) for user_id in sorted({actor_id, *target_ids})}
+        actor = locked[actor_id]
+        if (not actor or not actor.active or actor.auth_version != session.get("auth_version")
+                or actor.must_change_password or actor.role != "admin"):
+            abort(403, description="管理員權限或帳號狀態已更新，請重新登入後再試。")
+        return locked
 
     def device_binding():
         token = request.cookies.get(DEVICE_COOKIE, "")
@@ -549,7 +561,10 @@ def create_app(config=None):
                                open_issue_counts=issue_counts, device_state=device_status(), recent=db.session.scalars(recent_query).all(),
                                missed_query_url=url_for("missed", date_from=period_day.isoformat(),
                                    date_to=(monday + timedelta(days=6) if view == "weekly" else selected).isoformat(),
-                                   category=category_filter, floor=floor_filter, frequency="weekly" if view == "weekly" else ""),
+                                   category=category_filter, floor=floor_filter, frequency="weekly" if view == "weekly" else "daily_all"),
+                               records_query_url=url_for("records", date_from=period_day.isoformat(),
+                                   date_to=(monday + timedelta(days=6) if view == "weekly" else selected).isoformat(),
+                                   category=category_filter, floor=floor_filter, frequency="weekly" if view == "weekly" else "daily_all"),
                                week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
 
     def get_point(token, lock=False):
@@ -579,6 +594,8 @@ def create_app(config=None):
             existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency == "weekly" else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
+                               progress_url=url_for("dashboard", view="weekly" if point.frequency == "weekly" else "daily",
+                                                    date=key, floor=point.floor, category=point.category),
                                current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
                                note=request.form.get("note", ""), is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"),
                                point_open_issue_count=open_issue_counts([point.id]).get(point.id, 0), form_error=error), status
@@ -659,7 +676,10 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         if g.user.role != "admin" and record.user_id != g.user.id:
             abort(403)
-        return render_template("checkin_success.html", record=record, point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0))
+        return render_template("checkin_success.html", record=record,
+                               progress_url=url_for("dashboard", view="weekly" if record.frequency == "weekly" else "daily",
+                                                    date=record.period_key, floor=record.point_floor, category=record.category),
+                               point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0))
 
     @app.get("/records/<int:record_id>")
     @login_required
@@ -815,7 +835,7 @@ def create_app(config=None):
     @admin_required
     def approve_device(binding_id):
         binding = db.get_or_404(DeviceBinding, binding_id)
-        lock_user(binding.user_id)
+        lock_admin_users(binding.user_id)
         db.session.refresh(binding)
         if binding.status != "pending" or not binding.user.active:
             abort(400, description="此申請已處理或員工帳號已停用。")
@@ -836,7 +856,7 @@ def create_app(config=None):
     @admin_required
     def reject_device(binding_id):
         binding = db.get_or_404(DeviceBinding, binding_id)
-        lock_user(binding.user_id)
+        lock_admin_users(binding.user_id)
         db.session.refresh(binding)
         if binding.status != "pending":
             abort(400)
@@ -850,7 +870,8 @@ def create_app(config=None):
     @admin_required
     def revoke_device(binding_id):
         binding = db.get_or_404(DeviceBinding, binding_id)
-        lock_user(binding.user_id)
+        lock_admin_users(binding.user_id)
+        db.session.refresh(binding)
         binding.status = "revoked"
         audit("device_revoked", binding.id)
         db.session.commit()
@@ -878,9 +899,11 @@ def create_app(config=None):
         if abnormal:
             query = query.where(Inspection.is_abnormal.is_(abnormal == "1"))
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "weekly"):
+        if frequency not in ("", "daily", "daily2", "weekly", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
-        if frequency:
+        if frequency == "daily_all":
+            query = query.where(Inspection.frequency.in_(("daily", "daily2")))
+        elif frequency:
             query = query.where(Inspection.frequency == frequency)
         if g.user.role != "admin":
             query = query.where(Inspection.user_id == g.user.id)
@@ -937,7 +960,7 @@ def create_app(config=None):
             abort(400, description="請選擇正確的應完成日期範圍，最多可查詢 367 天。")
         floor, category = scope_filters()
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "weekly"):
+        if frequency not in ("", "daily", "daily2", "weekly", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         # Read historical schedules, not the point's current classification.
         points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
@@ -1113,6 +1136,7 @@ def create_app(config=None):
     @app.post("/admin/users/create")
     @admin_required
     def create_user():
+        lock_admin_users()
         username = request.form.get("username", "").strip().lower()
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
@@ -1134,7 +1158,7 @@ def create_app(config=None):
     @app.post("/admin/users/<int:user_id>/update")
     @admin_required
     def update_user(user_id):
-        user = lock_user(user_id)
+        user = lock_admin_users(user_id)[user_id]
         if not user:
             abort(404)
         name = request.form.get("display_name", "").strip()
@@ -1157,7 +1181,7 @@ def create_app(config=None):
     @app.post("/admin/users/<int:user_id>/reset-password")
     @admin_required
     def reset_password(user_id):
-        user = lock_user(user_id)
+        user = lock_admin_users(user_id)[user_id]
         if not user:
             abort(404)
         password = request.form.get("password", "")

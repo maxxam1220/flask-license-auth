@@ -54,8 +54,12 @@ def _process_uploads(files):
                         raise PhotoValidationError(f"{prefix}請使用單張靜態圖片。")
                     source.load()
                     oriented = ImageOps.exif_transpose(source)
+                    # Preserve color-key transparency during resampling; RGB/L
+                    # interpolation otherwise makes hidden colors opaque halos.
+                    if "transparency" in oriented.info:
+                        oriented = oriented.convert("RGBA")
                     oriented.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.Resampling.LANCZOS)
-                    if oriented.mode in ("RGBA", "LA") or (oriented.mode == "P" and "transparency" in oriented.info):
+                    if oriented.mode in ("RGBA", "LA") or "transparency" in oriented.info:
                         rgba = oriented.convert("RGBA")
                         image = Image.new("RGB", rgba.size, "white")
                         image.paste(rgba, mask=rgba.getchannel("A"))

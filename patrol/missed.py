@@ -93,7 +93,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         raise ValueError("now must be a datetime")
     if category not in ("", None) and category not in dict(CATEGORY_OPTIONS):
         raise ValueError("Unknown category filter")
-    if frequency not in ("", None) and frequency not in FREQUENCIES:
+    if frequency not in ("", None, "daily_all") and frequency not in FREQUENCIES:
         raise ValueError("Unknown frequency filter")
     if floor not in (None, ""):
         if str(floor) not in {str(value) for value in FLOOR_ORDER}:
@@ -126,7 +126,8 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
             if (snapshot["active"] and period_frequency in FREQUENCIES
                     and (not category or snapshot["category"] == category)
                     and (floor is None or snapshot["floor"] == floor)
-                    and (not frequency or period_frequency == frequency)):
+                    and (not frequency or period_frequency == frequency
+                         or (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
                 next_midnight = datetime.combine(due_day + timedelta(days=1), time.min, TAIPEI)
                 if period_frequency == "weekly":
                     slots = (("any", next_midnight),) if due_day.weekday() == 6 else ()

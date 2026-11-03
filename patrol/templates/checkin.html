@@ -3,7 +3,7 @@
 {% set title='打卡確認' %}
 {% block content %}
 <div class="checkin-wrap checkin-wrap-wide">
-  <a class="back-link" href="{{ url_for('dashboard', category=point.category) }}">{{ icon('back') }}返回巡檢總覽</a>
+  <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>
   <div class="checkin-card">
     <div class="checkin-topline"><span>{{ icon('qr') }}{{ category_label(point.category) }}</span><span>{{ floor_label(point.floor) }}</span></div>
     <div class="checkin-point-icon">{{ icon('pin') }}</div>
@@ -28,10 +28,10 @@
     {% if form_error %}<div class="flash flash-error upload-form-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<div><strong>{{ form_error }}</strong><p>備註已保留；如有附照片，請重新選擇後再送出。</p></div></div>{% endif %}
     {% if existing %}
       <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本週' }}已完成，不必重複打卡</strong><p>{{ existing.user_name or existing.user.display_name }} · {{ existing.created_at|localtime }}</p></div></div>
-      <a class="button button-secondary button-full" href="{{ url_for('dashboard', category=point.category) }}">返回巡檢總覽 {{ icon('arrow') }}</a>
+      <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽 {{ icon('arrow') }}</a>
     {% elif not point.active %}
       <div class="flash flash-warning">此點位已停用，無法打卡。</div>
-      <a class="button button-secondary button-full" href="{{ url_for('dashboard', category=point.category) }}">返回巡檢總覽</a>
+      <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽</a>
     {% elif device_state == 'approved' %}
       <form id="inspection-form" method="post" action="{{ url_for('confirm_checkin', token=request.view_args.get('token')) }}" enctype="multipart/form-data" data-submit-once data-inspection-form>
         {{ csrf() }}
