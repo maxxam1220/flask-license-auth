@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, inspect, select, text
+from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, exists, inspect, literal, select, text
 from sqlalchemy.schema import CreateColumn, CreateTable
 
-from models import Inspection, InspectionPhoto, Point, PointSchedule, SchemaVersion, db
+from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, SchemaVersion, db
 
 
-LATEST_VERSION = 2
+LATEST_VERSION = 3
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -95,8 +95,11 @@ def _upgrade_locked(connection) -> int:
         # Deliberately pass only this application's tables on a shared database.
         db.metadata.create_all(connection, tables=[table for table in db.metadata.sorted_tables
                                                    if table.name.startswith("patrol_")])
-    elif current < LATEST_VERSION:
-        _upgrade_v1_to_v2(connection)
+    else:
+        if current < 2:
+            _upgrade_v1_to_v2(connection)
+        if current < 3:
+            _upgrade_v2_to_v3(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -129,6 +132,25 @@ def _upgrade_v1_to_v2(connection):
 
     _add_missing_columns(connection, "patrol_point_schedules", [PointSchedule.__table__.c.category])
     InspectionPhoto.__table__.create(connection, checkfirst=True)
+
+
+def _upgrade_v2_to_v3(connection):
+    """Add issue workflow without rewriting historical abnormal flags or notes.
+
+    Existing cases are left intact, including resolved cases from an interrupted
+    deployment prepared manually. Only missing cases are backfilled, and this
+    step runs once when the recorded schema version is older than version 3.
+    """
+    issues = InspectionIssue.__table__
+    inspections = Inspection.__table__
+    issues.create(connection, checkfirst=True)
+    IssueEvent.__table__.create(connection, checkfirst=True)
+    missing_abnormal = select(inspections.c.id, literal("open"), inspections.c.created_at).where(
+        inspections.c.is_abnormal.is_(True),
+        ~exists(select(issues.c.inspection_id).where(issues.c.inspection_id == inspections.c.id)),
+    )
+    connection.execute(issues.insert().from_select(
+        ["inspection_id", "status", "opened_at"], missing_abnormal, include_defaults=False))
 
 
 def _compact(expression):
@@ -216,7 +238,8 @@ def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False,
 
 def _validate_current(connection):
     inspector = inspect(connection)
-    expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions"}
+    expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
+                                   "patrol_inspection_issues", "patrol_issue_events"}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     for table_name, required in {
@@ -224,6 +247,8 @@ def _validate_current(connection):
         "patrol_point_schedules": ("category",),
         "patrol_inspections": ("category", "slot", "note", "is_abnormal"),
         "patrol_inspection_photos": ("inspection_id", "data", "mime_type", "size_bytes", "width", "height", "created_at"),
+        "patrol_inspection_issues": ("inspection_id", "status", "opened_at", "resolved_by_name", "resolution_note"),
+        "patrol_issue_events": ("inspection_id", "actor_id", "actor_name", "action", "note", "created_at"),
     }.items():
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
@@ -234,3 +259,12 @@ def _validate_current(connection):
     checks = inspector.get_check_constraints("patrol_points")
     if not any(check["name"] == "patrol_point_floor" for check in checks):
         raise SchemaMigrationError("Point floor validation is missing.")
+    issue_checks = {check["name"] for check in inspector.get_check_constraints("patrol_inspection_issues")}
+    issue_columns = {column["name"] for column in inspector.get_columns("patrol_inspection_issues")}
+    if not {"resolved_at", "resolved_by_id"} <= issue_columns:
+        raise SchemaMigrationError("Issue resolution columns are missing.")
+    if not {"patrol_issue_status", "patrol_issue_resolution_fields"} <= issue_checks:
+        raise SchemaMigrationError("Issue status or resolution validation is missing.")
+    event_checks = {check["name"] for check in inspector.get_check_constraints("patrol_issue_events")}
+    if "patrol_issue_event_action" not in event_checks:
+        raise SchemaMigrationError("Issue event action validation is missing.")

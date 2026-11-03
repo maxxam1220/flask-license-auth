@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 from sqlalchemy import (Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey,
-                        Index, Integer, MetaData, String, Table, Text, UniqueConstraint,
+                        Index, Integer, LargeBinary, MetaData, String, Table, Text, UniqueConstraint,
                         create_engine, event, inspect, select, text)
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
@@ -12,7 +12,7 @@ from sqlalchemy.schema import CreateColumn, CreateTable
 
 import migrations
 from migrations import LATEST_VERSION, SchemaMigrationError, upgrade_schema
-from models import Inspection, InspectionPhoto, Point, PointSchedule, db
+from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, db
 
 
 def legacy_metadata():
@@ -75,6 +75,11 @@ def engine(tmp_path):
 def legacy(engine):
     metadata = legacy_metadata()
     metadata.create_all(engine)
+    seed_legacy_rows(engine, metadata)
+    return metadata
+
+
+def seed_legacy_rows(engine, metadata):
     instant = datetime(2026, 11, 3, 1, 2, 3)
     with engine.begin() as connection:
         connection.execute(metadata.tables["patrol_users"].insert(), dict(
@@ -104,11 +109,62 @@ def legacy(engine):
             for table in metadata.sorted_tables:
                 connection.execute(text("SELECT setval(pg_get_serial_sequence(:table, 'id'), "
                                         f"(SELECT MAX(id) FROM {table.name}), true)"), {"table": table.name})
+
+
+def version_two_metadata():
+    """Frozen v2 additions, independent of the current issue-workflow models."""
+    metadata = legacy_metadata()
+    points = metadata.tables["patrol_points"]
+    points.append_column(Column("category", String(20), nullable=False, server_default="uncategorized"))
+    for constraint in list(points.constraints):
+        if isinstance(constraint, CheckConstraint) and constraint.name == "patrol_point_floor":
+            points.constraints.remove(constraint)
+    points.append_constraint(CheckConstraint("floor IN (-2, -1, 1, 11, 2, 3, 4, 14, 5, 15)", name="patrol_point_floor"))
+    metadata.tables["patrol_point_schedules"].append_column(
+        Column("category", String(20), nullable=False, server_default="uncategorized"))
+    inspections = metadata.tables["patrol_inspections"]
+    for column in (Column("category", String(20), nullable=False, server_default="uncategorized"),
+                   Column("slot", String(8), nullable=False, server_default="any"),
+                   Column("note", Text, nullable=False, server_default=""),
+                   Column("is_abnormal", Boolean, nullable=False, server_default=text("false"))):
+        inspections.append_column(column)
+    for constraint in list(inspections.constraints):
+        if isinstance(constraint, UniqueConstraint) and constraint.name == "patrol_one_inspection_per_period":
+            inspections.constraints.remove(constraint)
+    inspections.append_constraint(UniqueConstraint("point_id", "frequency", "period_key", "slot",
+                                                  name="patrol_one_inspection_per_slot"))
+    Table("patrol_inspection_photos", metadata,
+          Column("id", Integer, primary_key=True),
+          Column("inspection_id", Integer, ForeignKey("patrol_inspections.id"), nullable=False, index=True),
+          Column("data", LargeBinary, nullable=False), Column("mime_type", String(40), nullable=False, server_default="image/jpeg"),
+          Column("size_bytes", Integer, nullable=False), Column("width", Integer, nullable=False),
+          Column("height", Integer, nullable=False), Column("created_at", DateTime, nullable=False))
+    Table("patrol_schema_versions", metadata,
+          Column("version", Integer, primary_key=True), Column("applied_at", DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP")))
+    return metadata
+
+
+@pytest.fixture
+def version_two(engine):
+    metadata = version_two_metadata()
+    metadata.create_all(engine)
+    seed_legacy_rows(engine, legacy_metadata())
+    with engine.begin() as connection:
+        connection.execute(metadata.tables["patrol_schema_versions"].insert().values(version=2))
+        connection.execute(metadata.tables["patrol_inspections"].update().where(
+            metadata.tables["patrol_inspections"].c.id == 51).values(is_abnormal=True, note="Original abnormal note"))
+        connection.execute(metadata.tables["patrol_inspections"].insert(), dict(
+            id=52, user_id=17, point_id=23, binding_id=41, created_at=datetime(2026, 11, 4, 1, 2, 3),
+            period_key="2026-11-04", frequency="daily", point_code="1F-A01", point_name="Normal snapshot",
+            point_floor=1, user_name="Original person snapshot", is_abnormal=False))
+        connection.execute(metadata.tables["patrol_inspection_photos"].insert(), dict(
+            id=81, inspection_id=51, data=b"existing-photo-fixture", size_bytes=22, width=2, height=1,
+            created_at=datetime(2026, 11, 3, 1, 2, 3)))
     return metadata
 
 
 def snapshot(connection, metadata):
-    return {table.name: connection.execute(select(table).order_by(table.c.id)).all()
+    return {table.name: connection.execute(select(table).order_by(*table.primary_key.columns)).all()
             for table in metadata.sorted_tables}
 
 
@@ -121,7 +177,7 @@ def test_fresh_database_and_idempotent_upgrade(engine):
         assert connection.exec_driver_sql("SELECT * FROM patrol_schema_versions").all() == before
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
-    assert len(inspect(engine).get_table_names()) == 9
+    assert len(inspect(engine).get_table_names()) == 11
 
 
 def test_v1_rows_ids_qr_credentials_and_unrelated_data_survive(engine, legacy):
@@ -321,3 +377,147 @@ def test_postgres_upgrade_uses_targeted_alter_and_preserves_unrelated_constraint
     assert "DROP TABLE" not in combined
     assert "extra_point_check" not in combined and "extra_unique_check" not in combined
     assert all(statement.startswith("ALTER TABLE patrol_") for statement in statements)
+
+
+def test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once(engine, version_two):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_two)
+    statements = []
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement.upper())
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        assert upgrade_schema(engine) == 3
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+    assert not any(statement.lstrip().startswith(("ALTER TABLE", "DROP TABLE", "UPDATE PATROL_")) for statement in statements)
+    with engine.connect() as connection:
+        after = snapshot(connection, version_two)
+        for table_name in before:
+            if table_name != "patrol_schema_versions":
+                assert after[table_name] == before[table_name]
+        assert after["patrol_schema_versions"][0] == before["patrol_schema_versions"][0]
+        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3]
+        assert connection.execute(select(InspectionIssue.__table__)).one() == (
+            51, "open", datetime(2026, 11, 3, 1, 2, 3), None, None, "", "")
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_issue_events").scalar_one() == 0
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+    # Version 3 does not periodically backfill flags changed behind the workflow.
+    with engine.begin() as connection:
+        connection.execute(Inspection.__table__.update().where(Inspection.id == 52).values(is_abnormal=True))
+    assert upgrade_schema(engine) == 3
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspection_issues").scalar_one() == 1
+
+
+def test_v2_backfill_never_overwrites_existing_resolved_case_or_events(engine, version_two):
+    with engine.begin() as connection:
+        InspectionIssue.__table__.create(connection)
+        IssueEvent.__table__.create(connection)
+        connection.execute(InspectionIssue.__table__.insert().values(
+            inspection_id=51, status="resolved", opened_at=datetime(2026, 11, 3, 1, 2, 3),
+            resolved_at=datetime(2026, 11, 3, 5), resolved_by_id=17,
+            resolved_by_name="Original manager", resolution_note="Already repaired"))
+        connection.execute(IssueEvent.__table__.insert().values(
+            inspection_id=51, actor_id=17, actor_name="Original manager", action="resolved",
+            note="Already repaired", created_at=datetime(2026, 11, 3, 5)))
+        before_issue = connection.execute(select(InspectionIssue.__table__)).all()
+        before_events = connection.execute(select(IssueEvent.__table__)).all()
+    upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.execute(select(InspectionIssue.__table__)).all() == before_issue
+        assert connection.execute(select(IssueEvent.__table__)).all() == before_events
+        assert connection.execute(select(Inspection.is_abnormal).where(Inspection.id == 51)).scalar_one() is True
+
+
+def test_v2_upgrade_failure_rolls_back_backfill_and_new_tables(engine, version_two, monkeypatch):
+    with engine.connect() as connection:
+        before_rows = snapshot(connection, version_two)
+        before_schema = connection.exec_driver_sql("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all()
+
+    def fail_validation(connection):
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspection_issues").scalar_one() == 1
+        raise RuntimeError("Injected v3 migration failure")
+
+    monkeypatch.setattr(migrations, "_validate_current", fail_validation)
+    with pytest.raises(RuntimeError, match="Injected v3"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert snapshot(connection, version_two) == before_rows
+        assert connection.exec_driver_sql("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all() == before_schema
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "unexpected"},
+    {"status": "resolved"},
+    {"resolved_at": datetime(2026, 11, 3, 4), "resolved_by_id": 17, "resolved_by_name": "Manager"},
+    {"resolution_note": "Open cases must keep closure notes in event history"},
+])
+def test_issue_status_and_closure_consistency_constraints(engine, version_two, changes):
+    upgrade_schema(engine)
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(InspectionIssue.__table__.update().where(InspectionIssue.inspection_id == 51).values(**changes))
+
+
+def test_issue_relationships_events_order_and_history_flag_survive_resolution_and_reopen(engine, version_two):
+    upgrade_schema(engine)
+    instant = datetime(2026, 11, 3, 4)
+    with Session(engine) as session:
+        inspection = session.get(Inspection, 51)
+        issue = inspection.issue
+        assert issue.inspection is inspection
+        issue.status = "resolved"
+        issue.resolved_at = instant
+        issue.resolved_by_id = 17
+        issue.resolved_by_name = "Manager snapshot"
+        issue.resolution_note = "Repaired"
+        issue.events.append(IssueEvent(actor_id=17, actor_name="Manager snapshot", action="resolved", note="Repaired", created_at=instant))
+        session.commit()
+        issue.status = "open"
+        issue.resolved_at = issue.resolved_by_id = None
+        issue.resolved_by_name = issue.resolution_note = ""
+        issue.events.append(IssueEvent(actor_id=17, actor_name="Manager snapshot", action="reopened", note="Needs another check", created_at=instant))
+        session.commit()
+    with Session(engine) as session:
+        inspection = session.get(Inspection, 51)
+        assert inspection.is_abnormal is True
+        assert inspection.note == "Original abnormal note"
+        assert inspection.issue.status == "open"
+        assert [event.action for event in inspection.issue.events] == ["resolved", "reopened"]
+        assert [event.note for event in inspection.issue.events] == ["Repaired", "Needs another check"]
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(InspectionIssue.__table__.insert().values(inspection_id=51, opened_at=instant))
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(IssueEvent.__table__.insert().values(inspection_id=99999, actor_id=17, actor_name="Manager", action="resolved", created_at=instant))
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(IssueEvent.__table__.insert().values(inspection_id=51, actor_id=17, actor_name="Manager", action="deleted", created_at=instant))
+
+
+def test_existing_v3_rejects_missing_nullable_resolution_columns(engine):
+    upgrade_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE patrol_inspection_issues")
+        connection.exec_driver_sql(
+            "CREATE TABLE patrol_inspection_issues (inspection_id INTEGER NOT NULL PRIMARY KEY, "
+            "status VARCHAR(10) NOT NULL DEFAULT 'open', opened_at DATETIME NOT NULL, "
+            "resolved_by_name VARCHAR(100) NOT NULL DEFAULT '', resolution_note TEXT NOT NULL DEFAULT '', "
+            "CONSTRAINT patrol_issue_status CHECK(status IN ('open','resolved')), "
+            "CONSTRAINT patrol_issue_resolution_fields CHECK(1=1))")
+    with pytest.raises(SchemaMigrationError, match="resolution columns are missing"):
+        upgrade_schema(engine)
+
+
+def test_existing_v3_rejects_missing_event_action_constraint(engine):
+    upgrade_schema(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE patrol_issue_events")
+        connection.exec_driver_sql(
+            "CREATE TABLE patrol_issue_events (id INTEGER PRIMARY KEY, "
+            "inspection_id INTEGER NOT NULL REFERENCES patrol_inspection_issues(inspection_id), "
+            "actor_id INTEGER NOT NULL REFERENCES patrol_users(id), actor_name VARCHAR(100) NOT NULL, "
+            "action VARCHAR(20) NOT NULL, note TEXT NOT NULL, created_at DATETIME NOT NULL)")
+    with pytest.raises(SchemaMigrationError, match="event action validation is missing"):
+        upgrade_schema(engine)

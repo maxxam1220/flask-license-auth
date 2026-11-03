@@ -105,6 +105,7 @@ class Inspection(db.Model):
     user = db.relationship(User)
     point = db.relationship(Point)
     photos = db.relationship("InspectionPhoto", back_populates="inspection", lazy="select", cascade="all, delete-orphan")
+    issue = db.relationship("InspectionIssue", back_populates="inspection", uselist=False, lazy="select")
     __table_args__ = (db.UniqueConstraint("point_id", "frequency", "period_key", "slot", name="patrol_one_inspection_per_slot"),)
 
 
@@ -119,6 +120,42 @@ class InspectionPhoto(db.Model):
     height = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     inspection = db.relationship(Inspection, back_populates="photos")
+
+
+class InspectionIssue(db.Model):
+    __tablename__ = "patrol_inspection_issues"
+    inspection_id = db.Column(db.Integer, db.ForeignKey("patrol_inspections.id"), primary_key=True, autoincrement=False)
+    status = db.Column(db.String(10), nullable=False, default="open", server_default="open")
+    opened_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    resolved_at = db.Column(db.DateTime)
+    resolved_by_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"))
+    resolved_by_name = db.Column(db.String(100), nullable=False, default="", server_default="")
+    resolution_note = db.Column(db.Text, nullable=False, default="", server_default="")
+    inspection = db.relationship(Inspection, back_populates="issue")
+    events = db.relationship("IssueEvent", back_populates="issue", lazy="select",
+                             order_by="IssueEvent.created_at, IssueEvent.id")
+    __table_args__ = (
+        db.CheckConstraint("status IN ('open', 'resolved')", name="patrol_issue_status"),
+        db.CheckConstraint(
+            "(status = 'open' AND resolved_at IS NULL AND resolved_by_id IS NULL "
+            "AND resolved_by_name = '' AND resolution_note = '') OR "
+            "(status = 'resolved' AND resolved_at IS NOT NULL AND resolved_by_id IS NOT NULL "
+            "AND resolved_by_name <> '')", name="patrol_issue_resolution_fields"),
+        db.Index("patrol_issue_status_opened", "status", "opened_at", "inspection_id"),
+    )
+
+
+class IssueEvent(db.Model):
+    __tablename__ = "patrol_issue_events"
+    id = db.Column(db.Integer, primary_key=True)
+    inspection_id = db.Column(db.Integer, db.ForeignKey("patrol_inspection_issues.inspection_id"), nullable=False, index=True)
+    actor_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"), nullable=False)
+    actor_name = db.Column(db.String(100), nullable=False)
+    action = db.Column(db.String(20), nullable=False)
+    note = db.Column(db.Text, nullable=False, default="", server_default="")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    issue = db.relationship(InspectionIssue, back_populates="events")
+    __table_args__ = (db.CheckConstraint("action IN ('resolved', 'reopened')", name="patrol_issue_event_action"),)
 
 
 class SchemaVersion(db.Model):

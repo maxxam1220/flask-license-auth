@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_ui.html' import icon, csrf, frequency, empty %}
+{% from '_ui.html' import icon, csrf, frequency, empty, open_issue_badge %}
 {% set title='巡檢點管理' %}
 {% block content %}
 <div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢時段與專屬 QR Code。</p></div><a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a></div>
@@ -17,7 +17,7 @@
 </form></details>
 <div class="section-heading outside"><h2>{{ category_label(selected_category) if selected_category else '全部' }}巡檢點</h2><span class="count-label">{{ points|length }} 個點位</span></div>
 <div class="management-list">{% for point in points %}<article class="panel point-management">
-  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta"><span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active else 'badge-revoked' }}">{{ '啟用中' if point.active else '已停用' }}</span>{% if point.active %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
+  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active else 'badge-revoked' }}">{{ '啟用中' if point.active else '已停用' }}</span>{% if point.active %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
   <details class="disclosure compact-disclosure"><summary><span>編輯點位</span>{{ icon('down') }}</summary>
   <form method="post" action="{{ url_for('update_point', point_id=point.id) }}" class="edit-form" data-point-form>{{ csrf() }}
     <div class="form-grid point-fields">

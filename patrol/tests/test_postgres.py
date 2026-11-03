@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 import migrations
 from migrations import LATEST_VERSION, upgrade_schema
 from models import Inspection, InspectionPhoto
-from test_migrations import legacy, snapshot  # Imported isolated v1 fixture.
+from test_migrations import (  # Imported isolated fixtures and cross-dialect cases.
+    legacy, snapshot, version_two,
+    test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once as _v2_backfill_case,
+    test_v2_backfill_never_overwrites_existing_resolved_case_or_events as _v2_existing_case,
+    test_issue_relationships_events_order_and_history_flag_survive_resolution_and_reopen as _issue_history_case,
+    test_issue_status_and_closure_consistency_constraints as _issue_constraint_case,
+)
 
 
 pytestmark = pytest.mark.skipif(not os.environ.get("PATROL_TEST_POSTGRES_URL"),
@@ -233,3 +239,59 @@ def test_postgres_concurrent_catalog_import_is_atomic_and_preserves_later_edits(
         with application.app_context():
             db.session.remove()
             db.engine.dispose()
+
+
+def test_postgres_v2_backfill_is_append_only_and_one_time(engine, version_two):
+    _v2_backfill_case(engine, version_two)
+
+
+def test_postgres_v2_backfill_preserves_resolved_cases_and_event_history(engine, version_two):
+    _v2_existing_case(engine, version_two)
+
+
+def test_postgres_issue_relationships_constraints_and_history(engine, version_two):
+    _issue_history_case(engine, version_two)
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "unexpected"}, {"status": "resolved"},
+    {"resolved_at": datetime(2026, 11, 3, 4), "resolved_by_id": 17, "resolved_by_name": "Manager"},
+    {"resolution_note": "Not a closure while open"},
+])
+def test_postgres_issue_status_and_resolution_fields_consistent(engine, version_two, changes):
+    _issue_constraint_case(engine, version_two, changes)
+
+
+def test_postgres_v2_upgrade_failure_preserves_old_nine_tables_and_versions(engine, version_two, monkeypatch):
+    before_schema = schema_signature(engine)
+    with engine.connect() as connection:
+        before_rows = snapshot(connection, version_two)
+
+    def fail_before_commit(connection):
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspection_issues").scalar_one() == 1
+        raise RuntimeError("Injected PostgreSQL v3 failure")
+
+    monkeypatch.setattr(migrations, "_validate_current", fail_before_commit)
+    with pytest.raises(RuntimeError, match="Injected PostgreSQL v3"):
+        upgrade_schema(engine)
+    assert schema_signature(engine) == before_schema
+    with engine.connect() as connection:
+        assert snapshot(connection, version_two) == before_rows
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+
+
+def test_postgres_concurrent_v2_upgrade_backfills_exactly_one_issue(engine, version_two):
+    ready = Barrier(2)
+
+    def run_upgrade():
+        ready.wait(timeout=10)
+        return upgrade_schema(engine)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        jobs = [workers.submit(run_upgrade) for _ in range(2)]
+        assert [job.result(timeout=45) for job in jobs] == [3, 3]
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT version FROM patrol_schema_versions ORDER BY version").all() == [(2,), (3,)]
+        assert connection.exec_driver_sql("SELECT inspection_id,status FROM patrol_inspection_issues").all() == [(51, "open")]
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_issue_events").scalar_one() == 0
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspections").scalar_one() == 2

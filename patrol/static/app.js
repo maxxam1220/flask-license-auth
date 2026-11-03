@@ -12,7 +12,7 @@
     document.querySelectorAll('form[data-submitting="true"]').forEach(form => {
       delete form.dataset.submitting;
       form.removeAttribute('aria-busy');
-      form.querySelectorAll('button[data-busy-button]').forEach(button => {
+      [...form.elements].filter(element => element instanceof HTMLButtonElement && element.hasAttribute('data-busy-button')).forEach(button => {
         const saved = savedButtons.get(button);
         if (saved) {
           button.replaceChildren(...saved.children);
@@ -79,7 +79,7 @@
         form.dataset.submitting = 'true';
         form.setAttribute('aria-busy', 'true');
         const submitter = event.submitter;
-        form.querySelectorAll('button[type="submit"],button:not([type])').forEach(button => {
+        [...form.elements].filter(element => element instanceof HTMLButtonElement && element.type === 'submit').forEach(button => {
           if (button.disabled) return;
           savedButtons.set(button, { children: [...button.childNodes].map(node => node.cloneNode(true)), disabled: button.disabled });
           button.dataset.busyButton = 'true';
@@ -132,11 +132,18 @@
     document.querySelectorAll('textarea[data-character-count]').forEach(input => {
       const counter = document.getElementById(input.dataset.characterCount);
       const update = () => {
-        if (counter) counter.textContent = `${input.value.length.toLocaleString()} / 2,000`;
+        if (counter) counter.textContent = `${input.value.length.toLocaleString()} / ${input.maxLength.toLocaleString()}`;
       };
       input.addEventListener('input', update);
       update();
     });
+
+    document.querySelectorAll('textarea[data-nonblank]').forEach(input => {
+      const validate = () => input.setCustomValidity(input.value && !input.value.trim() ? '請填寫說明，不能只輸入空白。' : '');
+      input.addEventListener('input', validate);
+      validate();
+    });
+    document.querySelector('[data-error-focus]')?.focus();
 
     document.querySelectorAll('[data-photo-upload]').forEach(container => {
       const input = container.querySelector('[data-photo-input]');

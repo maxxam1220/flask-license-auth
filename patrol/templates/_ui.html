@@ -30,3 +30,11 @@
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ title }}</h3><p>{{ description }}</p></div>{% endmacro %}
 
 {% macro slot_label(value) %}{{ '上午' if value == 'am' else '下午' if value == 'pm' else '全天' if value in ['day','daily'] else '本週' if value == 'week' else '—' }}{% endmacro %}
+
+{% macro issue_status(record) -%}
+{% if record.is_abnormal %}<span class="badge {{ 'badge-issue-resolved' if issue_state(record) == 'resolved' else 'badge-abnormal' }}">{{ '異常已結案' if issue_state(record) == 'resolved' else '異常未結案' }}</span>{% else %}<span class="badge badge-neutral">一般紀錄</span>{% endif %}
+{%- endmacro %}
+
+{% macro open_issue_badge(count, href='') -%}
+{% if count %}{% if href %}<a class="open-issue-badge" href="{{ href }}" aria-label="查看此點位目前 {{ count }} 件未結案異常">{% else %}<span class="open-issue-badge">{% endif %}{{ icon('alert') }}<span>未結案異常 <strong>{{ count }}</strong></span>{% if href %}{{ icon('arrow') }}</a>{% else %}</span>{% endif %}{% endif %}
+{%- endmacro %}

@@ -14,7 +14,7 @@ from werkzeug.datastructures import FileStorage
 
 import app as app_module
 from images import process_uploads
-from models import DeviceBinding, Inspection, InspectionPhoto, Point, PointSchedule, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, User, db
 
 
 @pytest.fixture
@@ -113,3 +113,74 @@ def test_postgres_capacity_lock_prevents_two_points_exceeding_limit(postgres_app
         assert db.session.query(InspectionPhoto).count() == 1
         used = db.session.scalar(db.select(db.func.sum(InspectionPhoto.size_bytes)))
         assert used == postgres_app.config["PHOTO_STORAGE_LIMIT_BYTES"]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_postgres_concurrent_resolve_reopen_is_idempotent_and_rejects_old_form(postgres_app, legacy):
+    clients = seed_clients(postgres_app)
+    author, token = clients[0]
+    assert author.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "is_abnormal": "on", "note": "Original issue"}).status_code == 302
+    with postgres_app.app_context():
+        record = db.session.scalar(db.select(Inspection))
+        record_id = record.id
+        if legacy:
+            db.session.delete(record.issue)
+        db.session.execute(db.update(User).values(role="admin"))
+        db.session.commit()
+    def both(action, version):
+        barrier = threading.Barrier(2)
+        def request_action(pair):
+            client, _ = pair
+            barrier.wait(timeout=10)
+            return client.post(f"/admin/issues/{record_id}/{action}", data={"expected_event_id": str(version), "note": "Concurrent admin action"}).status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [pool.submit(request_action, pair) for pair in clients]
+            return [future.result(timeout=30) for future in results]
+    assert both("resolve", 0) == [302, 302]
+    with postgres_app.app_context():
+        assert db.session.query(InspectionIssue).count() == 1
+        assert db.session.query(IssueEvent).count() == 1
+        issue = db.session.get(InspectionIssue, record_id)
+        assert issue.status == "resolved" and issue.resolved_by_id is not None
+        resolved_event_id = db.session.scalar(db.select(IssueEvent.id))
+    assert both("reopen", resolved_event_id) == [302, 302]
+    assert author.post(f"/admin/issues/{record_id}/resolve", data={"expected_event_id": "0", "note": "Old tab"}).status_code == 409
+    with postgres_app.app_context():
+        issue = db.session.get(InspectionIssue, record_id)
+        assert issue.status == "open" and issue.resolved_at is None and issue.resolved_by_id is None
+        assert issue.resolved_by_name == issue.resolution_note == ""
+        assert db.session.query(IssueEvent).count() == 2
+        assert db.session.query(AuditLog).filter(AuditLog.action.in_(["issue_resolved", "issue_reopened"])).count() == 2
+        assert db.session.get(Inspection, record_id).note == "Original issue"
+
+
+def test_postgres_resolve_and_new_normal_checkin_same_point_do_not_deadlock(postgres_app):
+    from issues import open_issue_counts
+    clients = seed_clients(postgres_app)
+    admin, token = clients[0]
+    worker, _ = clients[1]
+    with postgres_app.app_context():
+        user = db.session.scalar(db.select(User).where(User.username == "concurrent0"))
+        user.role = "admin"
+        point = db.session.scalar(db.select(Point))
+        record = Inspection(user_id=user.id, point_id=point.id, period_key="2026-11-03", frequency="daily2", slot="am",
+                            category="safety", point_code=point.code, point_name=point.name, point_floor=point.floor,
+                            user_name=user.display_name, note="Morning issue", is_abnormal=True)
+        record.issue = InspectionIssue(status="open", opened_at=datetime(2026, 11, 3, 2))
+        db.session.add(record)
+        db.session.commit()
+        record_id = record.id
+    barrier = threading.Barrier(2)
+    def resolve():
+        barrier.wait(timeout=10)
+        return admin.post(f"/admin/issues/{record_id}/resolve", data={"expected_event_id": "0", "note": "Fixed"}).status_code
+    def checkin():
+        barrier.wait(timeout=10)
+        return worker.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "note": "Normal afternoon"}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(resolve), pool.submit(checkin)]
+        assert [future.result(timeout=30) for future in futures] == [302, 302]
+    with postgres_app.app_context():
+        assert db.session.query(Inspection).count() == 2
+        assert db.session.query(InspectionIssue).count() == db.session.query(IssueEvent).count() == 1
+        assert open_issue_counts() == {}

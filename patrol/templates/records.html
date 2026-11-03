@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_ui.html' import icon, frequency, empty, slot_label %}
+{% from '_ui.html' import icon, frequency, empty, slot_label, issue_status %}
 {% set title='巡檢紀錄' %}
 {% block content %}
 <div class="page-heading"><div><div class="eyebrow">歷史查詢</div><h1>巡檢紀錄</h1><p>{{ '依分類、日期、樓層或人員，查詢巡檢與異常回報。' if current_user.role == 'admin' else '查看自己完成的巡檢、備註與現場照片。' }}</p></div><a class="button button-secondary" href="{{ url_for('export_records', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), floor=filters.get('floor',''), user_id=filters.get('user_id',''), category=filters.get('category',''), abnormal=filters.get('abnormal',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
@@ -28,7 +28,7 @@
 <td data-label="分類／樓層"><div>{{ category_label(record.category) }}<small class="cell-hint">{{ floor_label(record.point_floor if record.point_floor is not none else record.point.floor) }}</small></div></td>
 <td data-label="巡檢人員"><strong>{{ record.user_name or record.user.display_name }}</strong></td>
 <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(record.frequency) }}</span>{% if record.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(record.slot) }}</small>{% endif %}</div></td>
-<td data-label="回報內容"><div class="record-report-cell"><span class="badge {{ 'badge-abnormal' if record.is_abnormal else 'badge-neutral' }}">{{ '異常回報' if record.is_abnormal else '一般紀錄' }}</span>{% if record.note %}<span class="note-summary">{{ record.note[:60] }}{{ '…' if record.note|length > 60 else '' }}</span>{% endif %}{% if record.photos %}<small class="photo-count">{{ icon('camera') }}{{ record.photos|length }} 張照片</small>{% endif %}</div></td>
+<td data-label="回報內容"><div class="record-report-cell">{{ issue_status(record) }}{% if record.note %}<span class="note-summary">{{ record.note[:60] }}{{ '…' if record.note|length > 60 else '' }}</span>{% endif %}{% if record.photos %}<small class="photo-count">{{ icon('camera') }}{{ record.photos|length }} 張照片</small>{% endif %}</div></td>
 <td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('record_detail', record_id=record.id) }}">查看詳情 {{ icon('arrow') }}</a></td>
 </tr>{% endfor %}</tbody></table></div>{% else %}{{ empty('這段時間尚無符合紀錄','試著調整分類、日期或回報狀態，完成打卡後會顯示在這裡。') }}{% endif %}
 </section>

@@ -23,9 +23,10 @@ from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from models import AuditLog, DeviceBinding, Inspection, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, category_label, floor_label
 from images import PhotoValidationError, process_uploads
+from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
@@ -145,13 +146,14 @@ def create_app(config=None):
         return session["csrf_token"]
 
     app.jinja_env.globals["csrf_token"] = csrf_token
+    app.jinja_env.globals["issue_state"] = issue_state
 
     @app.context_processor
     def common_context():
         return {"current_user": g.get("user"), "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
                 "floor_label": floor_label, "category_label": category_label,
-                "slot_label": slot_label, "frequency_label": frequency_label}
+                "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
 
     @app.before_request
     def load_user_and_protect():
@@ -380,6 +382,7 @@ def create_app(config=None):
         reference_day = min(monday + timedelta(days=6), today) if view == "weekly" else selected
         points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
         floor_filter, category_filter = scope_filters()
+        issue_counts = open_issue_counts()
         frequencies = ("weekly",) if view == "weekly" else ("daily", "daily2")
         completions = db.session.scalars(select(Inspection).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies))).all()
         found = {}
@@ -435,10 +438,11 @@ def create_app(config=None):
                     status = "done" if group_done == len(slots) else ("pending" if group_total else "not_due")
                     visible_records = [slot["record"] for slot in slots if slot["record"]]
                     latest = max(visible_records, key=lambda item: item.created_at, default=None)
-                    cards.append({"point": displayed_point, "status": status, "latest": latest, "period_label": period_label, "slots": slots})
+                    cards.append({"point": displayed_point, "status": status, "latest": latest, "period_label": period_label, "slots": slots,
+                                  "open_issue_count": issue_counts.get(point.id, 0)})
         total = sum(slot["due"] for card in cards for slot in card["slots"])
         done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
-        recent_query = select(Inspection).order_by(Inspection.created_at.desc()).limit(6)
+        recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc()).limit(6)
         if g.user.role != "admin":
             recent_query = recent_query.where(Inspection.user_id == g.user.id)
         if floor_filter:
@@ -447,7 +451,8 @@ def create_app(config=None):
             recent_query = recent_query.where(Inspection.category == category_filter)
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
-                               device_state=device_status(), recent=db.session.scalars(recent_query).all(), week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
+                               open_issue_counts=issue_counts, device_state=device_status(), recent=db.session.scalars(recent_query).all(),
+                               week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
 
     def get_point(token, lock=False):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", token):
@@ -478,7 +483,7 @@ def create_app(config=None):
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
                                current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
                                note=request.form.get("note", ""), is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"),
-                               form_error=error), status
+                               point_open_issue_count=open_issue_counts([point.id]).get(point.id, 0), form_error=error), status
 
     @app.get("/c/<token>")
     @login_required
@@ -531,6 +536,7 @@ def create_app(config=None):
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
                             note=note, is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"))
         record.photos.extend(InspectionPhoto(**photo) for photo in photos)
+        open_issue_for(record)
         db.session.add(record)
         binding.last_seen_at = naive_utc(final_instant)
         audit("checkin", point.code)
@@ -553,7 +559,7 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         if g.user.role != "admin" and record.user_id != g.user.id:
             abort(403)
-        return render_template("checkin_success.html", record=record)
+        return render_template("checkin_success.html", record=record, point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0))
 
     @app.get("/records/<int:record_id>")
     @login_required
@@ -561,7 +567,74 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         if g.user.role != "admin" and record.user_id != g.user.id:
             abort(403)
-        return render_template("record_detail.html", record=record)
+        return render_record_detail(record)
+
+    def render_record_detail(record, error=None, status=200):
+        return render_template("record_detail.html", record=record, issue_form_error=error,
+                               issue_action_note=request.form.get("note", ""), issue_version=issue_version(record.issue),
+                               point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0)), status
+
+    def apply_issue_action(inspection_id, target_status):
+        actor = lock_current_user()
+        if actor.role != "admin":
+            abort(403, description="只有管理員可以處理異常案件。")
+        try:
+            changed = transition_issue(inspection_id, target_status, actor, request.form.get("expected_event_id"),
+                                       request.form.get("note", ""), naive_utc())
+            if changed:
+                audit("issue_resolved" if target_status == "resolved" else "issue_reopened", inspection_id)
+            db.session.commit()
+        except IssueActionError as error:
+            db.session.rollback()
+            if error.status == 404:
+                abort(404, description=str(error))
+            record = db.get_or_404(Inspection, inspection_id)
+            return render_record_detail(record, str(error), error.status)
+        flash(("案件已結案。" if target_status == "resolved" else "案件已重新開啟。") if changed else "案件已是指定狀態，沒有新增重複處理紀錄。", "success" if changed else "info")
+        return redirect(url_for("record_detail", record_id=inspection_id))
+
+    @app.post("/admin/issues/<int:inspection_id>/resolve")
+    @admin_required
+    def resolve_issue(inspection_id):
+        return apply_issue_action(inspection_id, "resolved")
+
+    @app.post("/admin/issues/<int:inspection_id>/reopen")
+    @admin_required
+    def reopen_issue(inspection_id):
+        return apply_issue_action(inspection_id, "open")
+
+    @app.get("/issues")
+    @admin_required
+    def issues():
+        floor, category = scope_filters()
+        state = request.args.get("status", "open")
+        if state not in ("open", "resolved", "all"):
+            abort(400, description="案件狀態選項不正確。")
+        page = parse_id(request.args.get("page", "1"))
+        point_id = request.args.get("point_id", "")
+        selected_point = db.get_or_404(Point, parse_id(point_id)) if point_id else None
+        query = (select(Inspection).outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
+                 .where(db.or_(InspectionIssue.inspection_id.is_not(None), Inspection.is_abnormal.is_(True))))
+        if state == "open":
+            query = query.where(open_issue_condition())
+        elif state == "resolved":
+            query = query.where(InspectionIssue.status == state)
+        if floor:
+            query = query.where(Inspection.point_floor == int(floor))
+        if category:
+            query = query.where(Inspection.category == category)
+        if selected_point:
+            query = query.where(Inspection.point_id == selected_point.id)
+        total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
+        per_page = 50
+        pages = max(1, (total + per_page - 1) // per_page)
+        if page > pages:
+            abort(404, description="這個案件頁碼不存在。")
+        rows = db.session.scalars(query.options(selectinload(Inspection.issue), selectinload(Inspection.photos), selectinload(Inspection.point))
+                                  .order_by(db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at).desc(), Inspection.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
+        open_total = sum(open_issue_counts().values())
+        return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
+                               selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
 
     @app.get("/photos/<int:photo_id>")
     @login_required
@@ -707,7 +780,7 @@ def create_app(config=None):
     @login_required
     def records():
         query, filters = record_query()
-        rows = db.session.scalars(query.options(selectinload(Inspection.photos)).limit(1001)).all()
+        rows = db.session.scalars(query.options(selectinload(Inspection.photos), selectinload(Inspection.issue)).limit(1001)).all()
         if len(rows) > 1000:
             flash("畫面顯示最近 1,000 筆，完整資料請匯出 CSV 或縮小日期範圍。", "info")
         users = db.session.scalars(select(User).order_by(User.display_name)).all() if g.user.role == "admin" else []
@@ -723,14 +796,17 @@ def create_app(config=None):
         query, filters = record_query()
         output = io.StringIO(newline="")
         writer = csv.writer(output)
-        writer.writerow(["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "異常", "備註", "照片數"])
+        writer.writerow(["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"])
         def cell(value):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
-        for row in db.session.scalars(query.options(selectinload(Inspection.photos))).yield_per(500):
+        for row in db.session.scalars(query.options(selectinload(Inspection.photos), selectinload(Inspection.issue))).yield_per(500):
             writer.writerow([cell(row.user_name or row.user.display_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
                              format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                             category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos)])
+                             category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos),
+                             {"open": "未結案", "resolved": "已結案", "": ""}[issue_state(row)],
+                             cell(row.issue.resolved_by_name) if row.issue else "", format_localtime(row.issue.resolved_at) if row.issue and row.issue.resolved_at else "",
+                             cell(row.issue.resolution_note) if row.issue else ""])
         response = make_response("\ufeff" + output.getvalue())
         response.headers["Content-Type"] = "text/csv; charset=utf-8"
         response.headers["Content-Disposition"] = f'attachment; filename="patrol-{filters["date_from"]}-{filters["date_to"]}.csv"'
@@ -745,7 +821,8 @@ def create_app(config=None):
             query = query.where(Point.floor == int(floor))
         if category:
             query = query.where(Point.category == category)
-        return render_template("points.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category)
+        return render_template("points.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category,
+                               open_issue_counts=open_issue_counts())
 
     def point_values(point=None):
         code = request.form.get("code", "").strip().upper()
