@@ -421,6 +421,49 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .pagination .button .icon { width: 14px; height: 14px; }
 }
 
+/* Expired patrol periods and personal issue follow-up. */
+.stat-detail-link { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; color: var(--teal); font-size: 13px; font-weight: 650; }
+.stat-detail-link .icon { width: 14px; height: 14px; }
+.stat-detail-link:hover, .point-own-issues-link:hover { text-decoration: underline; }
+.dashboard-missed-help { margin: -8px 0 20px; color: var(--muted); font-size: 13px; }
+.point-own-issues-link { display: flex; align-items: center; gap: 6px; min-height: 44px; margin-top: 4px; color: var(--teal); font-size: 13px; font-weight: 600; line-height: 1.6; }
+.point-own-issues-link .icon { width: 14px; height: 14px; }
+.missed-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; }
+.missed-scope-note { font-size: 13px; color: var(--muted); margin: 13px 0 20px; }
+.missed-rules { margin-top: 15px; color: var(--muted); font-size: 13px; }
+.missed-rules > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; list-style: none; color: var(--teal); font-weight: 600; }
+.missed-rules > summary::-webkit-details-marker { display: none; }
+.missed-rules > summary .icon { width: 17px; height: 17px; }
+.missed-rules > summary .icon:last-child { width: 14px; height: 14px; margin-left: auto; }
+.missed-rules[open] > summary .icon:last-child { transform: rotate(180deg); }
+.missed-rules ul { margin: 8px 0 8px 23px; padding: 0; line-height: 1.9; }
+.missed-rules li + li { margin-top: 5px; }
+.missed-rules > p { margin-left: 23px; }
+.missed-point-summary > summary { min-height: 48px; gap: 15px; }
+.missed-point-summary > summary > span { display: grid; gap: 5px; }
+.missed-point-summary > summary strong { font-size: 16px; }
+.missed-point-summary > summary small { color: var(--muted); font-size: 13px; font-weight: 400; }
+.missed-summary-table { margin-top: 22px; }
+.missed-summary-table .record-point-cell, .missed-table .record-point-cell { display: grid; gap: 6px; }
+.missed-count { color: #963c34; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.missed-deadline { color: #805647; font-variant-numeric: tabular-nums; font-size: 13px; }
+.missed-summary-footnote { color: var(--muted); font-size: 13px; margin-top: 18px; }
+.empty-actions { display: flex; justify-content: center; margin-top: -15px; }
+#missed-results { scroll-margin-top: 18px; }
+#missed-results:focus-visible { outline: 3px solid #7fbdb0; outline-offset: 4px; }
+@media (max-width: 720px) {
+  .missed-stats { gap: 12px; }
+  .missed-stats .stat-card { padding: 18px; }
+  .missed-stats .stat-label { min-height: 1.5em; }
+  .missed-stats .stat-value small { font-size: 13px; margin-top: 3px; }
+  .missed-summary-table td > .record-point-cell, .missed-table td > .record-point-cell { min-width: 0; }
+  .missed-point-summary > summary strong { font-size: 15px; }
+  .empty-actions .button { min-height: 44px; font-size: 13px; }
+}
+@media (max-width: 390px) {
+  .stat-detail-link .icon { display: none; }
+}
+
 .storage-usage { padding: 16px 20px; margin: 0 0 20px; border: 1px solid #dce5d5; border-radius: 9px; background: #f1f6ec; }
 .storage-usage-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; font-size: 13px; color: #47613c; }
 .storage-usage-heading > span { display: flex; align-items: center; gap: 8px; }

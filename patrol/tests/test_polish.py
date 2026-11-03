@@ -60,13 +60,13 @@ def test_invalid_return_target_falls_back_to_record_list(application, seeded, so
     assert contexts[-1][1]["back_url"] == "/records?category=uncategorized"
 
 
-def test_staff_return_to_cannot_target_admin_issues_or_other_user_filter(application, seeded):
+def test_staff_return_to_allows_own_issues_and_removes_other_user_filter(application, seeded):
     row = record(seeded["inspector"], seeded["daily"])
     client = application.test_client()
     login(client)
     with rendered_contexts(application) as contexts:
         client.get(f"/records/{row.id}", query_string={"return_to": "/issues?status=open"})
-    assert contexts[-1][1]["back_url"] == "/records?category=uncategorized"
+    assert contexts[-1][1]["back_url"] == "/issues?status=open"
     with rendered_contexts(application) as contexts:
         client.get(f"/records/{row.id}", query_string={"return_to": "/records?user_id=2&floor=1"})
     assert contexts[-1][1]["back_url"] == "/records?floor=1"

@@ -22,7 +22,7 @@ def issue_state(record):
     return record.issue.status if record.issue else ("open" if record.is_abnormal else "")
 
 
-def open_issue_counts(point_ids=None):
+def open_issue_counts(point_ids=None, user_id=None):
     """Return counts only; never expose another inspector's record or note."""
     query = (select(Inspection.point_id, db.func.count(Inspection.id))
              .outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
@@ -31,6 +31,8 @@ def open_issue_counts(point_ids=None):
         if not point_ids:
             return {}
         query = query.where(Inspection.point_id.in_(point_ids))
+    if user_id is not None:
+        query = query.where(Inspection.user_id == user_id)
     return dict(db.session.execute(query).all())
 
 
@@ -52,18 +54,31 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
     """
     if target_status not in ("open", "resolved"):
         raise ValueError("Unsupported issue state")
+    if (not actor.active or actor.must_change_password or actor.role not in ("admin", "inspector")
+            or (actor.role == "inspector" and target_status != "resolved")):
+        raise IssueActionError("你沒有處理此異常案件的權限。", 403)
+    owner = db.session.execute(select(Inspection.point_id, Inspection.user_id).where(Inspection.id == inspection_id)).one_or_none()
+    if owner is None:
+        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
+    point_id, owner_id = owner
+    if actor.role != "admin" and owner_id != actor.id:
+        raise IssueActionError("只能結案自己回報的異常案件。", 403)
+    # Do not use the QR lookup: a disabled point still needs issue resolution.
+    db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
+    record = db.session.scalar(select(Inspection).where(Inspection.id == inspection_id).with_for_update()
+                               .execution_options(populate_existing=True))
+    if record is None:
+        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
+    if actor.role != "admin" and record.user_id != actor.id:
+        raise IssueActionError("只能結案自己回報的異常案件。", 403)
+    # Authorize using the locked inspection before parsing form details or
+    # materializing a legacy issue. An unauthorized POST must never reveal the
+    # private record through an input-error form or leave a newly created case.
     note = note.strip()
     if not note or len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
         raise IssueActionError("請填寫 1 至 2,000 字的處理說明，且不可包含無效控制字元。")
     if not re.fullmatch(r"[0-9]{1,10}", expected_event_id or "") or int(expected_event_id) > 2147483647:
         raise IssueActionError("案件表單已過期，請重新載入後再試。")
-    point_id = db.session.scalar(select(Inspection.point_id).where(Inspection.id == inspection_id))
-    if point_id is None:
-        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    # Do not use the QR lookup: a disabled point still needs issue resolution.
-    db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
-    record = db.session.scalar(select(Inspection).where(Inspection.id == inspection_id).with_for_update()
-                               .execution_options(populate_existing=True))
     issue = db.session.scalar(select(InspectionIssue).where(InspectionIssue.inspection_id == inspection_id)
                               .with_for_update().execution_options(populate_existing=True))
     if issue is None:

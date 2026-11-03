@@ -74,6 +74,7 @@ def seeded(application):
         active=True,
         qr_token="daily-test-token-0123456789abcdef",
         schedule_start=date(2026, 1, 1),
+        created_at=datetime(2026, 1, 1),
     )
     weekly = Point(
         code="5F-A01",
@@ -83,6 +84,7 @@ def seeded(application):
         active=True,
         qr_token="weekly-test-token-0123456789abcdef",
         schedule_start=date(2026, 1, 1),
+        created_at=datetime(2026, 1, 1),
     )
     for point in (daily, weekly):
         point.schedules.append(PointSchedule(

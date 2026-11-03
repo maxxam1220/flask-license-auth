@@ -24,7 +24,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
-from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, category_label, floor_label
+from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from images import PhotoValidationError, process_uploads
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
@@ -82,7 +82,7 @@ def normalise_return_to(value, user):
         parsed = urlsplit(value)
         if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in ("/records", "/issues"):
             return None
-        if parsed.path == "/issues" and (not user or user.role != "admin"):
+        if parsed.path == "/issues" and not user:
             return None
         pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=8)
         if len({key for key, _ in pairs}) != len(pairs):
@@ -497,6 +497,13 @@ def create_app(config=None):
                 slots = []
                 for slot in slot_keys:
                     record = records_by_slot.get(slot)
+                    # Do not create an obligation for a slot that had already
+                    # ended when the point was introduced. Existing inspection
+                    # snapshots still count, even for inconsistent legacy dates.
+                    slot_deadline = (datetime.combine(period_day, time(12), TAIPEI) if slot == "am" else
+                                     datetime.combine(period_day + timedelta(days=7 if group_frequency == "weekly" else 1), time.min, TAIPEI))
+                    if not record and point.created_at and slot_deadline <= local_dt(point.created_at):
+                        continue
                     # A classification/floor edit cannot create another obligation
                     # for a slot already completed under its historical snapshot.
                     if scheduled_group and not record and any(item.frequency == group_frequency and item.slot == slot for item in point_records):
@@ -540,6 +547,9 @@ def create_app(config=None):
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                open_issue_counts=issue_counts, device_state=device_status(), recent=db.session.scalars(recent_query).all(),
+                               missed_query_url=url_for("missed", date_from=period_day.isoformat(),
+                                   date_to=(monday + timedelta(days=6) if view == "weekly" else selected).isoformat(),
+                                   category=category_filter, floor=floor_filter, frequency="weekly" if view == "weekly" else ""),
                                week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
 
     def get_point(token, lock=False):
@@ -664,11 +674,13 @@ def create_app(config=None):
         back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
                                issue_action_note=request.form.get("note", ""), issue_version=issue_version(record.issue),
+                               can_manage_issue=g.user.role == "admin" or (g.user.role == "inspector" and record.user_id == g.user.id),
+                               can_reopen_issue=g.user.role == "admin",
                                back_url=back_url, back_label="返回異常追蹤" if urlsplit(back_url).path == "/issues" else "返回巡檢紀錄",
                                point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0)), status
 
     def apply_issue_action(inspection_id, target_status):
-        actor = lock_current_admin()
+        actor = lock_current_user()
         source = normalise_return_to(request.form.get("return_to"), actor)
         try:
             changed = transition_issue(inspection_id, target_status, actor, request.form.get("expected_event_id"),
@@ -678,15 +690,16 @@ def create_app(config=None):
             db.session.commit()
         except IssueActionError as error:
             db.session.rollback()
-            if error.status == 404:
-                abort(404, description=str(error))
+            if error.status in (403, 404):
+                abort(error.status, description=str(error))
             record = db.get_or_404(Inspection, inspection_id)
             return render_record_detail(record, str(error), error.status)
         flash(("案件已結案。" if target_status == "resolved" else "案件已重新開啟。") if changed else "案件已是指定狀態，沒有新增重複處理紀錄。", "success" if changed else "info")
         return redirect(url_for("record_detail", record_id=inspection_id, **({"return_to": source} if source else {})))
 
     @app.post("/admin/issues/<int:inspection_id>/resolve")
-    @admin_required
+    @app.post("/issues/<int:inspection_id>/resolve")
+    @login_required
     def resolve_issue(inspection_id):
         return apply_issue_action(inspection_id, "resolved")
 
@@ -696,7 +709,7 @@ def create_app(config=None):
         return apply_issue_action(inspection_id, "open")
 
     @app.get("/issues")
-    @admin_required
+    @login_required
     def issues():
         floor, category = scope_filters()
         state = request.args.get("status", "open")
@@ -707,6 +720,8 @@ def create_app(config=None):
         selected_point = db.get_or_404(Point, parse_id(point_id)) if point_id else None
         query = (select(Inspection).outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
                  .where(db.or_(InspectionIssue.inspection_id.is_not(None), Inspection.is_abnormal.is_(True))))
+        if g.user.role != "admin":
+            query = query.where(Inspection.user_id == g.user.id)
         if state == "open":
             query = query.where(open_issue_condition())
         elif state == "resolved":
@@ -731,7 +746,7 @@ def create_app(config=None):
             pages = max(1, (total + per_page - 1) // per_page)
             if page > pages:
                 return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
-        open_total = sum(open_issue_counts().values())
+        open_total = sum(open_issue_counts(user_id=g.user.id if g.user.role != "admin" else None).values())
         return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
                                selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
 
@@ -909,6 +924,71 @@ def create_app(config=None):
         response = make_response("\ufeff" + output.getvalue())
         response.headers["Content-Type"] = "text/csv; charset=utf-8"
         response.headers["Content-Disposition"] = f'attachment; filename="patrol-{filters["date_from"]}-{filters["date_to"]}.csv"'
+        return response
+
+    def missed_report():
+        from missed import calculate_missed
+
+        instant = now_utc()
+        today = local_dt(instant).date()
+        begin = parse_date(request.args.get("date_from"), today - timedelta(days=6))
+        end = parse_date(request.args.get("date_to"), today)
+        if begin > end or (end - begin).days > 366:
+            abort(400, description="請選擇正確的應完成日期範圍，最多可查詢 367 天。")
+        floor, category = scope_filters()
+        frequency = request.args.get("frequency", "")
+        if frequency not in ("", "daily", "daily2", "weekly"):
+            abort(400, description="巡檢頻率選項不正確。")
+        # Read historical schedules, not the point's current classification.
+        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        first_period = begin - timedelta(days=begin.weekday())
+        completions = db.session.execute(select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot)
+            .where(Inspection.period_key >= first_period.isoformat(), Inspection.period_key <= end.isoformat())).all()
+        rows = calculate_missed(points, completions, begin, end, instant,
+                                category=category, floor=int(floor) if floor else None, frequency=frequency)
+        filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
+                   "floor": floor, "frequency": frequency}
+        return rows, filters
+
+    @app.get("/missed")
+    @login_required
+    def missed():
+        page = parse_id(request.args.get("page", "1"))
+        rows, filters = missed_report()
+        summaries = {}
+        for row in rows:
+            group = tuple(row[key] for key in ("point_id", "code", "name", "floor", "category", "frequency"))
+            if group not in summaries:
+                summaries[group] = {key: row[key] for key in ("point_id", "code", "name", "floor", "category", "frequency")}
+                summaries[group]["missed_count"] = 0
+            summaries[group]["missed_count"] += 1
+        point_summaries = sorted(summaries.values(), key=lambda row: (-row["missed_count"], FLOOR_ORDER.get(row["floor"], 99), row["code"]))
+        per_page = 50
+        pages = max(1, (len(rows) + per_page - 1) // per_page)
+        if page > pages:
+            return redirect(url_for("missed", **filters, page=pages))
+        return render_template("missed.html", filters=filters,
+            totals={"missed": len(rows), "points": len({row["point_id"] for row in rows})},
+            point_summaries=point_summaries, occurrences=rows[(page - 1) * per_page:page * per_page],
+            pagination={"page": page, "pages": pages, "total": len(rows), "per_page": per_page})
+
+    @app.get("/missed/export")
+    @login_required
+    def missed_export():
+        rows, filters = missed_report()
+        output = io.StringIO(newline="")
+        writer = csv.writer(output)
+        writer.writerow(["應完成日期", "巡檢期間", "分類", "樓層", "點位編號", "點位名稱", "巡檢頻率", "時段", "到期時間（台北）", "漏打次數"])
+        def cell(value):
+            value = str(value)
+            return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
+        for row in rows:
+            writer.writerow([row["due_date"].isoformat(), row["period_label"], category_label(row["category"]),
+                floor_label(row["floor"]), cell(row["code"]), cell(row["name"]), frequency_label(row["frequency"]),
+                slot_label(row["slot"]), format_localtime(row["deadline"]), 1])
+        response = make_response("\ufeff" + output.getvalue())
+        response.headers["Content-Type"] = "text/csv; charset=utf-8"
+        response.headers["Content-Disposition"] = f'attachment; filename="patrol-missed-{filters["date_from"]}-{filters["date_to"]}.csv"'
         return response
 
     @app.get("/admin/points")

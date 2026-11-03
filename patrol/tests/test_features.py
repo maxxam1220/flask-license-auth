@@ -16,7 +16,7 @@ from models import Inspection, InspectionPhoto, Point, PointSchedule
 
 def feature_point(frequency="daily2", category="safety", floor=11, code="1M-NEW01"):
     point = Point(code=code, name="新巡檢點", floor=floor, category=category,
-                  frequency=frequency, active=True, schedule_start=date(2026, 1, 1))
+                  frequency=frequency, active=True, schedule_start=date(2026, 1, 1), created_at=datetime(2026, 1, 1))
     point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=frequency,
                                          category=category, active=True))
     db.session.add(point)

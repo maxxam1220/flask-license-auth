@@ -104,19 +104,25 @@ def test_duplicate_action_is_idempotent_and_stale_version_cannot_close_reopened_
     assert db.session.query(AuditLog).filter(AuditLog.action.in_(["issue_resolved", "issue_reopened"])).count() == 2
 
 
-def test_staff_only_reads_own_issue_history_and_only_admin_changes_it(application, seeded):
+def test_staff_only_reads_own_issue_history_and_keeps_other_reporters_private(application, seeded):
     point = feature_point()
     owner = logged_browser(application, seeded)
     row = abnormal(owner, point, note="OWNER-PRIVATE-NOTE")
     admin = admin_client(application)
-    assert action(owner, row).status_code == 403
-    assert owner.get("/issues").status_code == 403
+    with rendered_contexts(application) as contexts:
+        assert owner.get("/issues").status_code == 200
+    assert [item.id for item in contexts[-1][1]["records"]] == [row.id]
     assert action(admin, row, note="ADMIN-HISTORY-DETAIL").status_code == 302
     response = owner.get(f"/records/{row.id}")
     assert response.status_code == 200 and b"ADMIN-HISTORY-DETAIL" in response.data
     other = application.test_client()
     login(other, "colleague")
     assert other.get(f"/records/{row.id}").status_code == 403
+    with rendered_contexts(application) as contexts:
+        response = other.get("/issues?status=all")
+    assert response.status_code == 200 and contexts[-1][1]["records"] == []
+    assert "OWNER-PRIVATE-NOTE" not in response.get_data(as_text=True)
+    assert "ADMIN-HISTORY-DETAIL" not in response.get_data(as_text=True)
     with rendered_contexts(application) as contexts:
         response = other.get("/dashboard?category=safety")
     assert "OWNER-PRIVATE-NOTE" not in response.get_data(as_text=True)

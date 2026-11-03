@@ -17,7 +17,7 @@
       <small>需要回報異常、備註或照片時，請先填寫下方內容。</small>
     </div>
     {% endif %}
-    {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id) if current_user.role == 'admin' else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p></div>{% endif %}
+    {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id) if current_user.role == 'admin' else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p>{% if current_user.role != 'admin' %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point.id) }}">查看我在此點的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
     <div class="checkin-details">
       <div><span>巡檢週期</span><strong>{{ frequency(point.frequency) }}</strong></div>
       {% if point.frequency == 'daily2' %}<div><span>本次時段</span><strong class="slot-emphasis">{{ current_slot_label }} <small>{{ '00:00–11:59' if current_slot == 'am' else '12:00–23:59' }}</small></strong></div>{% endif %}
@@ -39,7 +39,7 @@
         <input type="hidden" name="period_key" value="{{ current_period_key }}">
         <input type="hidden" name="frequency" value="{{ point.frequency }}">
         <div class="inspection-fields">
-          <label class="abnormal-toggle"><input type="checkbox" name="is_abnormal" value="on" {% if is_abnormal %}checked{% endif %}><span>{{ icon('alert') }}發現異常<small>勾選後會建立一筆未結案異常，由管理員追蹤處理。</small></span></label>
+          <label class="abnormal-toggle"><input type="checkbox" name="is_abnormal" value="on" {% if is_abnormal %}checked{% endif %}><span>{{ icon('alert') }}發現異常<small>勾選後可在「異常追蹤」查看，處理完成後由你或管理員結案。</small></span></label>
           <label for="inspection-note">巡檢備註 <span class="optional-label">選填</span></label>
           <textarea id="inspection-note" name="note" rows="4" maxlength="2000" placeholder="記錄現場狀況、發現的問題或處理方式…" data-character-count="note-count">{{ note|default('') }}</textarea>
           <div class="field-meta"><span>正常巡檢可留空。</span><span id="note-count" aria-live="off">{{ (note|default(''))|length }} / 2,000</span></div>

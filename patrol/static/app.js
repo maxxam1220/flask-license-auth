@@ -120,6 +120,18 @@
       render();
     });
 
+    // Keep long point summaries available while prioritising detail rows on phones.
+    document.querySelectorAll('details[data-responsive-summary]').forEach(details => {
+      const mobile = window.matchMedia('(max-width: 720px)');
+      const render = () => {
+        if (mobile.matches && details.contains(document.activeElement)) details.querySelector('summary')?.focus();
+        details.open = !mobile.matches;
+      };
+      if (mobile.addEventListener) mobile.addEventListener('change', render);
+      else mobile.addListener(render);
+      render();
+    });
+
     // Validate related fields without discarding input on a separate error page.
     document.querySelectorAll('form[data-date-range]').forEach(form => {
       const begin = form.elements.namedItem('date_from');
