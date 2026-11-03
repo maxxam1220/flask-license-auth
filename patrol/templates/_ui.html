@@ -14,7 +14,7 @@
 {% elif name == 'down' %}<path d="m6 9 6 6 6-6"/>
 {% elif name == 'plus' %}<path d="M12 5v14M5 12h14"/>
 {% elif name == 'print' %}<path d="M6 8V3h12v5M6 17H3V9h18v8h-3"/><path d="M6 14h12v7H6zM17 11h.01"/>
-{% elif name == 'download' %}<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>
+{% elif name == 'camera' %}<path d="M3 7h4l2-3h6l2 3h4v14H3Z"/><circle cx="12" cy="13" r="4"/>{% elif name == 'close' %}<path d="m6 6 12 12M18 6 6 18"/>{% elif name == 'download' %}<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>
 {% elif name == 'qr' %}<path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM21 15v6h-4M13 21v-2M21 11h-4M11 3v2M11 11H3M11 15v2"/>
 {% elif name == 'logout' %}<path d="M9 4H4v16h5M9 12h12m-4-4 4 4-4 4"/>
 {% elif name == 'key' %}<circle cx="8" cy="9" r="5"/><path d="m12 13 8 8M16 17l3-3M18 19l3-3"/>
@@ -25,6 +25,8 @@
 </svg>
 {%- endmacro %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
-{% macro frequency(value) %}{{ '每日一次' if value == 'daily' else '每週一次' }}{% endmacro %}
+{% macro frequency(value) %}{{ '每日兩次' if value == 'daily2' else '每日一次' if value == 'daily' else '每週一次' }}{% endmacro %}
 {% macro status(value) %}<span class="badge badge-{{ value }}">{% if value == 'approved' %}已核准{% elif value == 'pending' %}待審核{% elif value == 'revoked' %}已解除{% elif value == 'rejected' %}未核准{% elif value == 'done' %}已完成{% elif value == 'not_due' %}不需巡檢{% else %}尚未綁定{% endif %}</span>{% endmacro %}
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ title }}</h3><p>{{ description }}</p></div>{% endmacro %}
+
+{% macro slot_label(value) %}{{ '上午' if value == 'am' else '下午' if value == 'pm' else '全天' if value in ['day','daily'] else '本週' if value == 'week' else '—' }}{% endmacro %}

@@ -118,14 +118,112 @@
       const validatePoint = () => {
         code.setCustomValidity('');
         const value = code.value.trim().toUpperCase();
-        if (value && /^[1-5]F-[A-Z0-9]{2,20}$/.test(value) && !value.startsWith(`${floor.value}F-`)) {
-          code.setCustomValidity(`點位編號需與樓層一致，請使用 ${floor.value}F- 開頭。`);
+        const prefix = floor.selectedOptions[0]?.textContent.trim().toUpperCase();
+        if (value && /^[A-Z0-9]+-[A-Z0-9]{2,20}$/.test(value) && prefix && !value.startsWith(`${prefix}-`)) {
+          code.setCustomValidity(`點位編號需與樓層一致，請使用 ${prefix}- 開頭。`);
         }
       };
       code.addEventListener('input', validatePoint);
       floor.addEventListener('change', validatePoint);
       code.addEventListener('blur', () => { code.value = code.value.trim().toUpperCase(); validatePoint(); });
       validatePoint();
+    });
+
+    document.querySelectorAll('textarea[data-character-count]').forEach(input => {
+      const counter = document.getElementById(input.dataset.characterCount);
+      const update = () => {
+        if (counter) counter.textContent = `${input.value.length.toLocaleString()} / 2,000`;
+      };
+      input.addEventListener('input', update);
+      update();
+    });
+
+    document.querySelectorAll('[data-photo-upload]').forEach(container => {
+      const input = container.querySelector('[data-photo-input]');
+      const feedback = container.querySelector('[data-photo-feedback]');
+      const previewList = container.querySelector('[data-photo-previews]');
+      if (!input || !feedback || !previewList) return;
+      const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+      const maxSize = 8 * 1024 * 1024;
+      let previewUrls = [];
+      let canRemove = typeof DataTransfer === 'function';
+
+      function validatePhotos(files) {
+        let message = '';
+        if (files.length > 3) message = `目前選了 ${files.length} 張照片，最多只能附 3 張，請移除多餘照片或重新選擇。`;
+        else if (files.some(file => file.size === 0)) message = '有照片是空白檔案，請移除並重新選擇。';
+        else if (files.some(file => file.size > maxSize)) message = '有照片超過 8 MB，請移除或更換較小的照片。';
+        else if (files.some(file => !supportedTypes.has(file.type.toLowerCase()) && !((!file.type || file.type === 'application/octet-stream') && /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)))) message = '請選擇 JPG、PNG、WebP 或 HEIC 照片。';
+        input.setCustomValidity(message);
+        input.setAttribute('aria-invalid', message ? 'true' : 'false');
+        feedback.textContent = message || (files.length ? `已選 ${files.length} 張，確認打卡時才會上傳。` : '');
+        feedback.classList.toggle('is-error', !!message);
+      }
+
+      function renderPhotos() {
+        previewUrls.forEach(url => URL.revokeObjectURL(url));
+        previewUrls = [];
+        previewList.replaceChildren();
+        const files = Array.from(input.files || []);
+        validatePhotos(files);
+        files.slice(0, 6).forEach((file, index) => {
+          const figure = document.createElement('figure');
+          figure.className = 'photo-preview';
+          const imageContainer = document.createElement('div');
+          imageContainer.className = 'photo-preview-image';
+          const placeholder = document.createElement('span');
+          placeholder.className = 'photo-preview-placeholder';
+          placeholder.textContent = '照片預覽';
+          imageContainer.append(placeholder);
+          // Preview only recognised image formats; the server validates actual file contents.
+          if (file.size > maxSize) placeholder.textContent = '超過 8 MB，請更換照片';
+          else if (file.size === 0) placeholder.textContent = '空白檔案，請重新選擇';
+          else if (supportedTypes.has(file.type.toLowerCase()) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) {
+            const image = document.createElement('img');
+            const url = URL.createObjectURL(file);
+            previewUrls.push(url);
+            image.alt = `已選照片 ${index + 1}`;
+            image.onload = () => { placeholder.hidden = true; };
+            image.onerror = () => { image.remove(); placeholder.hidden = false; placeholder.textContent = '此格式無法預覽，仍可上傳'; };
+            image.src = url;
+            imageContainer.append(image);
+          } else placeholder.textContent = '不支援的檔案格式';
+          figure.append(imageContainer);
+          const caption = document.createElement('figcaption');
+          const name = document.createElement('span');
+          name.textContent = file.name;
+          const size = document.createElement('small');
+          size.textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB`;
+          caption.append(name, size);
+          figure.append(caption);
+          if (canRemove) {
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'button button-secondary button-small photo-remove';
+            remove.textContent = '移除';
+            remove.setAttribute('aria-label', `移除照片 ${index + 1}：${file.name}`);
+            remove.addEventListener('click', () => {
+              try {
+                const transfer = new DataTransfer();
+                files.forEach((item, itemIndex) => { if (itemIndex !== index) transfer.items.add(item); });
+                input.files = transfer.files;
+                if (input.files.length !== files.length - 1) throw new Error('File selection was not updated');
+                renderPhotos();
+                input.focus();
+              } catch (_) {
+                canRemove = false;
+                renderPhotos();
+                feedback.textContent = '此瀏覽器不支援逐張移除，請使用檔案選擇按鈕重新選擇照片。';
+              }
+            });
+            figure.append(remove);
+          }
+          previewList.append(figure);
+        });
+      }
+
+      input.addEventListener('change', renderPhotos);
+      renderPhotos();
     });
 
     const mobileMenu = document.querySelector('.mobile-menu');

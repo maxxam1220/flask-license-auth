@@ -50,12 +50,13 @@ class Point(db.Model):
     name = db.Column(db.String(100), nullable=False)
     floor = db.Column(db.Integer, nullable=False)
     frequency = db.Column(db.String(10), nullable=False, default="daily")
+    category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
     active = db.Column(db.Boolean, nullable=False, default=True)
     qr_token = db.Column(db.String(100), nullable=False, unique=True, default=lambda: secrets.token_urlsafe(24))
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     schedule_start = db.Column(db.Date, nullable=False, default=lambda: datetime.now(timezone.utc).date())
     schedules = db.relationship("PointSchedule", backref="point", lazy="select", order_by="PointSchedule.effective_date, PointSchedule.id")
-    __table_args__ = (db.CheckConstraint("floor >= 1 AND floor <= 5", name="patrol_point_floor"),)
+    __table_args__ = (db.CheckConstraint("floor IN (-2, -1, 1, 11, 2, 3, 4, 14, 5, 15)", name="patrol_point_floor"),)
 
 
 class PointSchedule(db.Model):
@@ -64,6 +65,7 @@ class PointSchedule(db.Model):
     point_id = db.Column(db.Integer, db.ForeignKey("patrol_points.id"), nullable=False, index=True)
     effective_date = db.Column(db.Date, nullable=False)
     frequency = db.Column(db.String(10), nullable=False)
+    category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
     active = db.Column(db.Boolean, nullable=False)
 
 
@@ -92,13 +94,37 @@ class Inspection(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
     period_key = db.Column(db.String(10), nullable=False)
     frequency = db.Column(db.String(10), nullable=False)
+    category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
+    slot = db.Column(db.String(8), nullable=False, default="any", server_default="any")
+    note = db.Column(db.Text, nullable=False, default="", server_default="")
+    is_abnormal = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     point_code = db.Column(db.String(30), nullable=False)
     point_name = db.Column(db.String(100), nullable=False)
     point_floor = db.Column(db.Integer, nullable=False)
     user_name = db.Column(db.String(100), nullable=False, default="")
     user = db.relationship(User)
     point = db.relationship(Point)
-    __table_args__ = (db.UniqueConstraint("point_id", "frequency", "period_key", name="patrol_one_inspection_per_period"),)
+    photos = db.relationship("InspectionPhoto", back_populates="inspection", lazy="select", cascade="all, delete-orphan")
+    __table_args__ = (db.UniqueConstraint("point_id", "frequency", "period_key", "slot", name="patrol_one_inspection_per_slot"),)
+
+
+class InspectionPhoto(db.Model):
+    __tablename__ = "patrol_inspection_photos"
+    id = db.Column(db.Integer, primary_key=True)
+    inspection_id = db.Column(db.Integer, db.ForeignKey("patrol_inspections.id"), nullable=False, index=True)
+    data = db.deferred(db.Column(db.LargeBinary, nullable=False))
+    mime_type = db.Column(db.String(40), nullable=False, default="image/jpeg", server_default="image/jpeg")
+    size_bytes = db.Column(db.Integer, nullable=False)
+    width = db.Column(db.Integer, nullable=False)
+    height = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    inspection = db.relationship(Inspection, back_populates="photos")
+
+
+class SchemaVersion(db.Model):
+    __tablename__ = "patrol_schema_versions"
+    version = db.Column(db.Integer, primary_key=True)
+    applied_at = db.Column(db.DateTime, nullable=False, default=utcnow, server_default=db.func.current_timestamp())
 
 
 class AuditLog(db.Model):

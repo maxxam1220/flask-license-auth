@@ -36,6 +36,8 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 | `INITIAL_ADMIN_USERNAME` | `admin` |
 | `INITIAL_ADMIN_PASSWORD_HASH` | 首次管理員密碼的 scrypt 雜湊；從受控記憶體安全填入，不是明文密碼 |
 | `PUBLIC_BASE_URL` | 選填；預設使用平台的 `RENDER_EXTERNAL_URL`。自訂網域時才設定 HTTPS 根網址，無 `/login`、`/patrol`、查詢參數或片段 |
+| `IMPORT_SAFETY_POINTS` | 此次升級設為 `1`，一次性匯入 42 個職安點位；完成標記存於資料庫，後續重啟不覆寫 |
+| `PHOTO_STORAGE_LIMIT_BYTES` | 選填，預設 `209715200`（200 MiB），限制巡檢壓縮照片總量 |
 
 不要把憑證值寫進此文件、Git、工單或指令列。使用 Render Environment 設定保存。不要自行設定或猜測 `RENDER_EXTERNAL_URL`，平台會注入此值。網站建立後，核對 QR Code 目的網址與 Dashboard 顯示的實際網址完全一致；正式列印 QR Code 前完成此檢查。
 
@@ -43,7 +45,7 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 
 ## 初始化與驗證
 
-啟動命令會建立不存在的 `patrol_` 資料表，不會新增示範點位或示範紀錄。資料庫帳號需具備建立這些表及索引的必要權限。`init-db` 不負責修改既有表結構，不能取代未來的資料庫遷移。
+啟動命令以 `migrations.py` 對 `patrol_` 資料表執行交易式版本升級，不會新增示範帳號或示範紀錄。版本 2 加入分類、早晚時段、備註、異常標記與照片表，保留既有 ID、QR 與密碼。資料庫帳號需具備建立及調整這些表與索引的必要權限。升級前先建立 Render 邏輯匯出備份，確認完成後部署；若需回復單一應用，只還原巡檢相關資料表，不能覆蓋同庫授權應用。`IMPORT_SAFETY_POINTS=1` 時升級後匯入使用者提供的清單，遇到衝突整批中止。
 
 接著 `bootstrap-admin` 僅在 `patrol_users` 尚無任何管理員時，使用環境中的初始帳號及 scrypt 雜湊建立正式管理員，並要求首次登入變更密碼。只要已有管理員，即使停用或密碼已變更，也不能藉此命令重設帳號。重部署不會覆寫既有管理員。
 

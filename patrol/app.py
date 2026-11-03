@@ -23,7 +23,9 @@ from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from models import AuditLog, DeviceBinding, Inspection, LoginAttempt, Point, PointSchedule, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
+from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, category_label, floor_label
+from images import PhotoValidationError, process_uploads
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
@@ -59,6 +61,18 @@ def period_for(point, instant):
     return local_day.isoformat(), start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
 
+def slot_for(point, instant):
+    return ("am" if local_dt(instant).hour < 12 else "pm") if point.frequency == "daily2" else "any"
+
+
+def slot_label(slot):
+    return {"am": "上午", "pm": "下午", "any": "不限時段"}.get(slot, "不限時段")
+
+
+def frequency_label(frequency):
+    return {"daily": "每日一次", "daily2": "每日兩次", "weekly": "每週一次"}.get(frequency, frequency)
+
+
 def create_app(config=None):
     instance = Path(__file__).resolve().parent / "instance"
     instance.mkdir(exist_ok=True)
@@ -91,7 +105,8 @@ def create_app(config=None):
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
-        MAX_CONTENT_LENGTH=128 * 1024,
+        MAX_CONTENT_LENGTH=25 * 1024 * 1024,
+        PHOTO_STORAGE_LIMIT_BYTES=int(os.environ.get("PHOTO_STORAGE_LIMIT_BYTES", str(200 * 1024 * 1024))),
         CSRF_ENABLED=True,
         DEMO_MODE=os.environ.get("DEMO_MODE", "0") == "1",
     )
@@ -133,7 +148,10 @@ def create_app(config=None):
 
     @app.context_processor
     def common_context():
-        return {"current_user": g.get("user"), "csrf_token": csrf_token, "today": local_dt(now_utc()).date()}
+        return {"current_user": g.get("user"), "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
+                "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
+                "floor_label": floor_label, "category_label": category_label,
+                "slot_label": slot_label, "frequency_label": frequency_label}
 
     @app.before_request
     def load_user_and_protect():
@@ -163,10 +181,10 @@ def create_app(config=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if request.endpoint != "static":
-            response.headers["Cache-Control"] = "no-store"
+            response.headers["Cache-Control"] = "private, no-store" if request.endpoint == "photo_file" else "no-store"
         if app.config["COOKIE_SECURE"]:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -264,6 +282,18 @@ def create_app(config=None):
     def valid_label(value, limit=100):
         return bool(value) and len(value) <= limit and not any(ord(c) < 32 or ord(c) == 127 for c in value)
 
+    def scope_filters():
+        floor = request.args.get("floor", "")
+        category = request.args.get("category", "")
+        if floor and floor not in {str(value) for value, _ in FLOOR_OPTIONS}:
+            abort(400, description="樓層選項不正確。")
+        if category and category not in dict(CATEGORY_OPTIONS):
+            abort(400, description="分類選項不正確。")
+        return floor, category
+
+    def point_order():
+        return db.case({value: index for index, (value, _) in enumerate(FLOOR_OPTIONS)}, value=Point.floor), Point.code
+
     @app.get("/healthz")
     def healthz():
         db.session.execute(db.text("SELECT 1"))
@@ -339,7 +369,8 @@ def create_app(config=None):
     @app.get("/dashboard")
     @login_required
     def dashboard():
-        today = local_dt(now_utc()).date()
+        instant = now_utc()
+        today = local_dt(instant).date()
         selected = parse_date(request.args.get("date"), today)
         view = request.args.get("view", "daily")
         if view not in ("daily", "weekly"):
@@ -347,45 +378,83 @@ def create_app(config=None):
         monday = selected - timedelta(days=selected.weekday())
         period_day = monday if view == "weekly" else selected
         reference_day = min(monday + timedelta(days=6), today) if view == "weekly" else selected
-        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(Point.floor, Point.code)).all()
-        floor_filter = request.args.get("floor", "")
-        if floor_filter and floor_filter not in ("1", "2", "3", "4", "5"):
-            abort(400)
-        completions = db.session.scalars(select(Inspection).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency == view)).all()
-        found = {r.point_id: r for r in completions}
-        cards, floors = [], [{"floor": f, "total": 0, "done": 0} for f in range(1, 6)]
+        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        floor_filter, category_filter = scope_filters()
+        frequencies = ("weekly",) if view == "weekly" else ("daily", "daily2")
+        completions = db.session.scalars(select(Inspection).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies))).all()
+        found = {}
+        for record in completions:
+            found.setdefault(record.point_id, []).append(record)
+        cards, floors = [], [{"floor": f, "label": label, "total": 0, "done": 0} for f, label in FLOOR_OPTIONS]
+        floor_counts = {item["floor"]: item for item in floors}
+        period_label = f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}" if view == "weekly" else selected.isoformat()
         for point in points:
-            record = found.get(point.id)
+            point_records = found.get(point.id, [])
             schedule = next((s for s in reversed(point.schedules) if s.effective_date <= reference_day), None)
             frequency = schedule.frequency if schedule else point.frequency
             active = schedule.active if schedule else point.active
-            if (frequency != view or not active) and not record:
-                continue
-            due = period_day <= today and point.schedule_start <= reference_day
-            status = "done" if record else ("pending" if due else "not_due")
-            displayed_point = SimpleNamespace(id=point.id, code=record.point_code if record else point.code,
-                                             name=record.point_name if record else point.name,
-                                             floor=record.point_floor if record else point.floor, frequency=view)
-            if due or record:
-                floors[displayed_point.floor - 1]["total"] += 1
-                floors[displayed_point.floor - 1]["done"] += int(record is not None)
-            if not floor_filter or displayed_point.floor == int(floor_filter):
-                # Progress is shared, but staff never receive another person's identity.
-                visible_record = record if g.user.role == "admin" or (record and record.user_id == g.user.id) else None
-                cards.append({"point": displayed_point, "status": status, "latest": visible_record, "period_label": f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}" if view == "weekly" else selected.isoformat()})
-        total = sum(c["status"] != "not_due" for c in cards)
-        done = sum(c["status"] == "done" for c in cards)
+            category = schedule.category if schedule else point.category
+            current_group = (frequency, category, point.floor)
+            groups = {}
+            if frequency in frequencies and active:
+                groups[current_group] = {}
+            for record in point_records:
+                groups.setdefault((record.frequency, record.category, record.point_floor), {})[record.slot] = record
+            for group, records_by_slot in groups.items():
+                group_frequency, group_category, group_floor = group
+                if category_filter and category_filter != group_category:
+                    continue
+                scheduled_group = group == current_group and active
+                planned = scheduled_group and point.schedule_start <= reference_day
+                due = planned and period_day <= today
+                slot_keys = ("am", "pm") if group_frequency == "daily2" else ("any",)
+                slots = []
+                for slot in slot_keys:
+                    record = records_by_slot.get(slot)
+                    # A classification/floor edit cannot create another obligation
+                    # for a slot already completed under its historical snapshot.
+                    if scheduled_group and not record and any(item.frequency == group_frequency and item.slot == slot for item in point_records):
+                        continue
+                    if not scheduled_group and not record:
+                        continue
+                    future_slot = group_frequency == "daily2" and selected == today and slot == "pm" and local_dt(instant).hour < 12
+                    status = "done" if record else ("pending" if due and not future_slot else "not_due")
+                    visible = record if record and (g.user.role == "admin" or record.user_id == g.user.id) else None
+                    slots.append({"key": slot, "label": slot_label(slot), "status": status, "record": visible, "due": bool(due or record)})
+                if not slots:
+                    continue
+                snapshot = max(records_by_slot.values(), key=lambda item: item.created_at, default=None)
+                displayed_point = SimpleNamespace(id=point.id, code=snapshot.point_code if snapshot else point.code,
+                                                 name=snapshot.point_name if snapshot else point.name,
+                                                 floor=group_floor, frequency=group_frequency, category=group_category)
+                group_total = sum(slot["due"] for slot in slots)
+                group_done = sum(slot["status"] == "done" for slot in slots)
+                floor_counts[group_floor]["total"] += group_total
+                floor_counts[group_floor]["done"] += group_done
+                if not floor_filter or group_floor == int(floor_filter):
+                    status = "done" if group_done == len(slots) else ("pending" if group_total else "not_due")
+                    visible_records = [slot["record"] for slot in slots if slot["record"]]
+                    latest = max(visible_records, key=lambda item: item.created_at, default=None)
+                    cards.append({"point": displayed_point, "status": status, "latest": latest, "period_label": period_label, "slots": slots})
+        total = sum(slot["due"] for card in cards for slot in card["slots"])
+        done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
         recent_query = select(Inspection).order_by(Inspection.created_at.desc()).limit(6)
         if g.user.role != "admin":
             recent_query = recent_query.where(Inspection.user_id == g.user.id)
-        return render_template("dashboard.html", selected_date=selected, view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done}, device_state=device_status(), recent=db.session.scalars(recent_query).all(), week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
+        if floor_filter:
+            recent_query = recent_query.where(Inspection.point_floor == int(floor_filter))
+        if category_filter:
+            recent_query = recent_query.where(Inspection.category == category_filter)
+        return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
+                               view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
+                               device_state=device_status(), recent=db.session.scalars(recent_query).all(), week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
 
     def get_point(token, lock=False):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", token):
             abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
         query = select(Point).where(Point.qr_token == token)
         if lock:
-            query = query.with_for_update()
+            query = query.with_for_update().execution_options(populate_existing=True)
         point = db.session.scalar(query)
         if not point:
             abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
@@ -393,13 +462,29 @@ def create_app(config=None):
             abort(403, description="此巡檢點目前尚未啟用或已停用。")
         return point
 
+    def inspection_in_slot(point, key, slot):
+        return db.session.scalar(select(Inspection).where(Inspection.point_id == point.id, Inspection.frequency == point.frequency,
+                                                          Inspection.period_key == key, Inspection.slot == slot))
+
+    def checkin_form(point, token, error=None, status=200):
+        instant = now_utc()
+        key, start, end = period_for(point, instant)
+        slot = slot_for(point, instant)
+        existing = inspection_in_slot(point, key, slot)
+        if existing and g.user.role != "admin" and existing.user_id != g.user.id:
+            # Never give another inspector's notes, attachments or identity to the template.
+            existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
+        label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency == "weekly" else key
+        return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
+                               current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
+                               note=request.form.get("note", ""), is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"),
+                               form_error=error), status
+
     @app.get("/c/<token>")
     @login_required
     def checkin(token):
         point = get_point(token)
-        key, _, _ = period_for(point, now_utc())
-        existing = db.session.scalar(select(Inspection).where(Inspection.point_id == point.id, Inspection.frequency == point.frequency, Inspection.period_key == key))
-        return render_template("checkin.html", point=point, device_state=device_status(), existing=existing if not existing or g.user.role == "admin" or existing.user_id == g.user.id else {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}, token=token)
+        return checkin_form(point, token)
 
     @app.post("/c/<token>/confirm")
     @login_required
@@ -412,19 +497,48 @@ def create_app(config=None):
         point = get_point(token, lock=True)
         instant = now_utc()
         key, _, _ = period_for(point, instant)
-        record = db.session.scalar(select(Inspection).where(Inspection.point_id == point.id, Inspection.frequency == point.frequency, Inspection.period_key == key))
+        slot = slot_for(point, instant)
+        submitted_slot, submitted_period = request.form.get("slot"), request.form.get("period_key")
+        def form_error(message, status=400):
+            db.session.rollback()
+            return checkin_form(point, token, message, status)
+        if ((point.frequency == "daily2" and (not submitted_slot or not submitted_period))
+                or (submitted_slot is not None and submitted_slot != slot)
+                or (submitted_period is not None and submitted_period != key)):
+            return form_error("巡檢日期或時段已變更，請確認目前時段後重新送出。照片需重新選擇。", 409)
+        record = inspection_in_slot(point, key, slot)
         if record:
             flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
             return redirect(url_for("checkin_success", record_id=record.id)) if g.user.role == "admin" or record.user_id == g.user.id else redirect(url_for("checkin", token=token))
-        record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(instant), period_key=key, frequency=point.frequency, point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name)
+        note = request.form.get("note", "").strip()
+        if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
+            return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
+        try:
+            photos = process_uploads(request.files.getlist("photos"))
+        except PhotoValidationError as error:
+            return form_error(str(error))
+        if photos:
+            if db.engine.dialect.name == "postgresql":
+                db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
+            used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
+            if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
+                return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡管理員，或移除照片後重新確認送出。", 409)
+        final_instant = now_utc()
+        if period_for(point, final_instant)[0] != key or slot_for(point, final_instant) != slot:
+            return form_error("處理期間巡檢日期或時段已變更，請重新確認後送出。照片需重新選擇。", 409)
+        record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(final_instant),
+                            period_key=key, frequency=point.frequency, slot=slot, category=point.category,
+                            point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
+                            note=note, is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"))
+        record.photos.extend(InspectionPhoto(**photo) for photo in photos)
         db.session.add(record)
-        binding.last_seen_at = naive_utc(instant)
+        binding.last_seen_at = naive_utc(final_instant)
         audit("checkin", point.code)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            record = db.session.scalar(select(Inspection).where(Inspection.point_id == point.id, Inspection.frequency == point.frequency, Inspection.period_key == key))
+            record = inspection_in_slot(point, key, slot)
             if not record:
                 raise
             flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
@@ -440,6 +554,25 @@ def create_app(config=None):
         if g.user.role != "admin" and record.user_id != g.user.id:
             abort(403)
         return render_template("checkin_success.html", record=record)
+
+    @app.get("/records/<int:record_id>")
+    @login_required
+    def record_detail(record_id):
+        record = db.get_or_404(Inspection, record_id)
+        if g.user.role != "admin" and record.user_id != g.user.id:
+            abort(403)
+        return render_template("record_detail.html", record=record)
+
+    @app.get("/photos/<int:photo_id>")
+    @login_required
+    def photo_file(photo_id):
+        photo = db.get_or_404(InspectionPhoto, photo_id)
+        if g.user.role != "admin" and photo.inspection.user_id != g.user.id:
+            abort(403)
+        response = make_response(photo.data)
+        response.headers["Content-Type"] = photo.mime_type
+        response.headers["Content-Disposition"] = f'inline; filename="inspection-{photo.id}.jpg"'
+        return response
 
     @app.get("/devices")
     @login_required
@@ -546,28 +679,43 @@ def create_app(config=None):
         start_time = datetime.combine(begin, time.min, TAIPEI).astimezone(timezone.utc).replace(tzinfo=None)
         end_time = datetime.combine(end + timedelta(days=1), time.min, TAIPEI).astimezone(timezone.utc).replace(tzinfo=None)
         query = select(Inspection).where(Inspection.created_at >= start_time, Inspection.created_at < end_time)
-        floor = request.args.get("floor", "")
+        floor, category = scope_filters()
         user_id = request.args.get("user_id", "")
         if floor:
-            if floor not in ("1", "2", "3", "4", "5"):
-                abort(400)
             query = query.where(Inspection.point_floor == int(floor))
+        if category:
+            query = query.where(Inspection.category == category)
+        abnormal = request.args.get("abnormal", "")
+        if abnormal not in ("", "0", "1"):
+            abort(400, description="異常篩選選項不正確。")
+        if abnormal:
+            query = query.where(Inspection.is_abnormal.is_(abnormal == "1"))
+        frequency = request.args.get("frequency", "")
+        if frequency not in ("", "daily", "daily2", "weekly"):
+            abort(400, description="巡檢頻率選項不正確。")
+        if frequency:
+            query = query.where(Inspection.frequency == frequency)
         if g.user.role != "admin":
             query = query.where(Inspection.user_id == g.user.id)
             user_id = str(g.user.id)
         elif user_id:
             query = query.where(Inspection.user_id == parse_id(user_id))
-        return query.order_by(Inspection.created_at.desc(), Inspection.id.desc()), {"date_from": begin.isoformat(), "date_to": end.isoformat(), "floor": floor, "user_id": user_id}
+        return query.order_by(Inspection.created_at.desc(), Inspection.id.desc()), {"date_from": begin.isoformat(), "date_to": end.isoformat(),
+                "floor": floor, "user_id": user_id, "category": category, "abnormal": abnormal, "frequency": frequency}
 
     @app.get("/records")
     @login_required
     def records():
         query, filters = record_query()
-        rows = db.session.scalars(query.limit(1001)).all()
+        rows = db.session.scalars(query.options(selectinload(Inspection.photos)).limit(1001)).all()
         if len(rows) > 1000:
             flash("畫面顯示最近 1,000 筆，完整資料請匯出 CSV 或縮小日期範圍。", "info")
         users = db.session.scalars(select(User).order_by(User.display_name)).all() if g.user.role == "admin" else []
-        return render_template("records.html", records=rows[:1000], users=users, filters=filters)
+        storage = {}
+        if g.user.role == "admin":
+            storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
+                       "photo_storage_limit": app.config["PHOTO_STORAGE_LIMIT_BYTES"]}
+        return render_template("records.html", records=rows[:1000], users=users, filters=filters, **storage)
 
     @app.get("/records/export")
     @login_required
@@ -575,12 +723,14 @@ def create_app(config=None):
         query, filters = record_query()
         output = io.StringIO(newline="")
         writer = csv.writer(output)
-        writer.writerow(["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日"])
+        writer.writerow(["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "異常", "備註", "照片數"])
         def cell(value):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
-        for row in db.session.scalars(query).yield_per(500):
-            writer.writerow([cell(row.user_name or row.user.display_name), f"{row.point_floor}F", cell(row.point_code), cell(row.point_name), format_localtime(row.created_at), "每日" if row.frequency == "daily" else "每週", row.period_key])
+        for row in db.session.scalars(query.options(selectinload(Inspection.photos))).yield_per(500):
+            writer.writerow([cell(row.user_name or row.user.display_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                             format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
+                             category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos)])
         response = make_response("\ufeff" + output.getvalue())
         response.headers["Content-Type"] = "text/csv; charset=utf-8"
         response.headers["Content-Disposition"] = f'attachment; filename="patrol-{filters["date_from"]}-{filters["date_to"]}.csv"'
@@ -589,18 +739,27 @@ def create_app(config=None):
     @app.get("/admin/points")
     @admin_required
     def points():
-        return render_template("points.html", points=db.session.scalars(select(Point).order_by(Point.floor, Point.code)).all())
+        floor, category = scope_filters()
+        query = select(Point)
+        if floor:
+            query = query.where(Point.floor == int(floor))
+        if category:
+            query = query.where(Point.category == category)
+        return render_template("points.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category)
 
-    def point_values():
+    def point_values(point=None):
         code = request.form.get("code", "").strip().upper()
         name = request.form.get("name", "").strip()
         floor = request.form.get("floor", "")
         frequency = request.form.get("frequency", "daily")
-        if floor not in ("1", "2", "3", "4", "5") or not re.fullmatch(r"[1-5]F-[A-Z0-9]{2,20}", code) or not code.startswith(floor + "F-"):
-            abort(400, description="點位編號請使用如 1F-A01 的格式，並與樓層一致。")
-        if not valid_label(name) or frequency not in ("daily", "weekly"):
+        category = request.form.get("category", point.category if point else "uncategorized")
+        if floor not in {str(value) for value, _ in FLOOR_OPTIONS} or not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code) or not code.startswith(floor_label(int(floor)) + "-"):
+            abort(400, description="點位編號請使用如 1F-A01、B1-A01 或 1M-A01 的格式，並與樓層一致。")
+        if not valid_label(name) or frequency not in ("daily", "weekly", "daily2"):
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")
-        return {"code": code, "name": name, "floor": int(floor), "frequency": frequency}
+        if category not in dict(CATEGORY_OPTIONS):
+            abort(400, description="請選擇正確的巡檢分類。")
+        return {"code": code, "name": name, "floor": int(floor), "frequency": frequency, "category": category}
 
     def save_point(point, action):
         audit(action, point.code)
@@ -617,7 +776,7 @@ def create_app(config=None):
     def create_point():
         point = Point(**point_values(), active=True, schedule_start=local_dt(now_utc()).date())
         db.session.add(point)
-        point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, active=True))
+        point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, category=point.category, active=True))
         return save_point(point, "point_created")
 
     @app.post("/admin/points/<int:point_id>/update")
@@ -626,10 +785,10 @@ def create_app(config=None):
         point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
         if not point:
             abort(404)
-        values = point_values()
+        values = point_values(point)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
-        if point.frequency != values["frequency"] or point.active != active:
-            point.schedules.append(PointSchedule(effective_date=local_dt(now_utc()).date(), frequency=values["frequency"], active=active))
+        if point.frequency != values["frequency"] or point.active != active or point.category != values["category"]:
+            point.schedules.append(PointSchedule(effective_date=local_dt(now_utc()).date(), frequency=values["frequency"], category=values["category"], active=active))
         for key, value in values.items():
             setattr(point, key, value)
         point.active = active
@@ -663,12 +822,18 @@ def create_app(config=None):
     @admin_required
     def print_qr():
         query = select(Point).where(Point.active.is_(True))
+        floor, category = scope_filters()
+        if floor:
+            query = query.where(Point.floor == int(floor))
+        if category:
+            query = query.where(Point.category == category)
         ids = request.args.get("ids", "")
         if ids:
             if len(ids) > 2000:
                 abort(400)
             query = query.where(Point.id.in_([parse_id(x) for x in ids.split(",")]))
-        return render_template("print_qr.html", points=db.session.scalars(query.order_by(Point.floor, Point.code)).all(), public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
+        return render_template("print_qr.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category,
+                               public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
 
     @app.get("/admin/users")
     @admin_required
@@ -747,7 +912,11 @@ def create_app(config=None):
 
     @app.cli.command("init-db")
     def init_db():
-        db.create_all()
+        from migrations import upgrade_schema
+        upgrade_schema(db.engine)
+        if os.environ.get("IMPORT_SAFETY_POINTS") == "1":
+            from catalog import import_safety_catalog
+            import_safety_catalog(apply=True)
         click.echo("Patrol tables are ready. Existing tables and records were preserved.")
 
     @app.cli.command("create-admin")
@@ -832,6 +1001,8 @@ def create_app(config=None):
         access_file.write_text("LOCAL DEMO ONLY / 本機示範帳號\n" + app.config["PUBLIC_BASE_URL"] + "\n\n" + "\n".join(f"{u}: {p}" for u, p in passwords.items()), encoding="utf-8")
         click.echo(f"Demo created. Local credentials are in {access_file}; not printed or used in production.")
 
+    from catalog import register_catalog_commands
+    register_catalog_commands(app)
     return app
 
 

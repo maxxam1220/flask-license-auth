@@ -12,7 +12,7 @@ $venvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 $requirementsPath = Join-Path $projectRoot 'requirements.txt'
 $requirementsStamp = Join-Path $projectRoot '.venv\patrol-requirements.sha256'
 $previousEnvironment = @{}
-foreach ($variableName in @('APP_ENV', 'DEMO_MODE', 'DATABASE_URL', 'PUBLIC_BASE_URL')) {
+foreach ($variableName in @('APP_ENV', 'DEMO_MODE', 'DATABASE_URL', 'PUBLIC_BASE_URL', 'IMPORT_SAFETY_POINTS')) {
     $previousEnvironment[$variableName] = [Environment]::GetEnvironmentVariable($variableName, 'Process')
 }
 
@@ -38,6 +38,7 @@ try {
     $localDatabase = (Join-Path $projectRoot 'instance\patrol.sqlite3').Replace('\', '/')
     $env:APP_ENV = 'development'
     $env:DEMO_MODE = 'false'
+    $env:IMPORT_SAFETY_POINTS = '0'
     $env:DATABASE_URL = 'sqlite:///' + $localDatabase
     $env:PUBLIC_BASE_URL = "http://127.0.0.1:$Port"
 
