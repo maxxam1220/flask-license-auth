@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import secrets
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import click
@@ -72,6 +72,60 @@ def slot_label(slot):
 
 def frequency_label(frequency):
     return {"daily": "每日一次", "daily2": "每日兩次", "weekly": "每週一次"}.get(frequency, frequency)
+
+
+def normalise_return_to(value, user):
+    """Allow only validated list filters; never use arbitrary redirect targets."""
+    if not value or len(value) > 2048 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in ("/records", "/issues"):
+            return None
+        if parsed.path == "/issues" and (not user or user.role != "admin"):
+            return None
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=8)
+        if len({key for key, _ in pairs}) != len(pairs):
+            return None
+        allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency"}
+                   if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page"})
+        values = {}
+        for key, item in pairs:
+            if key not in allowed or any(ord(char) < 32 or ord(char) == 127 for char in item):
+                return None
+            if not item:
+                continue
+            if key in ("date_from", "date_to"):
+                parsed_date = date.fromisoformat(item)
+                if not 2000 <= parsed_date.year <= 2100:
+                    return None
+                item = parsed_date.isoformat()
+            elif key == "floor" and item not in {str(floor) for floor, _ in FLOOR_OPTIONS}:
+                return None
+            elif key == "category" and item not in dict(CATEGORY_OPTIONS):
+                return None
+            elif key == "abnormal" and item not in ("0", "1"):
+                return None
+            elif key == "frequency" and item not in ("daily", "daily2", "weekly"):
+                return None
+            elif key == "status" and item not in ("open", "resolved", "all"):
+                return None
+            elif key in ("user_id", "point_id", "page"):
+                if not re.fullmatch(r"[0-9]{1,10}", item) or not 1 <= int(item) <= 2147483647:
+                    return None
+                item = str(int(item))
+            if key == "user_id" and (not user or user.role != "admin"):
+                continue
+            values[key] = item
+        if parsed.path == "/records":
+            today = local_dt(now_utc()).date()
+            begin = date.fromisoformat(values.get("date_from", (today - timedelta(days=6)).isoformat()))
+            end = date.fromisoformat(values.get("date_to", today.isoformat()))
+            if begin > end or (end - begin).days > 366:
+                return None
+        return parsed.path + ("?" + urlencode(values) if values else "")
+    except (ValueError, TypeError):
+        return None
 
 
 def create_app(config=None):
@@ -168,6 +222,13 @@ def create_app(config=None):
                 g.user = user
             else:
                 session.clear()
+        # An expired protected submission has no authority to write. Recover its
+        # safe GET confirmation page before checking the now-missing CSRF secret;
+        # the sign-in form itself retains its normal CSRF protection.
+        if not g.user and request.method == "POST":
+            destination = protected_post_destination()
+            if destination:
+                return redirect(url_for("login", next=safe_next(destination)))
         if request.method in ("POST", "PUT", "PATCH", "DELETE") and app.config["CSRF_ENABLED"]:
             expected = session.get("csrf_token", "")
             received = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
@@ -195,14 +256,27 @@ def create_app(config=None):
         @wraps(fn)
         def wrapped(*args, **kwargs):
             if not g.user:
-                destination = request.full_path.rstrip("?")
-                if request.endpoint == "confirm_checkin":
-                    destination = url_for("checkin", token=kwargs["token"])
-                elif request.endpoint in ("request_device", "revoke_own_device"):
-                    destination = url_for("devices")
+                destination = protected_post_destination() if request.method == "POST" else None
+                destination = destination or request.full_path.rstrip("?")
                 return redirect(url_for("login", next=safe_next(destination)))
             return fn(*args, **kwargs)
         return wrapped
+
+    def protected_post_destination():
+        args = request.view_args or {}
+        if request.endpoint == "confirm_checkin":
+            return url_for("checkin", token=args["token"])
+        if request.endpoint in ("resolve_issue", "reopen_issue"):
+            # This remains an encoded query value on a fixed local detail URL.
+            # It is normalized with the authenticated role after sign-in.
+            source = request.form.get("return_to", "")
+            return url_for("record_detail", record_id=args["inspection_id"], return_to=source[:1600])
+        destinations = {"request_device": "devices", "revoke_own_device": "devices", "change_password": "change_password",
+                        "create_point": "points", "update_point": "points", "rotate_point_qr": "points",
+                        "create_user": "users", "update_user": "users", "reset_password": "users",
+                        "approve_device": "admin_devices", "reject_device": "admin_devices", "revoke_device": "admin_devices"}
+        endpoint = destinations.get(request.endpoint)
+        return url_for(endpoint) if endpoint else None
 
     def admin_required(fn):
         @wraps(fn)
@@ -226,6 +300,12 @@ def create_app(config=None):
         user = lock_user(g.user.id)
         if not user or not user.active or user.auth_version != session.get("auth_version") or (user.must_change_password and not allow_password_change):
             abort(403, description="帳號狀態已更新，請重新登入。")
+        return user
+
+    def lock_current_admin():
+        user = lock_current_user()
+        if user.role != "admin":
+            abort(403, description="管理員權限已更新，請重新登入後再試。")
         return user
 
     def device_binding():
@@ -397,7 +477,10 @@ def create_app(config=None):
             frequency = schedule.frequency if schedule else point.frequency
             active = schedule.active if schedule else point.active
             category = schedule.category if schedule else point.category
-            current_group = (frequency, category, point.floor)
+            scheduled_floor = schedule.floor if schedule and schedule.floor is not None else point.floor
+            scheduled_code = schedule.point_code if schedule and schedule.point_code is not None else point.code
+            scheduled_name = schedule.point_name if schedule and schedule.point_name is not None else point.name
+            current_group = (frequency, category, scheduled_floor)
             groups = {}
             if frequency in frequencies and active:
                 groups[current_group] = {}
@@ -427,8 +510,13 @@ def create_app(config=None):
                 if not slots:
                     continue
                 snapshot = max(records_by_slot.values(), key=lambda item: item.created_at, default=None)
-                displayed_point = SimpleNamespace(id=point.id, code=snapshot.point_code if snapshot else point.code,
-                                                 name=snapshot.point_name if snapshot else point.name,
+                # A partial card still directs staff to an outstanding/current
+                # slot. Keep its schedule label after a same-floor rename, while
+                # wholly completed cards retain the original record snapshot.
+                use_schedule_label = scheduled_group and any(slot["status"] != "done" for slot in slots)
+                display_snapshot = snapshot if not use_schedule_label else None
+                displayed_point = SimpleNamespace(id=point.id, code=display_snapshot.point_code if display_snapshot else scheduled_code,
+                                                 name=display_snapshot.point_name if display_snapshot else scheduled_name,
                                                  floor=group_floor, frequency=group_frequency, category=group_category)
                 group_total = sum(slot["due"] for slot in slots)
                 group_done = sum(slot["status"] == "done" for slot in slots)
@@ -507,6 +595,8 @@ def create_app(config=None):
         def form_error(message, status=400):
             db.session.rollback()
             return checkin_form(point, token, message, status)
+        if request.form.get("frequency") != point.frequency:
+            return form_error("點位巡檢頻率已更新，或此表單已過期。請確認最新設定後重新送出；照片需重新選擇。", 409)
         if ((point.frequency == "daily2" and (not submitted_slot or not submitted_period))
                 or (submitted_slot is not None and submitted_slot != slot)
                 or (submitted_period is not None and submitted_period != key)):
@@ -570,14 +660,16 @@ def create_app(config=None):
         return render_record_detail(record)
 
     def render_record_detail(record, error=None, status=200):
+        source = request.form.get("return_to") if request.method == "POST" else request.args.get("return_to")
+        back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
                                issue_action_note=request.form.get("note", ""), issue_version=issue_version(record.issue),
+                               back_url=back_url, back_label="返回異常追蹤" if urlsplit(back_url).path == "/issues" else "返回巡檢紀錄",
                                point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0)), status
 
     def apply_issue_action(inspection_id, target_status):
-        actor = lock_current_user()
-        if actor.role != "admin":
-            abort(403, description="只有管理員可以處理異常案件。")
+        actor = lock_current_admin()
+        source = normalise_return_to(request.form.get("return_to"), actor)
         try:
             changed = transition_issue(inspection_id, target_status, actor, request.form.get("expected_event_id"),
                                        request.form.get("note", ""), naive_utc())
@@ -591,7 +683,7 @@ def create_app(config=None):
             record = db.get_or_404(Inspection, inspection_id)
             return render_record_detail(record, str(error), error.status)
         flash(("案件已結案。" if target_status == "resolved" else "案件已重新開啟。") if changed else "案件已是指定狀態，沒有新增重複處理紀錄。", "success" if changed else "info")
-        return redirect(url_for("record_detail", record_id=inspection_id))
+        return redirect(url_for("record_detail", record_id=inspection_id, **({"return_to": source} if source else {})))
 
     @app.post("/admin/issues/<int:inspection_id>/resolve")
     @admin_required
@@ -629,9 +721,16 @@ def create_app(config=None):
         per_page = 50
         pages = max(1, (total + per_page - 1) // per_page)
         if page > pages:
-            abort(404, description="這個案件頁碼不存在。")
+            return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
         rows = db.session.scalars(query.options(selectinload(Inspection.issue), selectinload(Inspection.photos), selectinload(Inspection.point))
                                   .order_by(db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at).desc(), Inspection.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
+        if page > 1 and not rows:
+            # At READ COMMITTED another manager can resolve the last row after
+            # our count and before our fetch. Recover that now-empty last page.
+            total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
+            pages = max(1, (total + per_page - 1) // per_page)
+            if page > pages:
+                return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
         open_total = sum(open_issue_counts().values())
         return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
                                selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
@@ -851,21 +950,34 @@ def create_app(config=None):
     @app.post("/admin/points/create")
     @admin_required
     def create_point():
+        lock_current_admin()
         point = Point(**point_values(), active=True, schedule_start=local_dt(now_utc()).date())
         db.session.add(point)
-        point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, category=point.category, active=True))
+        point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, category=point.category, active=True,
+                                             floor=point.floor, point_code=point.code, point_name=point.name))
         return save_point(point, "point_created")
 
     @app.post("/admin/points/<int:point_id>/update")
     @admin_required
     def update_point(point_id):
+        lock_current_admin()
         point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
         if not point:
             abort(404)
         values = point_values(point)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
-        if point.frequency != values["frequency"] or point.active != active or point.category != values["category"]:
-            point.schedules.append(PointSchedule(effective_date=local_dt(now_utc()).date(), frequency=values["frequency"], category=values["category"], active=active))
+        # Freeze unknown snapshots before editing the current point. Older workers
+        # may still have inserted NULL snapshots during a rolling deployment.
+        for schedule in point.schedules:
+            if schedule.floor is None:
+                schedule.floor = point.floor
+            if schedule.point_code is None:
+                schedule.point_code = point.code
+            if schedule.point_name is None:
+                schedule.point_name = point.name
+        if point.active != active or any(getattr(point, key) != values[key] for key in ("frequency", "category", "floor", "code", "name")):
+            point.schedules.append(PointSchedule(effective_date=local_dt(now_utc()).date(), frequency=values["frequency"], category=values["category"], active=active,
+                                                 floor=values["floor"], point_code=values["code"], point_name=values["name"]))
         for key, value in values.items():
             setattr(point, key, value)
         point.active = active
@@ -874,6 +986,7 @@ def create_app(config=None):
     @app.post("/admin/points/<int:point_id>/rotate-qr")
     @admin_required
     def rotate_point_qr(point_id):
+        lock_current_admin()
         point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
         if not point:
             abort(404)
@@ -1064,7 +1177,8 @@ def create_app(config=None):
             for number, name in enumerate(names[floor], 1):
                 frequency = "weekly" if number == 3 else "daily"
                 point = Point(code=f"{floor}F-A{number:02}", name=name, floor=floor, frequency=frequency, schedule_start=today - timedelta(days=30))
-                point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=frequency, active=True))
+                point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=frequency, active=True,
+                                                     floor=point.floor, point_code=point.code, point_name=point.name))
                 db.session.add(point)
                 db.session.flush()
                 if number == 1 and floor in (1, 2, 4):

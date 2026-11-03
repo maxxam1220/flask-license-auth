@@ -76,7 +76,8 @@ def seed_clients(application, separate_points=False):
             with client.session_transaction() as session:
                 session["user_id"], session["auth_version"] = user.id, 1
             client.set_cookie("patrol_device", secret)
-            clients.append((client, points[number if separate_points else 0].qr_token))
+            selected_point = points[number if separate_points else 0]
+            clients.append((client, selected_point.qr_token, selected_point.frequency))
         db.session.commit()
         return clients
 
@@ -84,9 +85,9 @@ def seed_clients(application, separate_points=False):
 def concurrently_submit(clients):
     barrier = threading.Barrier(2)
     def submit(pair):
-        client, token = pair
+        client, token, frequency = pair
         barrier.wait(timeout=10)
-        response = client.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03",
+        response = client.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "frequency": frequency,
             "note": "Concurrency test", "photos": (io.BytesIO(image_bytes()), "test.png")})
         return response.status_code, response.location
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -118,8 +119,8 @@ def test_postgres_capacity_lock_prevents_two_points_exceeding_limit(postgres_app
 @pytest.mark.parametrize("legacy", [False, True])
 def test_postgres_concurrent_resolve_reopen_is_idempotent_and_rejects_old_form(postgres_app, legacy):
     clients = seed_clients(postgres_app)
-    author, token = clients[0]
-    assert author.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "is_abnormal": "on", "note": "Original issue"}).status_code == 302
+    author, token, frequency = clients[0]
+    assert author.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "frequency": frequency, "is_abnormal": "on", "note": "Original issue"}).status_code == 302
     with postgres_app.app_context():
         record = db.session.scalar(db.select(Inspection))
         record_id = record.id
@@ -130,7 +131,7 @@ def test_postgres_concurrent_resolve_reopen_is_idempotent_and_rejects_old_form(p
     def both(action, version):
         barrier = threading.Barrier(2)
         def request_action(pair):
-            client, _ = pair
+            client, _, _ = pair
             barrier.wait(timeout=10)
             return client.post(f"/admin/issues/{record_id}/{action}", data={"expected_event_id": str(version), "note": "Concurrent admin action"}).status_code
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -157,8 +158,8 @@ def test_postgres_concurrent_resolve_reopen_is_idempotent_and_rejects_old_form(p
 def test_postgres_resolve_and_new_normal_checkin_same_point_do_not_deadlock(postgres_app):
     from issues import open_issue_counts
     clients = seed_clients(postgres_app)
-    admin, token = clients[0]
-    worker, _ = clients[1]
+    admin, token, frequency = clients[0]
+    worker, _, _ = clients[1]
     with postgres_app.app_context():
         user = db.session.scalar(db.select(User).where(User.username == "concurrent0"))
         user.role = "admin"
@@ -176,7 +177,7 @@ def test_postgres_resolve_and_new_normal_checkin_same_point_do_not_deadlock(post
         return admin.post(f"/admin/issues/{record_id}/resolve", data={"expected_event_id": "0", "note": "Fixed"}).status_code
     def checkin():
         barrier.wait(timeout=10)
-        return worker.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "note": "Normal afternoon"}).status_code
+        return worker.post(f"/c/{token}/confirm", data={"slot": "pm", "period_key": "2026-11-03", "frequency": frequency, "note": "Normal afternoon"}).status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(resolve), pool.submit(checkin)]
         assert [future.result(timeout=30) for future in futures] == [302, 302]

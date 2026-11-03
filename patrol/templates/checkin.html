@@ -37,6 +37,7 @@
         {{ csrf() }}
         <input type="hidden" name="slot" value="{{ current_slot }}">
         <input type="hidden" name="period_key" value="{{ current_period_key }}">
+        <input type="hidden" name="frequency" value="{{ point.frequency }}">
         <div class="inspection-fields">
           <label class="abnormal-toggle"><input type="checkbox" name="is_abnormal" value="on" {% if is_abnormal %}checked{% endif %}><span>{{ icon('alert') }}發現異常<small>勾選後會建立一筆未結案異常，由管理員追蹤處理。</small></span></label>
           <label for="inspection-note">巡檢備註 <span class="optional-label">選填</span></label>

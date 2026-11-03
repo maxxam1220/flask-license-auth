@@ -41,7 +41,7 @@ def png():
 
 
 def submit(client, point, slot="pm", period="2026-11-03", **fields):
-    return client.post(f"/c/{point.qr_token}/confirm", data={"slot": slot, "period_key": period, **fields})
+    return client.post(f"/c/{point.qr_token}/confirm", data={"slot": slot, "period_key": period, "frequency": point.frequency, **fields})
 
 
 def logged_browser(application, seeded, username="inspector"):
@@ -138,7 +138,7 @@ def test_daily2_next_day_requires_two_new_slots(application, seeded, monkeypatch
 def test_daily_weekly_keep_any_slot_backward_compatible(application, seeded):
     client = logged_browser(application, seeded)
     for key in ("daily", "weekly"):
-        assert client.post(f"/c/{seeded[key].qr_token}/confirm").status_code == 302
+        assert client.post(f"/c/{seeded[key].qr_token}/confirm", data={"frequency": seeded[key].frequency}).status_code == 302
     assert {row.slot for row in db.session.scalars(db.select(Inspection))} == {"any"}
 
 

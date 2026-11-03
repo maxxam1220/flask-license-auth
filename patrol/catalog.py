@@ -90,7 +90,8 @@ def import_safety_catalog(apply=False):
         for row in missing:
             point = Point(**{k: v for k, v in row.items() if k != "number"}, active=True, schedule_start=today)
             point.schedules.append(PointSchedule(effective_date=today, frequency=point.frequency,
-                                                active=True, category="safety"))
+                                                active=True, category="safety", floor=point.floor,
+                                                point_code=point.code, point_name=point.name))
             db.session.add(point)
         db.session.add(AuditLog(action=IMPORT_ACTION, target="42 safety points",
                                detail=f"Created {len(missing)}; existing {len(found)}. Daily=23; AM/PM=19."))

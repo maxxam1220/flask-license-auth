@@ -5,7 +5,7 @@
 {% set current_issue_state=issue_state(record) %}
 {% block content %}
 <div class="record-detail-wrap">
-<div class="record-back-links"><a class="back-link" href="{{ url_for('issues', point_id=record.point_id, status='all') if current_user.role == 'admin' and request.args.get('source') == 'issues' else url_for('records', category=record.category) }}">{{ icon('back') }}{{ '返回此點異常清單' if current_user.role == 'admin' and request.args.get('source') == 'issues' else '返回巡檢紀錄' }}</a>{% if current_user.role == 'admin' and current_issue_state %}<a class="text-link" href="{{ url_for('issues') }}">異常追蹤 {{ icon('arrow') }}</a>{% endif %}</div>
+<div class="record-back-links"><a class="back-link" href="{{ back_url }}">{{ icon('back') }}{{ back_label }}</a>{% if current_user.role == 'admin' and current_issue_state %}<a class="text-link" href="{{ url_for('issues') }}">異常追蹤 {{ icon('arrow') }}</a>{% endif %}</div>
 <div class="page-heading"><div><div class="eyebrow">巡檢紀錄</div><h1>{{ record.point_code or record.point.code }}</h1><p>{{ record.point_name or record.point.name }}</p></div><div class="record-status-badge">{{ issue_status(record) }}</div></div>
 <section class="panel"><div class="record-facts"><div><span>巡檢分類</span><strong>{{ category_label(record.category) }}</strong></div><div><span>樓層</span><strong>{{ floor_label(record.point_floor if record.point_floor is not none else record.point.floor) }}</strong></div><div><span>巡檢人員</span><strong>{{ record.user_name or record.user.display_name }}</strong></div><div><span>打卡時間</span><strong>{{ record.created_at|localtime }}</strong></div><div><span>巡檢頻率</span><strong>{{ frequency(record.frequency) }}</strong></div><div><span>巡檢時段</span><strong>{{ slot_label(record.slot) if record.frequency == 'daily2' else '每週一次' if record.frequency == 'weekly' else '全天' }}</strong></div></div></section>
 <section class="panel spaced"><div class="section-heading"><h2>巡檢備註</h2></div>{% if record.note %}<p class="record-note">{{ record.note }}</p>{% else %}<p class="muted">這筆紀錄未填寫備註。</p>{% endif %}</section>
@@ -18,7 +18,7 @@
   {% if current_user.role == 'admin' %}
     {% if current_issue_state == 'open' %}
       <form method="post" action="{{ url_for('resolve_issue', inspection_id=record.id) }}" class="issue-action-form" data-confirm="確認本次異常已處理完成？結案後會保留原始回報、照片與處理說明。同點位若還有其他未結案異常，紅色標籤會繼續顯示。" data-confirm-title="結案這筆異常" data-confirm-label="確認結案">
-        {{ csrf() }}<input type="hidden" name="expected_event_id" value="{{ issue_version }}">
+        {{ csrf() }}<input type="hidden" name="expected_event_id" value="{{ issue_version }}"><input type="hidden" name="return_to" value="{{ back_url }}">
         <label for="issue-action-note">處理說明 <span>必填</span></label><textarea id="issue-action-note" name="note" rows="4" maxlength="2000" required data-nonblank data-character-count="issue-note-count" aria-describedby="issue-note-help issue-note-count" placeholder="說明採取的處理方式，以及確認完成的結果。">{{ issue_action_note|default('') }}</textarea>
         <div class="field-meta"><span id="issue-note-help">此次結案僅處理這一筆異常。</span><span id="issue-note-count">{{ (issue_action_note|default(''))|length }} / 2,000</span></div>
         <div class="form-actions"><button class="button button-primary" data-loading-text="正在結案…">{{ icon('circle-check') }}儲存說明並結案</button></div>
@@ -26,7 +26,7 @@
     {% else %}
       <details class="disclosure issue-reopen" {% if issue_form_error %}open{% endif %}><summary><span>需要重新開啟這筆異常？</span>{{ icon('down') }}</summary>
         <form method="post" action="{{ url_for('reopen_issue', inspection_id=record.id) }}" class="issue-action-form" data-confirm="重新開啟後，此點位會恢復未結案異常標籤，原本的結案紀錄仍會保留。" data-confirm-title="重新開啟異常" data-confirm-label="確認重新開啟" data-confirm-danger="true">
-          {{ csrf() }}<input type="hidden" name="expected_event_id" value="{{ issue_version }}">
+          {{ csrf() }}<input type="hidden" name="expected_event_id" value="{{ issue_version }}"><input type="hidden" name="return_to" value="{{ back_url }}">
           <label for="issue-action-note">重新開啟原因 <span>必填</span></label><textarea id="issue-action-note" name="note" rows="4" maxlength="2000" required data-nonblank data-character-count="issue-note-count" aria-describedby="issue-note-help issue-note-count" placeholder="例如：原問題仍未排除，或先前誤按結案。">{{ issue_action_note|default('') }}</textarea>
           <div class="field-meta"><span id="issue-note-help">原因與操作時間會加入處理歷程。</span><span id="issue-note-count">{{ (issue_action_note|default(''))|length }} / 2,000</span></div>
           <div class="form-actions"><button class="button button-danger" data-loading-text="正在重新開啟…">{{ icon('alert') }}儲存原因並重新開啟</button></div>

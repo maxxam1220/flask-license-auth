@@ -95,6 +95,31 @@
       button.addEventListener('click', () => window.print());
     });
 
+    // Keep the full search form usable without JavaScript; collapse only on phones.
+    document.querySelectorAll('[data-records-query]').forEach(panel => {
+      const toggle = panel.querySelector('[data-query-toggle]');
+      const fields = panel.querySelector('[data-query-fields]');
+      const action = panel.querySelector('[data-query-action]');
+      if (!toggle || !fields || !action) return;
+      const mobile = window.matchMedia('(max-width: 720px)');
+      let expandedOnMobile = false;
+      const render = () => {
+        const expanded = !mobile.matches || expandedOnMobile;
+        toggle.hidden = !mobile.matches;
+        if (!expanded && fields.contains(document.activeElement)) toggle.focus();
+        fields.hidden = !expanded;
+        toggle.setAttribute('aria-expanded', String(expanded));
+        action.textContent = expanded ? '收合查詢' : '調整查詢';
+      };
+      toggle.addEventListener('click', () => {
+        expandedOnMobile = !expandedOnMobile;
+        render();
+      });
+      if (mobile.addEventListener) mobile.addEventListener('change', render);
+      else mobile.addListener(render);
+      render();
+    });
+
     // Validate related fields without discarding input on a separate error page.
     document.querySelectorAll('form[data-date-range]').forEach(form => {
       const begin = form.elements.namedItem('date_from');

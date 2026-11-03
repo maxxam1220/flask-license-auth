@@ -163,6 +163,27 @@ def version_two(engine):
     return metadata
 
 
+@pytest.fixture
+def version_three(engine, version_two):
+    metadata = version_two
+    issues = InspectionIssue.__table__.to_metadata(metadata)
+    events = IssueEvent.__table__.to_metadata(metadata)
+    with engine.begin() as connection:
+        issues.create(connection)
+        events.create(connection)
+        connection.execute(metadata.tables["patrol_schema_versions"].insert().values(version=3))
+        connection.execute(issues.insert().values(
+            inspection_id=51, status="resolved", opened_at=datetime(2026, 11, 3, 1, 2, 3),
+            resolved_at=datetime(2026, 11, 3, 5), resolved_by_id=17,
+            resolved_by_name="Original manager", resolution_note="Existing repair"))
+        connection.execute(events.insert().values(
+            inspection_id=51, actor_id=17, actor_name="Original manager", action="resolved",
+            note="Existing repair", created_at=datetime(2026, 11, 3, 5)))
+        # The old record still says 1F; only the point's current location is known.
+        connection.execute(metadata.tables["patrol_points"].update().values(floor=14, code="4M-A01"))
+    return metadata
+
+
 def snapshot(connection, metadata):
     return {table.name: connection.execute(select(table).order_by(*table.primary_key.columns)).all()
             for table in metadata.sorted_tables}
@@ -189,6 +210,7 @@ def test_v1_rows_ids_qr_credentials_and_unrelated_data_survive(engine, legacy):
         assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
         assert connection.exec_driver_sql("SELECT category FROM patrol_points").scalar_one() == "uncategorized"
         assert connection.exec_driver_sql("SELECT category FROM patrol_point_schedules").scalar_one() == "uncategorized"
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (1, "1F-A01", "Original point")
         assert connection.exec_driver_sql("SELECT category, slot, note, is_abnormal FROM patrol_inspections").one() == ("uncategorized", "any", "", 0)
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
     assert upgrade_schema(engine) == LATEST_VERSION
@@ -379,7 +401,7 @@ def test_postgres_upgrade_uses_targeted_alter_and_preserves_unrelated_constraint
     assert all(statement.startswith("ALTER TABLE patrol_") for statement in statements)
 
 
-def test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once(engine, version_two):
+def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, version_two):
     with engine.connect() as connection:
         before = snapshot(connection, version_two)
     statements = []
@@ -389,17 +411,24 @@ def test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once(engine, v
 
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == 3
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
-    assert not any(statement.lstrip().startswith(("ALTER TABLE", "DROP TABLE", "UPDATE PATROL_")) for statement in statements)
+    changing_statements = [statement for statement in statements
+                           if statement.lstrip().startswith(("ALTER TABLE", "DROP TABLE", "UPDATE PATROL_"))]
+    assert all(statement.lstrip().startswith(("ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN FLOOR",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_CODE",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_NAME",
+                                             "UPDATE PATROL_POINT_SCHEDULES SET FLOOR=",
+                                             "UPDATE PATROL_POINT_SCHEDULES SET POINT_CODE=",
+                                             "UPDATE PATROL_POINT_SCHEDULES SET POINT_NAME=")) for statement in changing_statements)
     with engine.connect() as connection:
         after = snapshot(connection, version_two)
         for table_name in before:
             if table_name != "patrol_schema_versions":
                 assert after[table_name] == before[table_name]
         assert after["patrol_schema_versions"][0] == before["patrol_schema_versions"][0]
-        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3]
+        assert [row[0] for row in after["patrol_schema_versions"]] == [2, LATEST_VERSION]
         assert connection.execute(select(InspectionIssue.__table__)).one() == (
             51, "open", datetime(2026, 11, 3, 1, 2, 3), None, None, "", "")
         assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_issue_events").scalar_one() == 0
@@ -407,7 +436,7 @@ def test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once(engine, v
     # Version 3 does not periodically backfill flags changed behind the workflow.
     with engine.begin() as connection:
         connection.execute(Inspection.__table__.update().where(Inspection.id == 52).values(is_abnormal=True))
-    assert upgrade_schema(engine) == 3
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspection_issues").scalar_one() == 1
 
@@ -521,3 +550,59 @@ def test_existing_v3_rejects_missing_event_action_constraint(engine):
             "action VARCHAR(20) NOT NULL, note TEXT NOT NULL, created_at DATETIME NOT NULL)")
     with pytest.raises(SchemaMigrationError, match="event action validation is missing"):
         upgrade_schema(engine)
+
+
+def test_v3_location_history_upgrade_preserves_records_photos_issues_and_events(engine, version_three):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_three)
+    assert upgrade_schema(engine) == 4
+    with engine.connect() as connection:
+        after = snapshot(connection, version_three)
+        for table_name in before:
+            if table_name != "patrol_schema_versions":
+                assert after[table_name] == before[table_name]
+        assert after["patrol_schema_versions"][:2] == before["patrol_schema_versions"]
+        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3, 4]
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (14, "4M-A01", "Original point")
+        assert connection.exec_driver_sql("SELECT point_floor,point_code FROM patrol_inspections WHERE id=51").one() == (1, "1F-A01")
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+    # A restart must not rewrite the captured location to a later location.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("UPDATE patrol_points SET floor=2,code='2F-A01',name='Later name'")
+        # Simulate a previous worker finishing during rollout: these nullable
+        # fields are omitted and the application handles the documented fallback.
+        connection.execute(PointSchedule.__table__.insert().values(
+            id=93, point_id=23, effective_date=date(2026, 11, 5), frequency="daily", active=True))
+    assert upgrade_schema(engine) == 4
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules WHERE id=31").one() == (14, "4M-A01", "Original point")
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules WHERE id=93").one() == (None, None, None)
+
+
+def test_v3_upgrade_preserves_preexisting_nonnull_location_snapshot(engine, version_three):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE patrol_point_schedules ADD COLUMN floor INTEGER")
+        connection.exec_driver_sql("ALTER TABLE patrol_point_schedules ADD COLUMN point_code VARCHAR(30)")
+        connection.exec_driver_sql("ALTER TABLE patrol_point_schedules ADD COLUMN point_name VARCHAR(100)")
+        connection.exec_driver_sql("UPDATE patrol_point_schedules SET floor=1,point_code='1F-ORIGINAL',point_name='Original captured name'")
+    upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (1, "1F-ORIGINAL", "Original captured name")
+
+
+def test_v3_location_upgrade_failure_rolls_back_columns_backfill_and_version(engine, version_three, monkeypatch):
+    with engine.connect() as connection:
+        before_rows = snapshot(connection, version_three)
+        before_schema = connection.exec_driver_sql("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all()
+
+    def fail_validation(connection):
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (14, "4M-A01", "Original point")
+        raise RuntimeError("Injected v4 location migration failure")
+
+    monkeypatch.setattr(migrations, "_validate_current", fail_validation)
+    with pytest.raises(RuntimeError, match="Injected v4"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert snapshot(connection, version_three) == before_rows
+        assert connection.exec_driver_sql("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all() == before_schema
+        assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1

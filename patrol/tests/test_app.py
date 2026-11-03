@@ -114,7 +114,7 @@ def approve_browser(client, user, token=None):
 
 
 def submit(client, point):
-    return client.post(f"/c/{point.qr_token}/confirm")
+    return client.post(f"/c/{point.qr_token}/confirm", data={"frequency": point.frequency})
 
 
 def count_inspections():
@@ -515,7 +515,7 @@ def test_valid_csrf_form_allows_inspection(application, seeded):
     )
     assert token, "The rendered confirmation form must contain a CSRF token"
     response = client.post(
-        f"/c/{seeded['daily'].qr_token}/confirm", data={"csrf_token": token.group(1)}
+        f"/c/{seeded['daily'].qr_token}/confirm", data={"csrf_token": token.group(1), "frequency": seeded["daily"].frequency}
     )
     assert response.status_code in (302, 303)
     assert count_inspections() == 1

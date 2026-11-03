@@ -66,6 +66,10 @@ class PointSchedule(db.Model):
     effective_date = db.Column(db.Date, nullable=False)
     frequency = db.Column(db.String(10), nullable=False)
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
+    # Nullable so older workers can finish during a rolling deployment.
+    floor = db.Column(db.Integer)
+    point_code = db.Column(db.String(30))
+    point_name = db.Column(db.String(100))
     active = db.Column(db.Boolean, nullable=False)
 
 

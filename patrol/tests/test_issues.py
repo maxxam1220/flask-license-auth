@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import csv
 import io
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from sqlalchemy import event
@@ -265,7 +266,12 @@ def test_paginated_issues_include_every_record_and_real_open_total_without_n_plu
     _, second = reads("/issues?page=2")
     assert len(second["records"]) == 5
     assert not {row.id for row in context["records"]} & {row.id for row in second["records"]}
-    assert admin.get("/issues?page=3").status_code == 404
+    # A final row may disappear after resolution; return to the last valid page.
+    response = admin.get(f"/issues?status=open&category=uncategorized&floor=1&point_id={point_id}&page=3")
+    assert response.status_code == 302
+    target = urlsplit(response.location)
+    assert target.path == "/issues"
+    assert parse_qs(target.query) == {"status": ["open"], "category": ["uncategorized"], "floor": ["1"], "point_id": [str(point_id)], "page": ["2"]}
     assert admin.get("/issues?status=closed").status_code == 400
 
 

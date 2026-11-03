@@ -14,7 +14,7 @@ from sqlalchemy.schema import CreateColumn, CreateTable
 from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, SchemaVersion, db
 
 
-LATEST_VERSION = 3
+LATEST_VERSION = 4
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -100,6 +100,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v1_to_v2(connection)
         if current < 3:
             _upgrade_v2_to_v3(connection)
+        if current < 4:
+            _upgrade_v3_to_v4(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -151,6 +153,23 @@ def _upgrade_v2_to_v3(connection):
     )
     connection.execute(issues.insert().from_select(
         ["inspection_id", "status", "opened_at"], missing_abnormal, include_defaults=False))
+
+
+def _upgrade_v3_to_v4(connection):
+    """Begin location history without inventing values before they were recorded.
+
+    Old schedules can only be initialized from the point's current location.
+    Inspection snapshot floors, photos and issue/event history are untouched.
+    Nullable values remain compatible with an older worker's schedule inserts;
+    the application falls back to the current point values for those rows.
+    """
+    schedules = PointSchedule.__table__
+    points = Point.__table__
+    fields = (("floor", "floor"), ("point_code", "code"), ("point_name", "name"))
+    _add_missing_columns(connection, schedules.name, [schedules.c[name] for name, _ in fields])
+    for name, point_name in fields:
+        current_value = select(points.c[point_name]).where(points.c.id == schedules.c.point_id).scalar_subquery()
+        connection.execute(schedules.update().where(schedules.c[name].is_(None)).values({name: current_value}))
 
 
 def _compact(expression):
@@ -259,6 +278,8 @@ def _validate_current(connection):
     checks = inspector.get_check_constraints("patrol_points")
     if not any(check["name"] == "patrol_point_floor" for check in checks):
         raise SchemaMigrationError("Point floor validation is missing.")
+    if not {"floor", "point_code", "point_name"} <= {column["name"] for column in inspector.get_columns("patrol_point_schedules")}:
+        raise SchemaMigrationError("Point schedule location history is missing.")
     issue_checks = {check["name"] for check in inspector.get_check_constraints("patrol_inspection_issues")}
     issue_columns = {column["name"] for column in inspector.get_columns("patrol_inspection_issues")}
     if not {"resolved_at", "resolved_by_id"} <= issue_columns:

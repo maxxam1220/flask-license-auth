@@ -22,10 +22,14 @@ class PhotoValidationError(ValueError):
 
 
 def process_uploads(files):
+    uploads = [item for item in files if item and item.filename]
+    if not uploads:
+        # A no-photo check-in must not wait for somebody else's image decoding.
+        return []
     # Decode one request at a time on the 512 MB service; do not let several
     # concurrent full-resolution phone images exhaust the worker's memory.
     with _PROCESSING_SLOT:
-        return _process_uploads(files)
+        return _process_uploads(uploads)
 
 
 def _process_uploads(files):

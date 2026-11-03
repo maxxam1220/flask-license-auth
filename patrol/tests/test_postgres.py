@@ -21,11 +21,13 @@ import migrations
 from migrations import LATEST_VERSION, upgrade_schema
 from models import Inspection, InspectionPhoto
 from test_migrations import (  # Imported isolated fixtures and cross-dialect cases.
-    legacy, snapshot, version_two,
-    test_v2_upgrade_only_adds_issue_tables_and_backfills_abnormal_once as _v2_backfill_case,
+    legacy, snapshot, version_two, version_three,
+    test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once as _v2_backfill_case,
     test_v2_backfill_never_overwrites_existing_resolved_case_or_events as _v2_existing_case,
     test_issue_relationships_events_order_and_history_flag_survive_resolution_and_reopen as _issue_history_case,
     test_issue_status_and_closure_consistency_constraints as _issue_constraint_case,
+    test_v3_location_history_upgrade_preserves_records_photos_issues_and_events as _v3_location_case,
+    test_v3_upgrade_preserves_preexisting_nonnull_location_snapshot as _v3_existing_location_case,
 )
 
 
@@ -289,9 +291,35 @@ def test_postgres_concurrent_v2_upgrade_backfills_exactly_one_issue(engine, vers
 
     with ThreadPoolExecutor(max_workers=2) as workers:
         jobs = [workers.submit(run_upgrade) for _ in range(2)]
-        assert [job.result(timeout=45) for job in jobs] == [3, 3]
+        assert [job.result(timeout=45) for job in jobs] == [LATEST_VERSION, LATEST_VERSION]
     with engine.connect() as connection:
-        assert connection.exec_driver_sql("SELECT version FROM patrol_schema_versions ORDER BY version").all() == [(2,), (3,)]
+        assert connection.exec_driver_sql("SELECT version FROM patrol_schema_versions ORDER BY version").all() == [(2,), (LATEST_VERSION,)]
         assert connection.exec_driver_sql("SELECT inspection_id,status FROM patrol_inspection_issues").all() == [(51, "open")]
         assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_issue_events").scalar_one() == 0
         assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_inspections").scalar_one() == 2
+
+
+def test_postgres_v3_location_history_and_legacy_null_compatibility(engine, version_three):
+    _v3_location_case(engine, version_three)
+
+
+def test_postgres_v3_existing_location_history_is_never_overwritten(engine, version_three):
+    _v3_existing_location_case(engine, version_three)
+
+
+def test_postgres_v3_location_upgrade_failure_restores_entire_schema(engine, version_three, monkeypatch):
+    before_schema = schema_signature(engine)
+    with engine.connect() as connection:
+        before_rows = snapshot(connection, version_three)
+
+    def fail_before_commit(connection):
+        assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (14, "4M-A01", "Original point")
+        raise RuntimeError("Injected PostgreSQL v4 failure")
+
+    monkeypatch.setattr(migrations, "_validate_current", fail_before_commit)
+    with pytest.raises(RuntimeError, match="Injected PostgreSQL v4"):
+        upgrade_schema(engine)
+    assert schema_signature(engine) == before_schema
+    with engine.connect() as connection:
+        assert snapshot(connection, version_three) == before_rows
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]

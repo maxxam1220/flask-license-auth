@@ -1,10 +1,12 @@
 import io
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
 from images import MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, PhotoValidationError, process_uploads
+import images
 
 
 def upload(data, name="photo.jpg"):
@@ -58,3 +60,15 @@ def test_transparent_image_uses_white_background():
     result = process_uploads([upload(raw.getvalue())])[0]
     with Image.open(io.BytesIO(result["data"])) as decoded:
         assert min(decoded.getpixel((6, 6))) >= 250
+
+
+@pytest.mark.parametrize("placeholder", [False, True])
+def test_no_photo_checkin_does_not_wait_for_other_image_processing(placeholder):
+    files = [upload(b"", name="")] if placeholder else []
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        images._PROCESSING_SLOT.acquire()
+        try:
+            result = workers.submit(process_uploads, files)
+            assert result.result(timeout=1) == []
+        finally:
+            images._PROCESSING_SLOT.release()
