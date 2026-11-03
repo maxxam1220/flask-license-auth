@@ -167,3 +167,35 @@ def test_dashboard_creation_cutoff_preserves_schedule_start_not_due(application,
     context = contexts[-1][1]
     assert context['totals'] == {'total': 0, 'done': 0, 'pending': 0}
     assert all(slot['status'] == 'not_due' for slot in context['cards'][0]['slots'])
+
+
+@pytest.mark.parametrize('created_hour,complete_pm,expected_progress,expected_badge', [
+    (7, False, '已完成 0 / 1 次', '待巡檢'),
+    (7, True, '已完成 1 / 1 次', '已完成'),
+    (3, False, '已完成 0 / 2 次', '待巡檢'),
+])
+def test_daily2_dashboard_footer_uses_eligible_slots(application, seeded, monkeypatch,
+                                                    created_hour, complete_pm, expected_progress, expected_badge):
+    from datetime import date, timezone
+    import re
+    from test_app import approve_browser
+    from test_features import submit
+
+    point = feature_point()
+    point.created_at = datetime(2026, 11, 3, created_hour)  # Taipei 15:00 or 11:00.
+    point.schedule_start = date(2026, 11, 3)
+    db.session.commit()
+    monkeypatch.setattr(app_module, 'now_utc', lambda: datetime(2026, 11, 3, 10, tzinfo=timezone.utc))
+    client = application.test_client()
+    login(client)
+    if complete_pm:
+        approve_browser(client, seeded['inspector'])
+        assert submit(client, point, slot='pm').status_code == 302
+
+    response = client.get('/dashboard?date=2026-11-03&category=safety')
+    assert response.status_code == 200
+    cards = re.findall(r'<article class="point-card[^\"]*">(.*?)</article>', response.get_data(as_text=True), re.S)
+    assert len(cards) == 1
+    assert f'<small>{expected_progress}</small>' in cards[0]
+    badge_class = 'badge-done' if complete_pm else 'badge-todo'
+    assert f'<span class="badge {badge_class}">{expected_badge}</span>' in cards[0]
