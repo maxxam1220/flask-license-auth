@@ -1,0 +1,35 @@
+# Deploy this file as patrol/render.yaml from the patrol-v1 branch.
+# New independent service; it does not manage DB_0801 or flask-license-auth.
+# Existing DB resource: dpg-d9mnbfp42hec73e3hd6g-a (credentials supplied securely).
+services:
+  - type: web
+    name: patrol-checkin-v1
+    runtime: python
+    repo: https://github.com/maxxam1220/flask-license-auth
+    branch: patrol-v1
+    rootDir: patrol
+    region: singapore
+    plan: free
+    autoDeployTrigger: "off"
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      python -m flask --app app init-db &&
+      python -m flask --app app bootstrap-admin &&
+      exec waitress-serve --host=0.0.0.0 --port=$PORT
+      --trusted-proxy='*' --trusted-proxy-count=1
+      --trusted-proxy-headers='x-forwarded-for x-forwarded-proto'
+      app:application
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEMO_MODE
+        value: "false"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: INITIAL_ADMIN_USERNAME
+        value: admin
+      - key: INITIAL_ADMIN_PASSWORD_HASH
+        sync: false

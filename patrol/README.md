@@ -1,0 +1,150 @@
+# 廠區巡檢打卡 v1
+
+五層樓巡檢網站：每個點使用獨立 QR Code，員工以手機相機掃碼、確認送出，主管用手機或電腦查閱每日與每週紀錄。第一版使用手機網頁，不需安裝 App。
+
+## 第一版使用方式
+
+1. 管理員建立人員帳號與巡檢點，例如 `1F-A01`、`1F-A02`、`2F-A01`，並指定每日或每週巡檢。
+2. 網站正式網址確定後，在點位管理列印 QR Code，貼到對應位置。每張標籤均有點位編號與名稱。
+3. 員工首次在手機登入，申請綁定目前的瀏覽器，由管理員核准。每個帳號同時只允許一個已核准瀏覽器。
+4. 日常巡檢直接開手機相機掃碼，點出現的連結，確認人員與點位後按「確認打卡」。成功頁顯示伺服器記錄的時間。
+5. 員工查詢自己的明細；主管查詢全體紀錄，可依日期、樓層與人員篩選，並匯出 CSV 供 Excel 開啟。
+
+請使用同一個 Safari 或 Chrome 的一般瀏覽模式。LINE 內建瀏覽器、另一個瀏覽器或無痕模式可能使用不同的認證資料，不能假設會沿用綁定。第一次登入、登入到期或管理員重設密碼後，需要重新驗證帳號。
+
+## 巡檢規則
+
+- 樓層為 1F～5F，每個點有唯一編號、名稱、頻率與 QR 網址。
+- 以 `Asia/Taipei` 計算日期。每日為台北時間 00:00 至下一日 00:00；每週為週一 00:00 至下週一 00:00。
+- 第一版採「全廠點位完成制」：同一個點在指定日／週內，有一位員工完成就算完成，不要求每位員工各巡一次。
+- 同點、同頻率、同一週期只保留一份完成紀錄。重複按下確認或另一位員工再次送出，應顯示該週期已完成，不新增重複紀錄。
+- 掃碼或開啟確認頁不會自動打卡；按下確認且資料庫儲存成功才算完成。時間由伺服器記錄，不能由手機自行指定。
+- 第一版必須連線，不支援離線暫存後補送。斷網時不能把畫面預覽視為打卡成功。
+- 已完成紀錄保留當時點位資訊。停用點位或人員會停止後續打卡；既有紀錄應保留查詢。
+- 更換 QR Code 後，舊網址會失效，必須重新列印並替換現場標籤。不要把管理員登入網址印成巡檢 QR Code。
+
+## 瀏覽器綁定的範圍
+
+這是「帳號＋已核准瀏覽器」管理，並非 IMEI／MAC 的手機硬體鎖。伺服器檢查登入帳號和有效綁定，只有密碼而沒有已核准瀏覽器認證資料時，不能直接打卡。
+
+換手機、換瀏覽器、清除網站資料或認證資料遺失後，需要重新申請。管理員核准新的綁定時，舊綁定會撤銷；手機遺失時應立即撤銷。管理員核准前應確認員工身分及申請中的裝置。
+
+固定 QR Code 可拍照、轉傳或收藏，已核准手機仍可能在其他地點開啟相同網址。借出手機或複製認證資料也不在這種機制的保證範圍內。本版可管理誰使用哪個瀏覽器提交，不能證明本人確實在現場。
+
+## 本機啟動（Windows）
+
+本次交付已建立獨立示範資料。雙擊 `preview.cmd` 啟動本機示範版，再開啟 `http://127.0.0.1:5087`；帳號資訊保存在本機 `instance/preview-access.txt`，啟動視窗也會顯示。示範版使用 `instance/preview.sqlite3`，包含五層樓 15 個示範點位，與下述空白正式設定版的本機資料庫分開。關閉啟動視窗或按 Ctrl+C 即可停止。
+
+示範點位名稱和紀錄僅供試用，尚未代表廠區實際配置。不要將示範帳號或資料庫部署到 Render。
+
+需要 Python 3.12 以上。第一次啟動會建立 `.venv`、安裝相依套件、建立本機資料表，並在沒有管理員時要求輸入管理員密碼，不提供固定預設密碼。
+
+```powershell
+Set-Location C:\build\QRCODE
+.\run_local.ps1
+```
+
+如目前 PowerShell 的執行原則不允許腳本，可改用以下逐步指令，不需變更系統執行原則：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$env:APP_ENV = 'development'
+$env:DEMO_MODE = 'false'
+$env:DATABASE_URL = 'sqlite:///patrol.sqlite3'
+$env:PUBLIC_BASE_URL = 'http://127.0.0.1:5087'
+.\.venv\Scripts\python.exe -m flask --app app init-db
+.\.venv\Scripts\python.exe -m flask --app app create-admin --username admin --name 管理員
+.\.venv\Scripts\python.exe -m waitress --host=127.0.0.1 --port=5087 app:application
+```
+
+本機網址是 <http://127.0.0.1:5087>。這只供這台電腦使用；手機的 `127.0.0.1` 指的是手機自己，因此不能拿本機預覽 QR Code 當作現場標籤。正式手機試用需部署到可連線的 HTTPS 網址，然後重新列印 QR Code。
+
+`run_local.ps1` 會明確選擇本機 SQLite，避免沿用目前終端中的遠端資料庫設定。啟動器使用 `instance/patrol.sqlite3`；執行結束後還原它修改過的程序環境變數。使用 `-Port 5090` 可換連接埠，使用 `-Install` 可重新安裝相依套件。
+
+`.env.example` 是設定說明，不會自動載入。正式環境變數請在 Render 設定；本機手動執行時使用 PowerShell 的 `$env:名稱`。
+
+## 帳號與日常管理
+
+管理員可新增員工、停用帳號、重設密碼、審核或撤銷瀏覽器綁定、管理點位、列印 QR Code 以及查詢全體紀錄。員工只能查看自己的紀錄，打卡還需有效的瀏覽器綁定。
+
+請為每位員工建立獨立帳號，不共用管理員帳號。新員工依畫面要求變更密碼。主管可在其他已登入的電腦查閱資料，但這不會自動授予那台電腦打卡權限。
+
+本機建立管理員可使用互動式 CLI：
+
+```powershell
+.\.venv\Scripts\python.exe -m flask --app app create-admin --username admin --name 管理員
+```
+
+此指令使用當前設定的資料庫；操作前先確認目標環境。密碼由互動提示輸入，不要放到指令列、Git 或聊天紀錄。Render 的首次管理員改由下述一次性初始化流程建立，無須將資料庫連線字串帶到本機。
+
+## Render 部署準備
+
+本專案提供 `render.yaml`，建立獨立的 `patrol-checkin-v1` Python Web Service，地區為 Singapore。它不接管既有的 `flask-license-auth`，也不建立、變更或刪除既有 `DB_0801` 資料庫服務。
+
+部署來源已指定為 `https://github.com/maxxam1220/flask-license-auth` 的 **`patrol-v1` 分支**。本站程式放在儲存庫的 `patrol/` 資料夾，Blueprint 路徑為 `patrol/render.yaml`，新服務的 Root Directory 必須是 `patrol`。既有授權網站仍使用它原有的分支及根目錄；此次不修改根目錄程式或合併至 `main`，避免觸發既有服務自動部署。
+
+Render 的 build/start 命令會在 `patrol/` 內執行，所以命令仍使用 `requirements.txt` 與 `app:application`，不要再次加 `patrol/` 前綴。瀏覽器網址也不需要 `/patrol` 路徑。完整 Dashboard 欄位及初始化步驟見 [monorepo 部署操作](deploy/render-monorepo.md)。
+
+目前設定為免費 Web Service，適合先試用；閒置後休眠與喚醒延遲仍會影響掃碼速度，不能視為正式常駐服務。若正式營運不能接受等待，再選擇付費常駐方案。本檔沒有建立任何付費資源。
+
+部署前需要把原始碼推送到上述儲存庫的 `patrol-v1` 分支，之後以該分支建立新 Web Service 或選擇 `patrol/render.yaml` 建立 Blueprint。不要把 `instance/`、`.env`、密碼、SQLite 或測試輸出推送到遠端。
+
+| 環境變數 | 設定方式 |
+| --- | --- |
+| `APP_ENV` | Blueprint 設為 `production` |
+| `DEMO_MODE` | 正式環境固定為 `false` |
+| `SECRET_KEY` | Blueprint 為新服務產生隨機值；日後保持固定，勿每次部署重設 |
+| `DATABASE_URL` | 在 Render 輸入現有 PostgreSQL 的實際連線字串，不寫進原始碼 |
+| `INITIAL_ADMIN_USERNAME` | 首次管理員帳號，預設 `admin` |
+| `INITIAL_ADMIN_PASSWORD_HASH` | 首次密碼的 scrypt 雜湊，安全填入 Render；不傳送明文密碼、不寫入原始碼 |
+| `PUBLIC_BASE_URL` | 選填；未設定時使用 Render 提供的 `RENDER_EXTERNAL_URL`。使用自訂網域時才指定該 HTTPS 根網址，不加 `/login` 等路徑 |
+
+`sync: false` 只在首次建立 Blueprint 時提示輸入；之後新增或更改值，需在服務的 Environment 設定中處理並重新部署。正式環境不允許 SQLite 或 HTTP 網址，瀏覽器認證使用 HTTPS 的 Secure Cookie。
+
+新服務應與 `DB_0801`（資源 ID：`dpg-d9mnbfp42hec73e3hd6g-a`）位於同一工作區、Singapore 地區，並使用該資料庫 Connect > Internal 的實際連線字串。若設有環境網路隔離，也需確認允許相互連線。`DB_0801` 的容量、備份、連線額度與資料庫帳號權限仍須在正式上線前確認。最好給巡檢專用資料庫帳號，只授予所需資料表的權限；`patrol_` 表名前綴可避免一般命名衝突，但前綴本身不是權限隔離。
+
+啟動命令先執行 `init-db`，只建立不存在的 `patrol_` 資料表，再執行 `bootstrap-admin` 並啟動 Waitress。`init-db` 不是完整版本遷移工具，未來調整既有欄位需另寫遷移及先備份。這份設定沒有 `databases:` 區塊，不會以 Blueprint 管理既有資料庫。
+
+Render 專用啟動命令會信任最後一層反向代理的 `X-Forwarded-For` 與 `X-Forwarded-Proto`，保留用戶端 IP 與 HTTPS 資訊。這依賴 Render 的負載平衡器；不要把相同的 wildcard proxy 設定套用到可直接接收不可信連線的本機或其他主機。
+
+免費 Render 服務無 Shell，因此使用一次性 `bootstrap-admin`。它只在 `patrol_users` 尚無任何管理員時，使用 `INITIAL_ADMIN_USERNAME` 與 `INITIAL_ADMIN_PASSWORD_HASH` 建立管理員；首次登入必須變更密碼。只要已有管理員，就跳過且不重設既有密碼。首次密碼由部署者安全產生並交付使用者，Render 只接收 scrypt 雜湊。成功初始化並確認管理員可用後，可移除 `INITIAL_ADMIN_PASSWORD_HASH`；未來部署因已有管理員而不需再建立。不可使用本機示範帳號作為正式管理員。
+
+部署步驟：
+
+1. 確認 Git 儲存庫與 Render 工作區，將已驗證原始碼放到 `patrol/` 並推送至 `patrol-v1`；不修改既有根目錄程式或 `main`。
+2. 若已安裝 Render CLI，於 monorepo 根目錄執行 `render blueprints validate patrol/render.yaml`；於本機獨立專案則用 `render blueprints validate render.yaml`。無 CLI 時，可用目前官方 JSON Schema 檢查結構，再由 Dashboard 驗證。
+3. 建立新 Web Service 或以 `patrol/render.yaml` 建立 Blueprint，選取 `patrol-v1`、Root Directory `patrol`，填妥 `DATABASE_URL` 與 `INITIAL_ADMIN_PASSWORD_HASH`，檢查服務名稱、方案與地區後套用。一般 `onrender.com` 網址不需另填 `PUBLIC_BASE_URL`。
+4. 檢查部署成功與 `/healthz`，以首次管理員登入並變更密碼，再建立真實人員及點位。
+5. 使用一支 iPhone／Android 實際掃碼、申請綁定、核准並打卡，確認手機與電腦能查到同一筆紀錄。
+6. 最後才列印五層樓的正式 QR Code。現有 `autoDeployTrigger: off`，後續更新需手動部署。
+
+## 資料保存與備份
+
+本機使用 SQLite，正式環境使用 PostgreSQL，兩者資料互不自動同步。Render 的一般檔案空間不能保存正式 SQLite 資料庫；重啟／重新部署會遺失本機檔案變更。
+
+員工姓名、帳號、打卡紀錄與綁定審核資料屬內部資料，應依工作權限開放。CSV 匯出檔由下載者負責保存，不要公開分享。
+
+本機備份應在停止服務後複製完整 `instance/` 到受控位置。正式環境應確認 Render PostgreSQL 備份方案，並定期驗證可還原；CSV 報表不包含帳號、密碼雜湊與綁定資料，不能代替完整資料庫備份。需要調整資料留存年限時，應先制定政策，再實作經授權的清理流程。
+
+## 驗證與開發
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+測試使用隔離的資料庫，涵蓋權限、瀏覽器綁定、QR Code、重複打卡與台北日／週邊界等流程。本機通過不代表已驗證生產 PostgreSQL、Render 部署、真實員工手機、現場網路或紙本 QR Code。
+
+LINE 群組回報保留為後續階段，本版不會發送 LINE 訊息。
+
+## 官方部署參考
+
+- [Render Blueprint YAML](https://render.com/docs/blueprint-spec)
+- [Render 環境變數與密碼](https://render.com/docs/configure-environment-variables)
+- [Render 免費方案限制](https://render.com/docs/free)
+- [Render Python 版本設定](https://render.com/docs/python-version)
+- [Render monorepo 支援](https://render.com/docs/monorepo-support)
+- [Render 私有網路](https://render.com/docs/private-network)
+
+部署設定依 2026-11-03 可讀取的官方規格準備；正式套用前仍需確認目標帳號與服務設定。

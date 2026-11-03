@@ -1,0 +1,31 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+instance/
+*.key
+*.pem
+
+# Python environments and generated data
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+
+# Review artifacts and editor files
+output/
+.validation/
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
