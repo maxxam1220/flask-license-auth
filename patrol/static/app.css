@@ -17,4 +17,153 @@ input:not([type=checkbox]),select{display:block;min-height:41px;padding:9px 11px
 @media(max-width:720px){input:not([type=checkbox]),select,.filter-form input,.filter-form select,.form-grid input,.form-grid select,.password-reset-form input{font-size:16px;min-height:44px}.date-filter input{font-size:14px;min-height:39px;width:150px}.stat-icon{display:none}.stat-label{font-size:11px}.stat-value small{font-size:10px}.page-heading p{font-size:12px}.point-code,.point-card .point-code{font-size:11px}.badge,.point-card .badge{font-size:10px}.point-meta{font-size:11px}.point-card-bottom{font-size:11px}.point-card-bottom small{font-size:10px}.point-card h3{font-size:15px}.point-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.point-card-top{align-items:flex-start}.point-card-bottom{align-items:flex-start}.point-card-bottom>span:last-child{min-width:0;overflow-wrap:anywhere}.point-card-bottom small{line-height:1.7}.point-meta .icon{display:none}.activity-info strong,.activity-info strong span,.activity-info small,.activity-row time{font-size:11px}.activity-row time{width:100%;padding-left:37px;margin-top:-3px}.mobile-nav>a{font-size:11px}.notice-strip strong{font-size:12px}.notice-strip small{font-size:11px}.section-heading p{font-size:11px}.section-heading h2{font-size:16px}.count-label{font-size:11px}.table-scroll td,.table-scroll td:before{font-size:12px}.form-grid label,.filter-form>label,.password-reset-form label{font-size:12px}.form-grid label small,.fine-note,.checkin-footnote,.checkin-outside-note{font-size:11px}.compact-disclosure>summary{font-size:12px}.management-identity h3{font-size:15px}.checkbox-label{font-size:12px}.button-small{min-height:36px}.checkin-details>div,.success-receipt>div,.success-receipt strong{font-size:13px}.checkin-topline{font-size:12px}.checkin-card .button-large{min-height:54px}.checkin-card>.eyebrow{font-size:11px}.login-footnote,.login-help p{font-size:11px}.back-link{font-size:12px}}
 @media(max-width:390px){.point-grid{grid-template-columns:1fr}.point-card-top{align-items:center}.point-card{padding:17px 17px 0}.point-card h3{font-size:16px}.point-card-bottom{align-items:center}.point-card-bottom small{display:inline;margin-left:9px;font-size:11px}.point-code,.point-card .point-code{font-size:12px}.point-card .badge{font-size:10px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
-@media print{body,.app-content,.main-content{background:#fff;margin:0;padding:0;max-width:none;min-height:0}.sidebar,.mobile-header,.mobile-nav,.no-print,.page-footer,.demo-banner,.skip-link,.flash-stack{display:none!important}.qr-sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:12mm;margin:0}.qr-label{border:1px solid #7b8874;padding:7mm;border-radius:3mm;box-shadow:none;break-inside:avoid;page-break-inside:avoid}.qr-label h2{font-size:25pt;color:#000}.qr-label>p{font-size:14pt;color:#000}.qr-label img{width:48mm;height:48mm;margin:5mm auto}.qr-label-header{font-size:9pt}.qr-label-bottom{font-size:8pt}.qr-instruction{font-size:10pt;color:#000}.qr-floor{font-size:11pt}@page{size:A4;margin:12mm}}
+
+/* Refinement: readable secondary text, resilient long content, and touch targets. */
+:root { --muted: #617365; --amber: #8a5716; --danger: #9c3535; }
+.page-heading > div, .section-heading > div, .management-identity > div,
+.account-name, .activity-info, .checkin-details strong { min-width: 0; }
+h1, h2, h3, .management-identity, .center-copy, .checkin-location,
+.account-name, .mobile-account, .activity-info strong, .table-scroll td,
+.qr-source, .qr-label > p, .checkin-details strong { overflow-wrap: anywhere; }
+.stat-label, .stat-value small, .section-heading p, .count-label,
+.point-meta, .point-card-bottom small, .activity-info small,
+.activity-info strong span, .activity-row time, .page-footer,
+.filter-form > label, .cell-hint, .table-scroll td:before,
+.checkin-footnote, .checkin-outside-note, .checkin-details > div > span,
+.success-receipt > div > span, .fine-note, .login-footnote,
+.login-help p, .steps p, .qr-label-bottom, .floor-caption,
+.floor-ratio, .floor-number small, .form-stack label small,
+.form-grid label small, .danger-zone small { color: var(--muted); }
+.badge-neutral, .badge-revoked, .badge-rejected, .badge-none,
+.badge-not_due { color: #5b6c60; }
+.point-meta span { color: #788677; }
+.notice-strip { background: #edf3e7; color: #425c3c; }
+.notice-strip small, .callout p, .positive-callout p { color: #58714e; }
+.steps strong, .compact-disclosure > summary, .floor-ratio strong { color: #48613f; }
+.floor-caption { font-size: 11px; }
+.floor-ratio { font-size: 12px; }
+.floor-number small { font-size: 13px; }
+.floor-scroll-hint { display: none; }
+
+.checkin-location, .qr-label > p, .qr-label-header { color: #617854; }
+.sidebar-label, .sidebar-note small { color: #b0c3b7; }
+.mobile-nav > a, .mobile-account, .you-label, th,
+.checkin-result-note p { color: var(--muted); }
+.back-link { color: var(--teal); }
+.checkin-result-note { color: #4d733e; }
+.danger-zone strong { color: #805a40; }
+.steps li > span { color: #4e6b39; }
+input::placeholder { color: #687a6d; opacity: 1; }
+.demo-banner { color: #4e603e; }
+th { font-size: 12px; }
+.checkin-details strong, .success-receipt strong { color: #45623d; }
+.checkin-topline, .checkin-card > .eyebrow { color: #5f7952; }
+.checkin-card > .callout { margin-top: 18px; }
+.checkin-card > .callout > div { min-width: 0; }
+.center-copy h3 { overflow-wrap: anywhere; }
+.login-card label, .login-card > .eyebrow { color: #566e49; }
+.login-intro > p, .intro-footer { color: #b0c3b7; }
+.login-intro .brand small { opacity: .85; }
+.login-help { color: #617c52; }
+.qr-label h2, .point-code { overflow-wrap: anywhere; }
+.qr-source { font-size: 12px; line-height: 1.8; }
+.qr-source span { color: #4b6650; }
+.disclosure > summary { min-height: 30px; }
+.button-small, .text-button { min-height: 36px; }
+.text-button { display: inline-flex; align-items: center; }
+.form-actions { flex-wrap: wrap; }
+.dialog-open { overflow: hidden; }
+.confirm-dialog:not([open]) { display: none; }
+.confirm-dialog { width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 28px; border: 1px solid #dce5d7; border-radius: 15px; background: #fff; color: var(--ink); box-shadow: 0 24px 100px #0d281e40; }
+.confirm-dialog::backdrop { background: #102d3990; }
+.confirm-dialog-icon { display: grid; place-items: center; width: 45px; height: 45px; margin-bottom: 19px; border-radius: 12px; color: var(--teal); background: var(--teal-light); }
+.confirm-dialog-icon .icon { width: 23px; height: 23px; }
+.confirm-dialog h2 { font-size: 21px; }
+.confirm-dialog p { font-size: 14px; color: #617365; margin-top: 12px; line-height: 1.85; overflow-wrap: anywhere; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
+.dialog-actions .button { min-height: 44px; min-width: 95px; font-size: 13px; }
+form[aria-busy="true"] { cursor: progress; }
+@media (max-width: 720px) {
+  .main-content { padding-bottom: 100px; }
+  .page-heading p, .section-heading p, .stat-label, .stat-value small,
+  .count-label, .point-meta, .point-card-bottom, .point-card-bottom small,
+  .activity-info strong, .activity-info strong span, .activity-info small,
+  .activity-row time, .notice-strip strong, .notice-strip small,
+  .center-copy p, .steps p, .steps strong, .fine-note,
+  .form-grid label, .form-stack label, .form-grid label small,
+  .form-stack label small, .filter-form > label, .checkbox-label,
+  .password-reset-form label, .checkin-footnote, .checkin-outside-note,
+  .login-help p, .login-footnote, .checkin-topline, .checkin-card > .eyebrow,
+  .callout, .callout strong, .callout p, .back-link, .qr-source,
+  .table-scroll td, .table-scroll td:before, .cell-hint,
+  .danger-zone strong, .danger-zone small { font-size: 13px; }
+  .stat-label { line-height: 1.5; min-height: 3em; display: block; }
+  .stat-card { padding: 15px 10px; }
+  .stat-value small { font-size: 11px; }
+  .page-heading > .button { font-size: 12px; min-height: 44px; white-space: normal; text-align: center; padding-inline: 10px; }
+  .date-filter { flex: 1; justify-content: flex-end; gap: 8px; }
+  .date-filter input { font-size: 16px; min-height: 44px; width: 164px; }
+  .date-filter .button-small { min-height: 44px; font-size: 13px; padding-inline: 13px; }
+  .segmented { width: 100%; }
+  .segmented > a { flex: 1; text-align: center; min-height: 42px; padding: 11px 14px; font-size: 13px; }
+  .floor-scroll-hint { display: block; color: var(--muted); font-size: 12px; margin: -4px 0 13px; }
+  .floor-grid { grid-template-columns: repeat(5, minmax(114px, 1fr)); gap: 9px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; overscroll-behavior-inline: contain; scrollbar-width: thin; scrollbar-color: #bdceba #f4f7ef; }
+  .floor-card { padding: 15px 12px 12px; scroll-snap-align: start; }
+  .floor-card-top { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .floor-number { font-size: 26px; }
+  .floor-number small, .floor-ratio { font-size: 12px; }
+  .floor-card progress { height: 4px; margin-bottom: 12px; }
+  .floor-caption { font-size: 12px; gap: 5px; }
+  .floor-caption .icon { width: 12px; height: 12px; margin: 0; }
+  .point-grid { grid-template-columns: 1fr; }
+  .point-card { padding: 19px 18px 0; }
+  .point-card h3 { font-size: 17px; }
+  .point-code, .point-card .point-code { font-size: 13px; }
+  .badge, .point-card .badge { font-size: 12px; padding: 4px 8px; }
+  .point-card-top { align-items: center; }
+  .point-card-bottom { align-items: center; }
+  .point-card-bottom small { display: block; margin-left: 0; }
+  .point-meta .icon { display: inline-block; width: 14px; height: 14px; }
+  .activity-row { row-gap: 8px; }
+  .activity-row time { margin-top: 0; }
+  .mobile-nav > a { font-size: 12px; min-height: 48px; }
+  .mobile-menu > summary { min-width: 44px; min-height: 44px; }
+  .mobile-menu nav > a, .mobile-menu nav > form { font-size: 14px; min-height: 44px; }
+  .mobile-menu .text-button { font-size: 14px; }
+  .mobile-account { font-size: 12px; }
+  .management-top { align-items: stretch; flex-direction: column; }
+  .management-meta, .user-management .management-meta { margin-left: 0; max-width: none; justify-content: flex-start; gap: 8px; }
+  .management-identity h3 { font-size: 16px; }
+  .management-identity .muted { font-size: 13px; }
+  .management-meta > .button, .button-small, .text-button,
+  .password-reset-form .button, .danger-zone .button { min-height: 44px; font-size: 13px; padding: 9px 12px; }
+  .management-meta > .button .icon { width: 16px; height: 16px; }
+  .compact-disclosure > summary { font-size: 13px; min-height: 40px; }
+  .create-disclosure > summary { min-height: 40px; font-size: 14px; }
+  .table-actions { flex-wrap: wrap; gap: 8px; }
+  .table-scroll td { min-width: 0; gap: 14px; }
+  .table-scroll td > strong, .table-scroll td > span { min-width: 0; overflow-wrap: anywhere; }
+  .table-scroll td:before { flex: 0 0 82px; }
+  .table-scroll td:has(.cell-hint) { row-gap: 5px; }
+  .table-scroll .cell-hint { margin-top: 0; }
+  .danger-zone { flex-wrap: wrap; }
+  .danger-zone > div { flex: 1 1 190px; }
+  .password-reset-form { flex-wrap: wrap; }
+  .password-reset-form > label { flex-basis: 100%; max-width: none; }
+  .success-receipt > div { flex-wrap: wrap; row-gap: 5px; }
+  .success-receipt strong { font-size: 13px; }
+  .checkin-details strong { text-align: right; }
+  .checkin-result-note strong, .checkin-result-note p { font-size: 13px; }
+  .page-footer { font-size: 11px; flex-wrap: wrap; gap: 7px; }
+  .confirm-dialog { padding: 24px; }
+  .dialog-actions .button { flex: 1; font-size: 14px; }
+}
+
+/* Full-width date fields keep the complete date readable on small phones. */
+@media (max-width: 480px) {
+  .filter-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .filter-form > label { grid-column: 1 / -1; }
+  .filter-form > .button, .filter-form > .text-link { min-height: 44px; }
+}
+
+@media print{body,.app-content,.main-content{background:#fff;margin:0;padding:0;max-width:none;min-height:0}.sidebar,.mobile-header,.mobile-nav,.no-print,.page-footer,.demo-banner,.skip-link,.flash-stack,.confirm-dialog,.floor-scroll-hint{display:none!important}.qr-sheet{display:grid;grid-template-columns:repeat(2,1fr);gap:12mm;margin:0}.qr-label{border:1px solid #7b8874;padding:7mm;border-radius:3mm;box-shadow:none;break-inside:avoid;page-break-inside:avoid}.qr-label h2{font-size:25pt;color:#000}.qr-label>p{font-size:14pt;color:#000}.qr-label img{width:48mm;height:48mm;margin:5mm auto}.qr-label-header{font-size:9pt}.qr-label-bottom{font-size:8pt}.qr-instruction{font-size:10pt;color:#000}.qr-floor{font-size:11pt}@page{size:A4;margin:12mm}}

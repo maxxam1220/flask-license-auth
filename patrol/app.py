@@ -19,6 +19,8 @@ import qrcode
 import qrcode.image.svg
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from models import AuditLog, DeviceBinding, Inspection, LoginAttempt, Point, PointSchedule, User, db
@@ -136,6 +138,10 @@ def create_app(config=None):
     @app.before_request
     def load_user_and_protect():
         g.user = None
+        # PostgreSQL Integer primary keys cannot represent arbitrary URL integers.
+        for name, value in (request.view_args or {}).items():
+            if name.endswith("_id") and not 1 <= value <= 2147483647:
+                abort(404, description="找不到指定的資料。")
         if session.get("user_id"):
             user = db.session.get(User, session["user_id"])
             if user and user.active and session.get("auth_version") == user.auth_version:
@@ -145,10 +151,12 @@ def create_app(config=None):
         if request.method in ("POST", "PUT", "PATCH", "DELETE") and app.config["CSRF_ENABLED"]:
             expected = session.get("csrf_token", "")
             received = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
-            if not expected or not received or not hmac.compare_digest(expected, received):
+            if not expected or not received or not received.isascii() or not hmac.compare_digest(expected, received):
                 abort(400, description="表單已過期，請重新載入頁面後再試。")
         if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz"):
-            return redirect(url_for("change_password"))
+            if request.method == "GET" and request.endpoint not in (None, "login"):
+                session["after_password"] = safe_next(request.full_path.rstrip("?"))
+            return redirect(url_for("change_password", next=safe_next(session.get("after_password"))))
 
     @app.after_request
     def secure_response(response):
@@ -167,7 +175,12 @@ def create_app(config=None):
         @wraps(fn)
         def wrapped(*args, **kwargs):
             if not g.user:
-                return redirect(url_for("login", next=request.full_path.rstrip("?")))
+                destination = request.full_path.rstrip("?")
+                if request.endpoint == "confirm_checkin":
+                    destination = url_for("checkin", token=kwargs["token"])
+                elif request.endpoint in ("request_device", "revoke_own_device"):
+                    destination = url_for("devices")
+                return redirect(url_for("login", next=safe_next(destination)))
             return fn(*args, **kwargs)
         return wrapped
 
@@ -184,7 +197,16 @@ def create_app(config=None):
         db.session.add(AuditLog(actor_id=g.user.id if g.get("user") else None, action=action, target=str(target), detail=detail))
 
     def lock_user(user_id):
-        return db.session.scalar(select(User).where(User.id == user_id).with_for_update().execution_options(populate_existing=True))
+        # FOR NO KEY UPDATE still serializes account changes, while allowing
+        # foreign-key KEY SHARE checks from inspection/audit inserts.  Using
+        # FOR UPDATE here can deadlock with a point update in another request.
+        return db.session.scalar(select(User).where(User.id == user_id).with_for_update(key_share=True).execution_options(populate_existing=True))
+
+    def lock_current_user(allow_password_change=False):
+        user = lock_user(g.user.id)
+        if not user or not user.active or user.auth_version != session.get("auth_version") or (user.must_change_password and not allow_password_change):
+            abort(403, description="帳號狀態已更新，請重新登入。")
+        return user
 
     def device_binding():
         token = request.cookies.get(DEVICE_COOKIE, "")
@@ -208,7 +230,39 @@ def create_app(config=None):
             abort(400, description="日期格式不正確。")
 
     def safe_next(value):
-        return value if value and value.startswith("/") and not value.startswith("//") and "\\" not in value and not any(ord(c) < 32 for c in value) else url_for("dashboard")
+        fallback = url_for("dashboard")
+        if not value or len(value) > 2048 or not value.startswith("/") or value.startswith("//") or "\\" in value or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            return fallback
+        try:
+            app.url_map.bind_to_environ(request.environ).match(urlsplit(value).path, method="GET")
+        except (HTTPException, ValueError):
+            return fallback
+        return value
+
+    def binding_destination():
+        """Keep a scanned point through approval, without trusting a return URL."""
+        value = request.form.get("next") if request.method == "POST" else request.args.get("next")
+        if value is None:
+            value = session.get("after_binding", "")
+        match = re.fullmatch(r"/c/([A-Za-z0-9_-]{1,100})", value or "")
+        point = db.session.scalar(select(Point).where(Point.qr_token == match.group(1))) if match else None
+        if point and point.active and point.schedule_start <= local_dt(now_utc()).date():
+            target = url_for("checkin", token=point.qr_token)
+            session["after_binding"] = target
+            return target
+        session.pop("after_binding", None)
+        return ""
+
+    def devices_url(destination):
+        return url_for("devices", next=destination) if destination else url_for("devices")
+
+    def parse_id(value):
+        if not re.fullmatch(r"[0-9]{1,10}", value) or not 1 <= int(value) <= 2147483647:
+            abort(400, description="資料編號格式不正確。")
+        return int(value)
+
+    def valid_label(value, limit=100):
+        return bool(value) and len(value) <= limit and not any(ord(c) < 32 or ord(c) == 127 for c in value)
 
     @app.get("/healthz")
     def healthz():
@@ -222,7 +276,7 @@ def create_app(config=None):
     @app.route("/login", methods=["GET", "POST"])
     def login():
         if request.method == "POST":
-            username = request.form.get("username", "").strip().lower()[:80]
+            username = request.form.get("username", "").strip().lower()
             # Scope the limit to the account and source, so a shared factory
             # connection does not lock out all employees after one user's errors.
             attempt_key = hashlib.sha256((username + "|" + (request.remote_addr or "unknown")).encode()).hexdigest()
@@ -230,7 +284,7 @@ def create_app(config=None):
             attempts = db.session.scalar(select(db.func.count(LoginAttempt.id)).where(LoginAttempt.key == attempt_key, LoginAttempt.created_at >= cutoff))
             if attempts >= 15:
                 abort(429, description="登入嘗試過多，請於 15 分鐘後再試。")
-            user = db.session.scalar(select(User).where(User.username == username))
+            user = db.session.scalar(select(User).where(User.username == username)) if re.fullmatch(r"[a-z0-9_.-]{3,80}", username) else None
             if not user or not user.active or not user.check_password(request.form.get("password", "")):
                 db.session.execute(db.delete(LoginAttempt).where(LoginAttempt.created_at < cutoff))
                 db.session.add(LoginAttempt(key=attempt_key, created_at=naive_utc()))
@@ -247,7 +301,7 @@ def create_app(config=None):
                     session["after_password"] = next_url
                     return redirect(url_for("change_password"))
                 return redirect(next_url)
-        return render_template("login.html", next=safe_next(request.args.get("next")))
+        return render_template("login.html", next=safe_next(request.form.get("next") or request.args.get("next")))
 
     @app.post("/logout")
     def logout():
@@ -257,8 +311,9 @@ def create_app(config=None):
     @app.route("/change-password", methods=["GET", "POST"])
     @login_required
     def change_password():
+        destination = safe_next(request.form.get("next") or request.args.get("next") or session.get("after_password"))
         if request.method == "POST":
-            lock_user(g.user.id)
+            lock_current_user(allow_password_change=True)
             password = request.form.get("new_password", "")
             if not g.user.check_password(request.form.get("current_password", "")):
                 flash("目前密碼不正確。", "error")
@@ -274,12 +329,12 @@ def create_app(config=None):
                 g.user.must_change_password = False
                 audit("change_password", g.user.id)
                 db.session.commit()
-                after = safe_next(session.pop("after_password", None))
+                session.pop("after_password", None)
                 session["auth_version"] = g.user.auth_version
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 flash("密碼已更新。", "success")
-                return redirect(after)
-        return render_template("change_password.html")
+                return redirect(destination)
+        return render_template("change_password.html", next_url=destination)
 
     @app.get("/dashboard")
     @login_required
@@ -292,7 +347,7 @@ def create_app(config=None):
         monday = selected - timedelta(days=selected.weekday())
         period_day = monday if view == "weekly" else selected
         reference_day = min(monday + timedelta(days=6), today) if view == "weekly" else selected
-        points = db.session.scalars(select(Point).order_by(Point.floor, Point.code)).all()
+        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(Point.floor, Point.code)).all()
         floor_filter = request.args.get("floor", "")
         if floor_filter and floor_filter not in ("1", "2", "3", "4", "5"):
             abort(400)
@@ -306,7 +361,7 @@ def create_app(config=None):
             active = schedule.active if schedule else point.active
             if (frequency != view or not active) and not record:
                 continue
-            due = selected <= today and point.schedule_start <= reference_day
+            due = period_day <= today and point.schedule_start <= reference_day
             status = "done" if record else ("pending" if due else "not_due")
             displayed_point = SimpleNamespace(id=point.id, code=record.point_code if record else point.code,
                                              name=record.point_name if record else point.name,
@@ -326,6 +381,8 @@ def create_app(config=None):
         return render_template("dashboard.html", selected_date=selected, view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done}, device_state=device_status(), recent=db.session.scalars(recent_query).all(), week_label=f"{monday:%m/%d} – {monday + timedelta(days=6):%m/%d}")
 
     def get_point(token, lock=False):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", token):
+            abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
         query = select(Point).where(Point.qr_token == token)
         if lock:
             query = query.with_for_update()
@@ -348,9 +405,7 @@ def create_app(config=None):
     @login_required
     def confirm_checkin(token):
         # Serialize with approval/revocation for the same employee on PostgreSQL.
-        locked_user = lock_user(g.user.id)
-        if not locked_user.active or locked_user.must_change_password or locked_user.auth_version != session.get("auth_version"):
-            abort(403, description="帳號狀態已更新，請重新登入。")
+        lock_current_user()
         binding = device_binding()
         if not binding or binding.status != "approved":
             abort(403, description="此瀏覽器尚未核准，請先申請綁定並由管理員核准。")
@@ -375,6 +430,7 @@ def create_app(config=None):
             flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
         if g.user.role != "admin" and record.user_id != g.user.id:
             return redirect(url_for("checkin", token=token))
+        session.pop("after_binding", None)
         return redirect(url_for("checkin_success", record_id=record.id))
 
     @app.get("/checkins/<int:record_id>")
@@ -389,17 +445,19 @@ def create_app(config=None):
     @login_required
     def devices():
         bindings = db.session.scalars(select(DeviceBinding).where(DeviceBinding.user_id == g.user.id).order_by(DeviceBinding.created_at.desc())).all()
-        return render_template("devices.html", current_binding=device_binding(), bindings=bindings)
+        return render_template("devices.html", current_binding=device_binding(), bindings=bindings, next_url=binding_destination())
 
     @app.post("/devices/request")
     @login_required
     def request_device():
+        lock_current_user()
+        destination = binding_destination()
         binding = device_binding()
         if binding and binding.status in ("pending", "approved"):
             flash("此瀏覽器已經提出申請或已核准。", "info")
-            return redirect(url_for("devices"))
+            return redirect(devices_url(destination))
         label = request.form.get("label", "我的手機").strip()
-        if not label or len(label) > 100:
+        if not valid_label(label):
             abort(400, description="請填寫 1 至 100 字的裝置名稱。")
         pending = db.session.scalar(select(db.func.count(DeviceBinding.id)).where(DeviceBinding.user_id == g.user.id, DeviceBinding.status == "pending"))
         if pending >= 3:
@@ -409,7 +467,7 @@ def create_app(config=None):
         db.session.add(binding)
         audit("device_requested", g.user.username, label)
         db.session.commit()
-        response = redirect(url_for("devices"))
+        response = redirect(devices_url(destination))
         response.set_cookie(DEVICE_COOKIE, token, max_age=365 * 86400, httponly=True, secure=app.config["COOKIE_SECURE"], samesite="Lax", path="/")
         flash("申請已送出，請管理員核准後再打卡。", "success")
         return response
@@ -420,17 +478,17 @@ def create_app(config=None):
         binding = db.get_or_404(DeviceBinding, binding_id)
         if binding.user_id != g.user.id:
             abort(403)
-        lock_user(g.user.id)
+        lock_current_user()
         binding.status = "revoked"
         audit("device_self_revoked", binding.id)
         db.session.commit()
         flash("已解除此瀏覽器綁定。", "success")
-        return redirect(url_for("devices"))
+        return redirect(devices_url(binding_destination()))
 
     @app.get("/admin/devices")
     @admin_required
     def admin_devices():
-        bindings = db.session.scalars(select(DeviceBinding).order_by(db.case((DeviceBinding.status == "pending", 0), else_=1), DeviceBinding.created_at.desc())).all()
+        bindings = db.session.scalars(select(DeviceBinding).options(selectinload(DeviceBinding.user)).order_by(db.case((DeviceBinding.status == "pending", 0), else_=1), DeviceBinding.created_at.desc())).all()
         return render_template("admin_devices.html", bindings=bindings)
 
     @app.post("/admin/devices/<int:binding_id>/approve")
@@ -498,9 +556,7 @@ def create_app(config=None):
             query = query.where(Inspection.user_id == g.user.id)
             user_id = str(g.user.id)
         elif user_id:
-            if not user_id.isdigit():
-                abort(400)
-            query = query.where(Inspection.user_id == int(user_id))
+            query = query.where(Inspection.user_id == parse_id(user_id))
         return query.order_by(Inspection.created_at.desc(), Inspection.id.desc()), {"date_from": begin.isoformat(), "date_to": end.isoformat(), "floor": floor, "user_id": user_id}
 
     @app.get("/records")
@@ -542,7 +598,7 @@ def create_app(config=None):
         frequency = request.form.get("frequency", "daily")
         if floor not in ("1", "2", "3", "4", "5") or not re.fullmatch(r"[1-5]F-[A-Z0-9]{2,20}", code) or not code.startswith(floor + "F-"):
             abort(400, description="點位編號請使用如 1F-A01 的格式，並與樓層一致。")
-        if not name or len(name) > 100 or frequency not in ("daily", "weekly"):
+        if not valid_label(name) or frequency not in ("daily", "weekly"):
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")
         return {"code": code, "name": name, "floor": int(floor), "frequency": frequency}
 
@@ -609,9 +665,9 @@ def create_app(config=None):
         query = select(Point).where(Point.active.is_(True))
         ids = request.args.get("ids", "")
         if ids:
-            if not re.fullmatch(r"\d+(,\d+)*", ids) or len(ids) > 2000:
+            if len(ids) > 2000:
                 abort(400)
-            query = query.where(Point.id.in_([int(x) for x in ids.split(",")]))
+            query = query.where(Point.id.in_([parse_id(x) for x in ids.split(",")]))
         return render_template("print_qr.html", points=db.session.scalars(query.order_by(Point.floor, Point.code)).all(), public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
 
     @app.get("/admin/users")
@@ -626,7 +682,7 @@ def create_app(config=None):
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
         role = request.form.get("role", "inspector")
-        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not name or len(name) > 100 or not 12 <= len(password) <= 256 or role not in ("admin", "inspector"):
+        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not 12 <= len(password) <= 256 or role not in ("admin", "inspector"):
             abort(400, description="請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與至少 12 字元的密碼。")
         user = User(username=username, display_name=name, role=role, must_change_password=True)
         user.set_password(password)
@@ -649,7 +705,7 @@ def create_app(config=None):
         name = request.form.get("display_name", "").strip()
         role = request.form.get("role", "inspector")
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
-        if not name or len(name) > 100 or role not in ("admin", "inspector"):
+        if not valid_label(name) or role not in ("admin", "inspector"):
             abort(400)
         if user.id == g.user.id and (role != "admin" or not active):
             abort(400, description="不能停用自己或移除自己的管理員權限。")

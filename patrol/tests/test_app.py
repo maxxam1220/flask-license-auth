@@ -10,11 +10,12 @@ import csv
 import importlib
 import io
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from xml.etree import ElementTree
 
 import pytest
 from flask import template_rendered
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 
 
@@ -657,5 +658,225 @@ def test_future_point_cannot_be_recorded(application, seeded):
     login(client)
     approve_browser(client, seeded["inspector"])
     assert submit(client, seeded["daily"]).status_code == 403
+    assert count_inspections() == 0
+
+
+def test_qr_journey_survives_first_password_change_and_browser_approval(application, seeded):
+    user = seeded["inspector"]
+    user.must_change_password = True
+    db.session.commit()
+    qr_path = f"/c/{seeded['daily'].qr_token}"
+    client = application.test_client()
+    response = client.get(qr_path)
+    assert parse_qs(urlsplit(response.headers["Location"]).query)["next"] == [qr_path]
+    response = login(client, next=qr_path)
+    assert urlsplit(response.headers["Location"]).path == "/change-password"
+    with rendered_contexts(application) as contexts:
+        assert client.get("/change-password").status_code == 200
+    assert contexts[-1][1]["next_url"] == qr_path
+    changed_password = "New-inspector-password-789!"
+    response = client.post("/change-password", data={
+        "current_password": PASSWORD, "new_password": changed_password,
+        "confirm_password": changed_password, "next": qr_path,
+    })
+    assert response.headers["Location"] == qr_path
+    response = client.post("/devices/request", data={"label": "Phone for patrol", "next": qr_path})
+    pending_url = response.headers["Location"]
+    assert urlsplit(pending_url).path == "/devices"
+    assert parse_qs(urlsplit(pending_url).query)["next"] == [qr_path]
+    assert submit(client, seeded["daily"]).status_code == 403
+    pending = db.session.query(DeviceBinding).filter_by(user_id=user.id, status="pending").one()
+    admin_client = application.test_client()
+    login(admin_client, "manager")
+    assert admin_client.post(f"/admin/devices/{pending.id}/approve").status_code in (302, 303)
+    with rendered_contexts(application) as contexts:
+        response = client.get(pending_url)
+    assert response.status_code == 200
+    assert contexts[-1][1]["next_url"] == qr_path
+    assert f'href="{qr_path}"' in response.get_data(as_text=True)
+    assert submit(client, seeded["daily"]).status_code in (302, 303)
+    assert count_inspections() == 1
+
+
+def test_scanning_qr_while_password_change_pending_preserves_new_destination(application, seeded):
+    seeded["inspector"].must_change_password = True
+    db.session.commit()
+    client = application.test_client()
+    login(client)
+    qr_path = f"/c/{seeded['weekly'].qr_token}"
+    response = client.get(qr_path)
+    assert urlsplit(response.headers["Location"]).path == "/change-password"
+    assert parse_qs(urlsplit(response.headers["Location"]).query)["next"] == [qr_path]
+    changed = "Another-test-password-456!"
+    response = client.post("/change-password", data={
+        "current_password": PASSWORD, "new_password": changed,
+        "confirm_password": changed, "next": qr_path,
+    })
+    assert response.headers["Location"] == qr_path
+
+
+def test_expired_session_submission_returns_to_get_confirmation_after_login(application, seeded):
+    client = application.test_client()
+    response = submit(client, seeded["daily"])
+    destination = parse_qs(urlsplit(response.headers["Location"]).query)["next"][0]
+    assert destination == f"/c/{seeded['daily'].qr_token}"
+    response = login(client, next=destination)
+    assert client.get(response.headers["Location"]).status_code == 200
+    assert count_inspections() == 0
+
+
+@pytest.mark.parametrize("destination", ["https://evil.example", "//evil.example", "/records", "/c/missing"])
+def test_binding_return_accepts_only_an_existing_point(application, seeded, destination):
+    client = application.test_client()
+    login(client)
+    with rendered_contexts(application) as contexts:
+        response = client.get("/devices", query_string={"next": destination})
+    assert response.status_code == 200
+    assert contexts[-1][1]["next_url"] == ""
+    response = client.post("/devices/request", data={"label": "Test phone", "next": destination})
+    assert response.headers["Location"] == "/devices"
+
+
+def test_binding_return_survives_a_refresh_without_query(application, seeded):
+    client = application.test_client()
+    login(client)
+    destination = f"/c/{seeded['daily'].qr_token}"
+    client.get("/devices", query_string={"next": destination})
+    with rendered_contexts(application) as contexts:
+        assert client.get("/devices").status_code == 200
+    assert contexts[-1][1]["next_url"] == destination
+
+
+def test_failed_login_keeps_the_qr_destination(application, seeded):
+    client = application.test_client()
+    destination = f"/c/{seeded['daily'].qr_token}"
+    with rendered_contexts(application) as contexts:
+        response = client.post("/login", data={
+            "username": "inspector", "password": "incorrect", "next": destination,
+        })
+    assert response.status_code == 200
+    assert contexts[-1][1]["next"] == destination
+
+
+@pytest.mark.parametrize("value", ["²", "2147483648", "9" * 80, "0"])
+def test_record_and_print_filters_reject_invalid_database_ids(application, seeded, value):
+    client = application.test_client()
+    login(client, "manager")
+    assert client.get("/records", query_string={"user_id": value}).status_code == 400
+    assert client.get("/records/export", query_string={"user_id": value}).status_code == 400
+    assert client.get("/admin/points/print", query_string={"ids": value}).status_code == 400
+
+
+@pytest.mark.parametrize("value", ["2147483648", "9" * 80])
+def test_oversized_route_ids_return_not_found(application, seeded, value):
+    client = application.test_client()
+    login(client, "manager")
+    assert client.get(f"/checkins/{value}").status_code == 404
+    assert client.post(f"/admin/users/{value}/reset-password", data={"password": PASSWORD}).status_code == 404
+    assert client.post(f"/admin/devices/{value}/approve").status_code == 404
+
+
+def test_null_characters_cannot_reach_postgres_text_fields(application, seeded):
+    client = application.test_client()
+    login(client, "manager")
+    assert client.post("/devices/request", data={"label": "Bad\x00label"}).status_code == 400
+    assert client.post("/admin/points/create", data={
+        "code": "2F-A02", "name": "Bad\x00point", "floor": "2", "frequency": "daily",
+    }).status_code == 400
+    assert client.post("/admin/users/create", data={
+        "username": "new-inspector", "display_name": "Bad\x00name",
+        "password": PASSWORD, "role": "inspector",
+    }).status_code == 400
+    assert db.session.query(Point).count() == 2
+    assert db.session.query(User).count() == 3
+    assert db.session.query(DeviceBinding).count() == 0
+
+
+def test_password_change_rechecks_auth_version_after_account_lock(application, seeded):
+    """Simulate an administrator reset after before_request loaded this session.
+
+    This verifies the refresh/recheck boundary, not PostgreSQL lock scheduling.
+    """
+    client = application.test_client()
+    login(client)
+    user = seeded["inspector"]
+    previous_hash = user.password_hash
+    original_version = user.auth_version
+    sql_session = db.session()
+
+    def invalidate_before_lock_read(state):
+        if state.is_select and state.execution_options.get("populate_existing"):
+            state.session.connection().execute(
+                db.update(User).where(User.id == user.id).values(auth_version=original_version + 1)
+            )
+
+    event.listen(sql_session, "do_orm_execute", invalidate_before_lock_read)
+    try:
+        response = client.post("/change-password", data={
+            "current_password": PASSWORD, "new_password": "Replacement-test-password!",
+            "confirm_password": "Replacement-test-password!",
+        })
+    finally:
+        event.remove(sql_session, "do_orm_execute", invalidate_before_lock_read)
+    assert response.status_code == 403
+    db.session.refresh(user)
+    assert user.password_hash == previous_hash
+
+
+def test_device_requests_limit_pending_entries_per_user(application, seeded):
+    for number in range(4):
+        client = application.test_client()
+        login(client)
+        response = client.post("/devices/request", data={"label": f"Browser {number}"})
+        assert response.status_code == (302 if number < 3 else 400)
+    assert db.session.query(DeviceBinding).filter_by(user_id=seeded["inspector"].id, status="pending").count() == 3
+
+
+@pytest.mark.parametrize("username", ["bad\x00username", "inspector\x00", "x" * 81])
+def test_invalid_login_username_is_never_bound_to_user_query(application, seeded, username):
+    client = application.test_client()
+    statements = []
+
+    def capture_sql(connection, cursor, statement, parameters, context, executemany):
+        statements.append((statement, parameters))
+
+    event.listen(db.engine, "before_cursor_execute", capture_sql)
+    try:
+        response = client.post("/login", data={"username": username, "password": PASSWORD})
+    finally:
+        event.remove(db.engine, "before_cursor_execute", capture_sql)
+    assert response.status_code == 200
+    assert "帳號或密碼不正確" in response.get_data(as_text=True)
+    assert statements, "The failed-login audit should still reach the database"
+    assert not any("WHERE patrol_users.username" in statement for statement, _ in statements)
+    assert not any(
+        isinstance(value, str) and "\x00" in value
+        for _, parameters in statements for value in parameters
+    )
+    with client.session_transaction() as session:
+        assert "user_id" not in session
+
+
+@pytest.mark.parametrize("token_path", ["%00", "invalid%00token", "x" * 101])
+def test_invalid_qr_token_is_rejected_before_point_query(application, seeded, token_path):
+    client = application.test_client()
+    login(client)
+    approve_browser(client, seeded["inspector"])
+    statements = []
+
+    def capture_sql(connection, cursor, statement, parameters, context, executemany):
+        statements.append((statement, parameters))
+
+    event.listen(db.engine, "before_cursor_execute", capture_sql)
+    try:
+        assert client.get(f"/c/{token_path}").status_code == 404
+        assert client.post(f"/c/{token_path}/confirm").status_code == 404
+    finally:
+        event.remove(db.engine, "before_cursor_execute", capture_sql)
+    assert not any("WHERE patrol_points.qr_token" in statement for statement, _ in statements)
+    assert not any(
+        isinstance(value, str) and "\x00" in value
+        for _, parameters in statements for value in parameters
+    )
     assert count_inspections() == 0
 
