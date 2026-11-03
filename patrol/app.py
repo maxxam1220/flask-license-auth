@@ -266,6 +266,8 @@ def create_app(config=None):
                 flash("新密碼請使用 12 至 256 個字元。", "error")
             elif password != request.form.get("confirm_password"):
                 flash("兩次輸入的新密碼不同。", "error")
+            elif g.user.check_password(password):
+                flash("新密碼不可與目前密碼相同，請設定不同的密碼。", "error")
             else:
                 g.user.set_password(password)
                 g.user.auth_version += 1

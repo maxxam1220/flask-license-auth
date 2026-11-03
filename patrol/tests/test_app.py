@@ -462,6 +462,35 @@ def test_admin_password_reset_invalidates_existing_sessions(application, seeded)
     assert seeded["inspector"].must_change_password
 
 
+def test_first_login_rejects_reusing_initial_password(application, seeded):
+    user = seeded["inspector"]
+    user.must_change_password = True
+    db.session.commit()
+    original_version = user.auth_version
+    original_hash = user.password_hash
+    client = application.test_client()
+    response = login(client)
+    assert urlsplit(response.headers["Location"]).path == "/change-password"
+
+    response = client.post("/change-password", data={
+        "current_password": PASSWORD,
+        "new_password": PASSWORD,
+        "confirm_password": PASSWORD,
+    })
+    assert response.status_code == 200
+    assert "新密碼不可與目前密碼相同" in response.get_data(as_text=True)
+    db.session.refresh(user)
+    assert user.must_change_password is True
+    assert user.auth_version == original_version
+    assert user.password_hash == original_hash
+    assert user.check_password(PASSWORD)
+    with client.session_transaction() as session:
+        assert session["user_id"] == user.id
+        assert session["auth_version"] == original_version
+    response = client.get("/dashboard")
+    assert urlsplit(response.headers["Location"]).path == "/change-password"
+
+
 def test_completed_point_does_not_disclose_other_inspector(application, seeded):
     existing = record(seeded["colleague"], seeded["daily"])
     client = application.test_client()
