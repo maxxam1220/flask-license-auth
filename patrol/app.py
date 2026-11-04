@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import click
-from flask import Flask, abort, flash, g, make_response, redirect, render_template, request, session, url_for
+from flask import Flask, abort, before_render_template, flash, g, make_response, redirect, render_template, request, session, url_for
 import qrcode
 import qrcode.image.svg
 from sqlalchemy import select
@@ -249,6 +249,19 @@ def create_app(config=None):
                 "floor_label": floor_label, "category_label": category_label,
                 "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
 
+    @before_render_template.connect_via(app)
+    def configure_scanner(sender, template, context, **extra):
+        # Grant camera access only to rendered work pages that actually offer scanning.
+        viewer = g.get("user")
+        can_scan = bool(viewer and not viewer.must_change_password
+                        and (viewer.role == "admin" or patrol_scope(viewer))
+                        and template.name in {
+                            "dashboard.html", "checkin.html", "checkin_success.html", "records.html",
+                            "record_detail.html", "issues.html", "missed.html", "devices.html",
+                            "admin_devices.html", "points.html", "users.html",
+                        })
+        context["can_scan"] = g.patrol_scanner_page = can_scan
+
     @app.before_request
     def load_user_and_protect():
         g.user = None
@@ -289,9 +302,7 @@ def create_app(config=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        viewer = g.get("user")
-        can_scan = (request.endpoint == "dashboard" and response.status_code == 200
-                    and viewer is not None and (viewer.role == "admin" or bool(patrol_scope(viewer))))
+        can_scan = g.get("patrol_scanner_page", False)
         if can_scan:
             response.headers["Content-Security-Policy"] += "; media-src 'self' blob:"
         camera_policy = "(self)" if can_scan else "()"

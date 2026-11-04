@@ -18,11 +18,16 @@ def test_scanner_ui_and_camera_permission_share_the_same_scope(application, acto
     assert anonymous.status_code == 302
     assert "camera=()" in anonymous.headers["Permissions-Policy"]
     login(client, username)
-    response = client.get("/dashboard")
-    assert response.status_code == 200
-    assert (b"data-qr-start" in response.data) == allowed
-    assert ("camera=(self)" in response.headers["Permissions-Policy"]) == allowed
-    assert "microphone=()" in response.headers["Permissions-Policy"]
-    assert "geolocation=()" in response.headers["Permissions-Policy"]
-    assert "script-src 'self'" in response.headers["Content-Security-Policy"]
-    assert "camera=()" in client.get("/devices").headers["Permissions-Policy"]
+    for path in ("/dashboard", "/devices", "/records"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert (b"data-qr-start" in response.data) == allowed
+        assert response.data.count(b"data-qr-dialog") == int(allowed)
+        assert ("camera=(self)" in response.headers["Permissions-Policy"]) == allowed
+        assert "microphone=()" in response.headers["Permissions-Policy"]
+        assert "geolocation=()" in response.headers["Permissions-Policy"]
+        assert "script-src 'self'" in response.headers["Content-Security-Policy"]
+    for path in ("/change-password", "/c/invalid-test-code", "/healthz", "/static/logo.ico", "/records/export"):
+        response = client.get(path)
+        assert "camera=()" in response.headers["Permissions-Policy"]
+        assert b"data-qr-start" not in response.data

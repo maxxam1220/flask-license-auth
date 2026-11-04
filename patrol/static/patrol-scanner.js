@@ -1,14 +1,19 @@
 /* Scan locally. A successful read only opens the existing confirmation page. */
 (() => {
-  const start = document.querySelector('[data-qr-start]');
+  const starts = document.querySelectorAll('[data-qr-start]');
   const dialog = document.querySelector('[data-qr-dialog]');
-  if (!start || !dialog || typeof dialog.showModal !== 'function') return;
+  if (!starts.length || !dialog || typeof dialog.showModal !== 'function') return;
 
   const video = dialog.querySelector('[data-qr-video]');
   const status = dialog.querySelector('[data-qr-status]');
   const retry = dialog.querySelector('[data-qr-retry]');
   const close = dialog.querySelector('[data-qr-close]');
+  const draftActions = dialog.querySelector('[data-qr-draft-actions]');
+  const keep = dialog.querySelector('[data-qr-keep]');
+  const discard = dialog.querySelector('[data-qr-discard]');
   const vendorURL = new URL('vendor/jsqr-1.4.0.js', document.currentScript.src);
+  let opener;
+  let pendingPath;
   let vendorLoad;
   let generation = 0;
   let stream;
@@ -76,6 +81,35 @@
     if (status.textContent !== text) status.textContent = text;
   }
 
+  function edited(field) {
+    if (!field.name || field.disabled || ['hidden', 'submit', 'button', 'reset', 'image'].includes(field.type)) return false;
+    if (field.type === 'file') return field.files.length > 0;
+    // Failed check-ins and issue actions can return populated fields as HTML defaults.
+    if (field.name === 'note') return Boolean(field.value);
+    if (field.name === 'is_abnormal') return field.checked;
+    if (field.type === 'checkbox' || field.type === 'radio') return field.checked !== field.defaultChecked;
+    if (field.type === 'select-one') {
+      const options = Array.from(field.options);
+      const initial = options.filter(option => option.defaultSelected).pop() ||
+        (field.size <= 1 ? options.find(option => !option.matches(':disabled')) : undefined);
+      return options[field.selectedIndex] !== initial;
+    }
+    if (field.type === 'select-multiple') {
+      return Array.from(field.options).some(option => option.selected !== option.defaultSelected);
+    }
+    return (field.tagName === 'INPUT' || field.tagName === 'TEXTAREA') && field.value !== field.defaultValue;
+  }
+
+  function hasDraft() {
+    return Array.from(document.forms).some(form => form.method.toLowerCase() === 'post' &&
+      Array.from(form.elements).some(edited));
+  }
+
+  function clearDestination() {
+    pendingPath = null;
+    if (draftActions) draftActions.hidden = true;
+  }
+
   function stopCamera() {
     ++generation;
     clearTimeout(timer);
@@ -92,6 +126,7 @@
 
   function dismiss() {
     stopCamera();
+    clearDestination();
     if (dialog.open) dialog.close();
   }
 
@@ -108,9 +143,14 @@
 
   async function begin() {
     stopCamera();
+    clearDestination();
     const run = generation;
     if (!dialog.open) dialog.showModal();
     retry.hidden = true;
+    if (document.querySelector('form[data-submitting="true"]')) {
+      message('資料正在送出。請等候儲存完成後再掃描。');
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       message('此瀏覽器無法開啟相機。請用手機內建相機掃描巡檢點 QR Code。');
       return;
@@ -164,6 +204,18 @@
           const paths = new Set(values.map(confirmationPath).filter(Boolean));
           if (paths.size === 1) {
             const [path] = paths;
+            if (hasDraft()) {
+              stopCamera();
+              if (draftActions && keep && discard) {
+                pendingPath = path;
+                draftActions.hidden = false;
+                message('已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。');
+                keep.focus();
+              } else {
+                message('目前頁面有尚未送出的內容。請關閉掃描視窗，處理完畢後再掃描。');
+              }
+              return;
+            }
             dismiss();
             location.assign(path);
             return;
@@ -180,17 +232,31 @@
     scan();
   }
 
-  start.addEventListener('click', begin);
+  starts.forEach(button => {
+    button.addEventListener('click', () => {
+      if (dialog.open) return;
+      opener = button;
+      begin();
+    });
+    button.hidden = false;
+  });
   retry.addEventListener('click', begin);
   close.addEventListener('click', dismiss);
+  keep?.addEventListener('click', dismiss);
+  discard?.addEventListener('click', () => {
+    if (!pendingPath || !dialog.open || document.hidden) return;
+    const path = pendingPath;
+    dismiss();
+    location.assign(path);
+  });
   dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
   dialog.addEventListener('close', () => {
     if (!dialog.open) {
       stopCamera();
-      if (!document.hidden) start.focus();
+      clearDestination();
+      if (!document.hidden) opener?.focus({ preventScroll: true });
     }
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) dismiss(); });
   window.addEventListener('pagehide', dismiss);
-  start.hidden = false;
 })();

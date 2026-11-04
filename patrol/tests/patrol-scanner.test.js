@@ -19,15 +19,20 @@ function delayed() {
 
 function simulate(options = {}) {
   function element(props = {}) { return Object.assign(new EventTarget(), props); }
-  const start = element({ hidden: true, focused: false, focus() { this.focused = true; } });
+  const button = () => element({ hidden: true, focused: false, focus() { this.focused = true; } });
+  const starts = [button(), button(), button()];
+  const [start] = starts;
   const close = element();
+  const draft = element({ hidden: true });
+  const keep = button();
+  const discard = button();
   const retry = element({ hidden: true });
   const status = element({ textContent: '' });
   const width = options.width || 1280;
   const video = element({ videoWidth: width, videoHeight: options.height || 720, readyState: 2,
     async play() {}, pause() {} });
-  const hooks = { start, close, retry, status, video };
-  const lookup = selector => hooks[selector.match(/^\[data-qr-(\w+)\]$/)[1]];
+  const hooks = { start, close, retry, status, video, keep, discard, 'draft-actions': draft };
+  const lookup = selector => hooks[selector.match(/^\[data-qr-([\w-]+)\]$/)[1]];
   const dialog = element({ open: false, querySelector: lookup, showModal() { this.open = true; },
     close() { this.open = false; this.dispatchEvent(new Event('close')); } });
   hooks.dialog = dialog;
@@ -41,7 +46,9 @@ function simulate(options = {}) {
   let timerId = 0;
   const document = element({
     hidden: false, currentScript: { src: origin + '/static/patrol-scanner.js?v=1' },
-    querySelector: lookup,
+    forms: options.forms || [],
+    querySelector: selector => selector === 'form[data-submitting="true"]' ? (options.submitting ? {} : null) : lookup(selector),
+    querySelectorAll: selector => { assert.equal(selector, '[data-qr-start]'); return starts; },
     head: { append(script) {
       requests.push(script.src);
       assert.equal(script.src, origin + '/static/vendor/jsqr-1.4.0.js');
@@ -89,7 +96,7 @@ function simulate(options = {}) {
     callback();
     await nextTurn();
   }
-  return { start, close, retry, status, dialog, video, track, stream, document, window, frames,
+  return { start, starts, draft, keep, discard, close, retry, status, dialog, video, track, stream, document, window, frames,
     requests, constraints, destinations, timers, click, step };
 }
 
@@ -106,6 +113,105 @@ test('opens only after user action, reads rear camera without audio, and navigat
   assert.equal(s.video.srcObject, null);
   assert.equal(s.timers.size, 0);
   assert.deepEqual(s.requests, []);
+});
+
+test('all entries open the same camera and closing returns focus to the actual entry, even after retry', async () => {
+  let attempt = 0;
+  const s = simulate({ acquire: stream => {
+    if (++attempt === 1) return Promise.reject(new Error('busy'));
+    return Promise.resolve(stream);
+  }, detect: () => [] });
+  assert.ok(s.starts.every(button => button.hidden === false));
+  const next = s.starts[2];
+  s.click(next);
+  await nextTurn();
+  assert.equal(s.retry.hidden, false);
+  s.click(s.retry);
+  await nextTurn();
+  s.click(s.close);
+  assert.equal(next.focused, true);
+  assert.equal(s.start.focused, false);
+  s.click(s.starts[1]);
+  await nextTurn();
+  s.click(s.close);
+  assert.equal(s.starts[1].focused, true);
+});
+
+const field = (name, value, defaultValue = '') => ({ tagName: 'INPUT', type: 'text', name, value, defaultValue });
+const post = (...elements) => ({ method: 'post', elements });
+const selectOne = (selectedIndex, explicitDefault = -1) => ({
+  name: 'frequency', type: 'select-one', selectedIndex, size: 0, options: [0, 1].map(index => ({
+    defaultSelected: index === explicitDefault, matches: () => false
+  }))
+});
+
+for (const [kind, input] of [
+  ['typed note', field('note', '異常')],
+  ['restored note after server rejection', field('note', '保留內容', '保留內容')],
+  ['restored abnormal flag', { type: 'checkbox', name: 'is_abnormal', checked: true, defaultChecked: true }],
+  ['photo without text', { type: 'file', name: 'photos', files: [{}] }],
+  ['new device label', field('label', '工作用手機')],
+  ['changed admin point name', field('name', '新位置', '原位置')],
+  ['changed implicit-default frequency', selectOne(1)],
+  ['changed active flag', { type: 'checkbox', name: 'active', checked: false, defaultChecked: true }]
+]) {
+  test(kind + ' is retained on cancel; explicit discard can navigate exactly once', async () => {
+    const s = simulate({ forms: [post(input)], detect: () => [qr('/c/next')] });
+    s.click(s.starts[2]);
+    await nextTurn();
+    assert.equal(s.track.stopped, true);
+    assert.equal(s.video.srcObject, null);
+    assert.equal(s.draft.hidden, false);
+    assert.equal(s.keep.focused, true);
+    assert.deepEqual(s.destinations, []);
+    s.click(s.keep);
+    s.click(s.discard); // Late event after cancellation.
+    assert.equal(s.draft.hidden, true);
+    assert.equal(s.starts[2].focused, true);
+    assert.deepEqual(s.destinations, []);
+    s.click(s.starts[1]);
+    await nextTurn();
+    assert.equal(s.draft.hidden, false, 'the original form still has its draft');
+    s.click(s.discard);
+    s.click(s.discard);
+    assert.deepEqual(s.destinations, ['/c/next']);
+  });
+}
+
+test('clean or reverted form values, hidden state and GET report filters never interrupt a scan', async () => {
+  const forms = [
+    { method: 'get', elements: [field('date', '2026-11-04', '2026-11-03')] },
+    post(field('name', '原位置', '原位置'), field('note', ''), selectOne(0), selectOne(1, 1),
+      { type: 'hidden', name: 'csrf_token', value: 'token', defaultValue: '' },
+      { type: 'checkbox', name: 'is_abnormal', checked: false }, { type: 'file', name: 'photos', files: [] })
+  ];
+  const s = simulate({ forms, detect: () => [qr('/c/already-completed')] });
+  s.click(s.starts[2]);
+  await nextTurn();
+  assert.equal(s.draft.hidden, true);
+  assert.deepEqual(s.destinations, ['/c/already-completed']);
+});
+
+test('backgrounding while a draft decision is pending prevents a late discard from navigating', async () => {
+  const s = simulate({ forms: [post(field('note', '保留'))], detect: () => [qr('/c/other')] });
+  s.click(s.start);
+  await nextTurn();
+  assert.equal(s.draft.hidden, false);
+  s.document.hidden = true;
+  s.document.dispatchEvent(new Event('visibilitychange'));
+  s.document.hidden = false;
+  s.click(s.discard);
+  assert.equal(s.dialog.open, false);
+  assert.deepEqual(s.destinations, []);
+});
+
+test('does not start a camera during an in-flight form submission', async () => {
+  const s = simulate({ submitting: true, detect: () => [qr('/c/other')] });
+  s.click(s.start);
+  await nextTurn();
+  assert.match(s.status.textContent, /正在送出/);
+  assert.equal(s.constraints.length, 0);
+  assert.deepEqual(s.destinations, []);
 });
 
 test('rejects untrusted, malformed, non-QR and ambiguous readings and keeps scanning', async () => {

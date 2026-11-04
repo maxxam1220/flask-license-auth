@@ -2,15 +2,12 @@
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge %}
 {% set title='巡檢總覽' %}
-{% set can_scan = is_patrol_admin or viewer_category %}
-{% block head %}
-{% if can_scan %}<script defer src="{{ url_for('static', filename='patrol-scanner.js') }}"></script>{% endif %}
-{% endblock %}
+{% from '_scanner.html' import scanner_button %}
 {% block content %}
 <div class="page-heading dashboard-heading">
   {% if can_scan %}
   <div class="dashboard-actions">
-    <button type="button" class="button button-primary" data-qr-start aria-haspopup="dialog" aria-controls="patrol-scanner" hidden>{{ icon('qr') }}掃描巡檢點</button>
+    {{ scanner_button('dashboard', '掃描巡檢點') }}
     <a class="button button-secondary" href="{{ records_query_url }}">{{ icon('list') }}查看紀錄</a>
   </div>
   {% endif %}
@@ -19,24 +16,6 @@
 {% if not is_patrol_admin and not viewer_category %}<section class="panel">{{ empty('等待指派巡檢分類', '請聯絡管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
 {% else %}
 <noscript><p class="scanner-fallback">使用手機內建相機掃描現場 QR Code，再點選連結開啟打卡確認頁。</p></noscript>
-<dialog id="patrol-scanner" class="scanner-dialog" data-qr-dialog aria-labelledby="patrol-scanner-title" aria-describedby="patrol-scanner-help">
-  <div class="scanner-heading">
-    <div><span class="eyebrow">現場打卡</span><h2 id="patrol-scanner-title">掃描巡檢點</h2></div>
-    <button class="scanner-close" type="button" data-qr-close aria-label="關閉掃描視窗">{{ icon('close') }}</button>
-  </div>
-  <div class="scanner-body">
-    <div class="scanner-preview" aria-hidden="true">
-      <video data-qr-video playsinline muted autoplay></video>
-      <span class="scanner-guide"></span>
-    </div>
-    <div class="scanner-instructions">
-      <p id="patrol-scanner-help">將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。</p>
-      <p class="scanner-status" data-qr-status role="status" aria-live="polite" aria-atomic="true">請允許此網站使用相機。</p>
-      <button class="button button-secondary" type="button" data-qr-retry hidden>{{ icon('camera') }}重新開啟相機</button>
-      <p class="scanner-fallback">也可關閉此視窗，改用手機內建相機掃描標籤。</p>
-    </div>
-  </div>
-</dialog>
 {% if device_state != 'approved' %}<a class="notice-strip" href="{{ url_for('devices') }}">{{ icon('phone') }}<span><strong>{{ '瀏覽器綁定審核中' if device_state == 'pending' else '開始巡檢前，先綁定這支手機的瀏覽器' }}</strong><small>{{ '管理員核准後，即可掃描現場 QR Code 打卡。' if device_state == 'pending' else '每個帳號使用一個已核准的瀏覽器打卡。' }}</small></span>{{ icon('arrow') }}</a>{% endif %}
 {% if is_patrol_admin %}<nav class="category-tabs" aria-label="巡檢分類">
   <a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor','')) }}" class="{{ 'selected' if not selected_category }}" aria-current="{{ 'page' if not selected_category else 'false' }}">全部分類</a>
