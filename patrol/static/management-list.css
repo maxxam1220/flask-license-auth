@@ -1,0 +1,9 @@
+.management-list > article:target {
+  border-color: var(--teal);
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  scroll-margin-block-start: 1rem;
+}
+@media (max-width: 720px) {
+  .management-list > article:target { scroll-margin-block-start: 5rem; }
+}

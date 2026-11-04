@@ -324,7 +324,7 @@ def test_approving_replacement_revokes_old_browser(application, seeded):
     ).one()
     admin_client = application.test_client()
     login(admin_client, "manager")
-    response = admin_client.post(f"/admin/devices/{pending.id}/approve")
+    response = admin_client.post(f"/admin/devices/{pending.id}/approve", data={"reviewed_approved_id": str(old_binding.id)})
     assert response.status_code in (302, 303)
     db.session.refresh(old_binding)
     db.session.refresh(pending)

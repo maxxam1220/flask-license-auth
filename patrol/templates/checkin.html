@@ -17,6 +17,10 @@
     <span class="eyebrow">{{ '本人已完成' if existing and personal else '此時段已有巡檢紀錄' if existing and point.frequency == 'daily2' else '此點已完成巡檢' if existing else '本期已達標 · 本人仍可巡檢' if long_period and first_reviewed and can_confirm and not execute else '兩階段 · 執行簽到' if paired and execute else '兩階段 · 現場巡檢' if paired else '不定期 · 直接簽到' if visit else '單段 · 現場巡檢' if spot else '確認巡檢位置' }}</span>
     <h1{% if point.code|length > 12 %} class="long-point-code"{% endif %}>{{ point.code }}</h1>
     <p class="checkin-location">{{ point.name }}</p>
+    {% if form_error and waiting_for_execution %}<div class="flash flash-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<span>{{ form_error }}</span></div>{% endif %}
+    {% if previous_period and (note or is_abnormal) and (waiting_for_execution or can_confirm) %}
+    <div class="flash flash-warning" role="status"><span>草稿來自 {{ previous_period }}。請核對現場狀況與目前時段，再確認送出。照片需重新選擇。</span></div>
+    {% endif %}
     {% if long_period %}
     <dl class="period-handoff" aria-label="本次兩階段巡檢期間">
       <div><dt>{{ '週巡' if point.frequency == 'weekly' else '月巡' }}期間</dt><dd><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></dd></div>
@@ -29,10 +33,28 @@
       <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
       {% if not simple_signin %}<a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>{% endif %}
     </div>
+    {% elif waiting_for_execution %}
+    <div class="checkin-quick-action">
+      <p role="status">尚未執行。請等總務執行人員簽到，再重新確認此點狀態。</p>
+      {% if (note or is_abnormal) and device_state == 'approved' %}
+      <form method="post" action="{{ url_for('checkin', token=token) }}" id="handoff-recheck">
+        {{ csrf() }}
+        <input type="hidden" name="draft_point" value="{{ point.id }}">
+        <input type="hidden" name="draft_day" value="{{ draft_day }}">
+        <input type="hidden" name="draft_slot" value="{{ draft_slot }}">
+        <input type="hidden" name="note" value="{{ note }}">
+        {% if is_abnormal %}<input type="hidden" name="is_abnormal" value="on">{% endif %}
+        <button class="button button-primary button-full button-large" type="submit">重新確認簽到狀態</button>
+      </form>
+      <p>備註與異常勾選已保留在這一頁。</p>
+      {% else %}
+      <a class="button button-primary button-full button-large" href="{{ url_for('checkin', token=token) }}">重新確認簽到狀態</a>
+      {% endif %}
+    </div>
     {% elif receipt_url %}
     <div class="checkin-quick-action"><a class="button button-secondary button-full button-large" href="{{ receipt_url }}">{{ icon('list') }}{% if simple_signin %}<span lang="en">View receipt</span> 查看收據{% else %}查看我的巡檢收據{% endif %}</a></div>
     {% endif %}
-    {% if not can_confirm and not existing and point.active and stage_notice and not (long_period and execute and execution_time) %}
+    {% if not can_confirm and not waiting_for_execution and not existing and point.active and stage_notice and not (long_period and execute and execution_time) %}
     <div class="workflow-guide stage-notice" role="status"><strong>{% if execute and execution_time %}<span lang="en">Step 1 complete</span> · 已有執行簽到{% else %}{{ '目前無法送出' ~ ('簽到' if simple_signin else '巡檢') }}{% endif %}</strong><p>{{ stage_notice }}</p>
       
     </div>
@@ -54,7 +76,7 @@
       <div><span>打卡人員</span><strong>{{ current_user.display_name }}</strong></div>
       <div><span>目前瀏覽器</span><strong class="{{ 'teal-text' if device_state == 'approved' else 'amber-text' }}">{{ '已核准' if device_state == 'approved' else '待審核' if device_state == 'pending' else '尚未核准' }}</strong></div>
     </div>
-    {% if form_error %}<div class="flash flash-error upload-form-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<div><strong>{{ form_error }}</strong>{% if not simple_signin and can_confirm and (note or is_abnormal or request.files.getlist('photos')|selectattr('filename')|list) %}<p>備註已保留；如有附照片，請重新選擇後再送出。</p>{% endif %}</div></div>{% endif %}
+    {% if form_error and not waiting_for_execution %}<div class="flash flash-error upload-form-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<div><strong>{{ form_error }}</strong>{% if not simple_signin and can_confirm and (note or is_abnormal or request.files.getlist('photos')|selectattr('filename')|list) %}<p>備註已保留；如有附照片，請重新選擇後再送出。</p>{% endif %}</div></div>{% endif %}
     {% if existing %}
       <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本時段' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
       <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽 {{ icon('arrow') }}</a>
@@ -71,6 +93,10 @@
         <input type="hidden" name="frequency" value="{{ point.frequency }}">
         <input type="hidden" name="point_revision" value="{{ point_revision }}">
         <input type="hidden" name="personal_day" value="{{ personal_day }}">
+        {% if previous_period and (note or is_abnormal) %}
+        <input type="hidden" name="draft_day" value="{{ draft_day }}">
+        <input type="hidden" name="draft_slot" value="{{ draft_slot }}">
+        {% endif %}
         <input type="hidden" name="stage" value="{{ stage }}">
         <input type="hidden" name="workflow_mode" value="{{ point.workflow_mode }}">
         {% if spot %}<input type="hidden" name="spot_ticket" value="{{ spot_ticket }}">{% endif %}

@@ -381,7 +381,7 @@ def create_app(config=None):
 
     def protected_post_destination():
         args = request.view_args or {}
-        if request.endpoint == "confirm_checkin":
+        if request.endpoint in ("confirm_checkin", "checkin"):
             return url_for("checkin", token=args["token"])
         if request.endpoint in ("resolve_issue", "reopen_issue"):
             # This remains an encoded query value on a fixed local detail URL.
@@ -456,6 +456,16 @@ def create_app(config=None):
     def device_status():
         binding = device_binding()
         return binding.status if binding else "none"
+
+    def browser_in_use_by_another_account():
+        # Setting the single device cookie here would silently strand the first
+        # account before an administrator has approved the second request.
+        token = request.cookies.get(DEVICE_COOKIE, "")
+        if not token or len(token) > 256:
+            return False
+        return db.session.scalar(select(DeviceBinding.id).where(
+            DeviceBinding.token_hash == hash_device_token(token), DeviceBinding.user_id != g.user.id,
+            DeviceBinding.status.in_(("pending", "approved")))) is not None
 
     def binding_overview(bindings=None):
         """Identify this browser and this account's approved device in one read."""
@@ -712,7 +722,11 @@ def create_app(config=None):
         if view not in VIEW_FREQUENCIES:
             abort(400)
         period_day, period_end = period_bounds(selected, view)
-        reference_day = min(period_end, today) if view != "daily" else selected
+        previous_period = period_bounds(period_day - timedelta(days=1), view)[0]
+        following_period = period_end + timedelta(days=1)
+        # Live periods use today's schedule. For another period, show the
+        # schedule effective in that period, even when it has not started yet.
+        reference_day = today if period_day <= today <= period_end else period_end
         scope = patrol_scope(g.user)
         points = historical_points(scope)
         floor_filter, category_filter = scope_filters()
@@ -861,6 +875,9 @@ def create_app(config=None):
         current_binding, approved_elsewhere = binding_overview()
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
+                               previous_period=max(previous_period, date(2000, 1, 1)) if period_day > date(2000, 1, 1) else None,
+                               following_period=following_period if following_period <= date(2100, 12, 31) else None,
+                               current_period=period_day <= today <= period_end,
                                missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, device_state=current_binding.status if current_binding else "none",
                                approved_elsewhere=approved_elsewhere, irregular_points=irregular_points, spot_points=irregular_points,
@@ -937,6 +954,14 @@ def create_app(config=None):
         day = local_dt(instant).date()
         key, start, end = period_for(point, instant)
         slot = slot_for(point, instant)
+        # Preserve the origin of an unsent report even through repeated read-only
+        # handoff checks. The final submit always uses the newly displayed slot.
+        report_day = request.form.get("draft_day") or request.form.get("personal_day", "")
+        report_slot = request.form.get("draft_slot") or request.form.get("slot", "")
+        previous_period = ""
+        if (re.fullmatch(r"\d{4}-\d{2}-\d{2}", report_day) and report_slot in ("any", "am", "pm")
+                and (report_day != day.isoformat() or report_slot != slot)):
+            previous_period = report_day + (" " + slot_label(report_slot) if report_slot != "any" else "")
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None
         stage, allowed, notice = checkin_stage(point, first)
         existing = prior_inspection(point, key, slot, day) if stage != "execute" else None
@@ -946,8 +971,8 @@ def create_app(config=None):
             saved_day = local_dt(saved.created_at).date().isoformat()
             list_url = url_for("records", stage="execution" if stage == "execute" else "inspection",
                                date_from=saved_day, date_to=saved_day)
-            receipt_url = (url_for("execution_success", execution_id=saved.id, return_to=list_url) if stage == "execute"
-                           else url_for("checkin_success", record_id=saved.id, return_to=list_url))
+            receipt_url = (url_for("execution_success", execution_id=saved.id, return_to=list_url, from_scan=1) if stage == "execute"
+                           else url_for("checkin_success", record_id=saved.id, return_to=list_url, from_scan=1))
         if existing and not can_access_category(g.user, existing.category):
             # The obligation is shared even after a point changes teams. Only
             # reveal that it is satisfied, never the old team's actor or time.
@@ -961,6 +986,9 @@ def create_app(config=None):
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
                                stage=stage, can_confirm=allowed and not existing, stage_notice=notice, receipt_url=receipt_url,
+                               waiting_for_execution=(point.workflow_mode == "two_stage" and g.user.role == "inspector"
+                                                      and not first and not existing),
+                               previous_period=previous_period, draft_day=report_day, draft_slot=report_slot,
                                long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
                                first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
                                execution_time=first.created_at if first else None,
@@ -974,10 +1002,16 @@ def create_app(config=None):
                                point_open_issue_count=(open_issue_counts([point.id], category=patrol_scope(g.user)).get(point.id, 0)
                                                        if g.user.role != "executor" else 0), form_error=error), status
 
-    @app.get("/c/<token>")
+    @app.route("/c/<token>", methods=["GET", "POST"])
     @login_required
     def checkin(token):
+        # POST carries unsaved notes back to the same point when checking whether
+        # the executor has signed. Only /confirm can create attendance records.
         point = get_point(token)
+        if request.method == "POST" and (request.form.get("draft_point") != str(point.id) or
+                                         point.workflow_mode != "two_stage" or g.user.role != "inspector"
+                                         or device_status() != "approved"):
+            return redirect(url_for("checkin", token=token))
         return checkin_form(point, token)
 
     def existing_checkin_response(record, token, note, abnormal, uploads):
@@ -1190,7 +1224,8 @@ def create_app(config=None):
         back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
                                long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
-                               issue_action_note=request.form.get("note", ""), issue_version=issue_version(record.issue),
+                               issue_action_note=request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n"),
+                               issue_version=issue_version(record.issue),
                                can_manage_issue=g.user.role == "admin" or (g.user.role == "inspector" and record.user_id == g.user.id),
                                can_reopen_issue=g.user.role == "admin",
                                back_url=back_url, back_label="返回異常追蹤" if urlsplit(back_url).path == "/issues" else "返回巡檢紀錄",
@@ -1268,8 +1303,9 @@ def create_app(config=None):
         pages = max(1, (total + per_page - 1) // per_page)
         if page > pages:
             return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
+        order_time = InspectionIssue.resolved_at if state == "resolved" else db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at)
         rows = db.session.scalars(query.options(selectinload(Inspection.issue), selectinload(Inspection.photos), selectinload(Inspection.point))
-                                  .order_by(db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at).desc(), Inspection.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
+                                  .order_by(order_time.desc(), Inspection.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
         if page > 1 and not rows:
             # At READ COMMITTED another manager can resolve the last row after
             # our count and before our fetch. Recover that now-empty last page.
@@ -1297,7 +1333,9 @@ def create_app(config=None):
     def devices():
         bindings = db.session.scalars(select(DeviceBinding).where(DeviceBinding.user_id == g.user.id).order_by(DeviceBinding.created_at.desc())).all()
         current, other = binding_overview(bindings)
-        return render_template("devices.html", current_binding=current, approved_elsewhere=other, bindings=bindings, next_url=binding_destination())
+        return render_template("devices.html", current_binding=current, approved_elsewhere=other, bindings=bindings,
+                               other_account_browser=not current and browser_in_use_by_another_account(),
+                               next_url=binding_destination())
 
     @app.post("/devices/request")
     @login_required
@@ -1307,6 +1345,9 @@ def create_app(config=None):
         binding = device_binding()
         if binding and binding.status in ("pending", "approved"):
             flash("此瀏覽器已經提出申請或已核准。", "info")
+            return redirect(devices_url(destination))
+        if not binding and browser_in_use_by_another_account():
+            flash("此瀏覽器另有使用中的綁定或申請，未送出新申請。", "info")
             return redirect(devices_url(destination))
         label = request.form.get("label", "我的手機").strip()
         if not valid_label(label):
@@ -1346,7 +1387,13 @@ def create_app(config=None):
     @admin_required
     def admin_devices():
         bindings = db.session.scalars(select(DeviceBinding).options(selectinload(DeviceBinding.user)).order_by(db.case((DeviceBinding.status == "pending", 0), else_=1), DeviceBinding.created_at.desc())).all()
-        return render_template("admin_devices.html", bindings=bindings)
+        approved = {row.user_id: row for row in bindings if row.status == "approved"}
+        return render_template("admin_devices.html", bindings=bindings, approved_devices=approved)
+
+    def device_review_conflict(message):
+        db.session.rollback()
+        return render_template("error.html", code=409, message=message, recovery_url=url_for("admin_devices"),
+                               recovery_label="返回綁定審核"), 409
 
     @app.post("/admin/devices/<int:binding_id>/approve")
     @admin_required
@@ -1355,18 +1402,23 @@ def create_app(config=None):
         lock_admin_users(binding.user_id)
         db.session.refresh(binding)
         if binding.status != "pending" or not binding.user.active:
-            abort(400, description="此申請已處理或員工帳號已停用。")
-        db.session.execute(db.update(DeviceBinding).where(DeviceBinding.user_id == binding.user_id, DeviceBinding.status == "approved").values(status="revoked"))
-        db.session.flush()
+            return device_review_conflict("此申請已處理或員工帳號已停用，請查看最新狀態。")
+        # The target account lock serializes changes from its other review tabs.
+        previous = db.session.scalar(select(DeviceBinding).where(
+            DeviceBinding.user_id == binding.user_id, DeviceBinding.status == "approved"))
+        if request.form.get("reviewed_approved_id", "") != (str(previous.id) if previous else ""):
+            return device_review_conflict("此人員的有效綁定已變更，請重新核對要更換的瀏覽器。")
+        if previous:
+            previous.status = "revoked"
+            db.session.flush()
         binding.status = "approved"
         binding.approved_at = naive_utc()
-        audit("device_approved", binding.id, f"employee={binding.user_id}; previous approval revoked")
+        audit("device_approved", binding.id, f"employee={binding.user_id}; replaced={previous.id if previous else 'none'}")
         try:
             db.session.commit()
         except IntegrityError:
-            db.session.rollback()
-            abort(409, description="裝置狀態已由另一位管理員更新，請重新整理。")
-        flash("已核准此瀏覽器，舊的有效綁定已解除。", "success")
+            return device_review_conflict("裝置狀態已變更，請重新核對申請。")
+        flash(f"已核准「{binding.label}」，原綁定「{previous.label}」已解除。" if previous else f"已核准「{binding.label}」。", "success")
         return redirect(url_for("admin_devices"))
 
     @app.post("/admin/devices/<int:binding_id>/reject")
@@ -1376,7 +1428,7 @@ def create_app(config=None):
         lock_admin_users(binding.user_id)
         db.session.refresh(binding)
         if binding.status != "pending":
-            abort(400)
+            return device_review_conflict("此申請已處理，請查看最新審核結果。")
         binding.status = "rejected"
         audit("device_rejected", binding.id)
         db.session.commit()
@@ -1389,6 +1441,8 @@ def create_app(config=None):
         binding = db.get_or_404(DeviceBinding, binding_id)
         lock_admin_users(binding.user_id)
         db.session.refresh(binding)
+        if binding.status != "approved":
+            return device_review_conflict("此瀏覽器目前沒有有效綁定，請查看最新狀態。")
         binding.status = "revoked"
         audit("device_revoked", binding.id)
         db.session.commit()
@@ -1734,9 +1788,12 @@ def create_app(config=None):
     def execution_reviewed(first):
         return db.session.scalar(select(Inspection.id).where(Inspection.execution_id == first.id).limit(1)) is not None
 
-    def point_list_url(deleted=False):
+    def point_list_url(deleted=False, *, changed=None):
         floor, category = scope_filters()
-        return url_for("points", floor=floor or None, category=category or None, list="deleted" if deleted else None)
+        anchor = None
+        if changed and (not floor or floor == str(changed.floor)) and (not category or category == changed.category):
+            anchor = f"point-{changed.id}"
+        return url_for("points", floor=floor or None, category=category or None, list="deleted" if deleted else None, _anchor=anchor)
 
     def check_management_state(item, destination):
         # Older forms and clients did not submit a revision. All new admin
@@ -1756,14 +1813,15 @@ def create_app(config=None):
         return point
 
     def save_point(point, action):
-        destination = point_list_url()
         audit(action, point.code)
         try:
+            db.session.flush()
+            destination = point_list_url(changed=point)
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
             abort(400, description="點位編號已被使用（含已刪除點位）。請使用不同編號，或至已刪除清單還原。")
-        flash("點位設定已儲存。", "success")
+        flash(f"點位「{point.code}」設定已儲存。", "success")
         return redirect(destination)
 
     def preserve_initial_schedule(point, day):
@@ -1829,7 +1887,7 @@ def create_app(config=None):
     def rotate_point_qr(point_id):
         lock_current_admin()
         point = managed_point(point_id)
-        destination = point_list_url()
+        destination = point_list_url(changed=point)
         if conflict := check_management_state(point, destination):
             return conflict
         point.qr_token = secrets.token_urlsafe(24)
@@ -1954,7 +2012,7 @@ def create_app(config=None):
             db.session.rollback()
             abort(400, description="此帳號已存在。")
         flash("員工帳號已建立，首次登入需變更密碼。", "success")
-        return redirect(url_for("users"))
+        return redirect(url_for("users", _anchor=f"user-{user.id}"))
 
     @app.post("/admin/users/<int:user_id>/update")
     @admin_required
@@ -1980,7 +2038,7 @@ def create_app(config=None):
         audit("user_updated", user.username, f"{previous} -> {choice_label(role, category)}")
         db.session.commit()
         flash("帳號設定已更新。", "success")
-        return redirect(url_for("users"))
+        return redirect(url_for("users", _anchor=f"user-{user.id}"))
 
     @app.post("/admin/users/<int:user_id>/reset-password")
     @admin_required
@@ -1999,7 +2057,7 @@ def create_app(config=None):
         audit("password_reset", user.username)
         db.session.commit()
         flash("密碼已重設，既有登入已失效；員工下次登入需變更密碼。", "success")
-        return redirect(url_for("users"))
+        return redirect(url_for("users", _anchor=f"user-{user.id}"))
 
     @app.errorhandler(400)
     @app.errorhandler(403)

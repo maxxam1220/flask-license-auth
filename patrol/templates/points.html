@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, csrf, management_revision, frequency, empty, open_issue_badge %}
 {% set title='巡檢點管理' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='management-list.css') }}">{% endblock %}
 {% set show_deleted = selected_list == 'deleted' %}
 {% macro category_choices(selected, allow_legacy=false) %}
 <fieldset class="point-category-field"><legend>巡檢分類</legend><div class="point-category-choices">
@@ -51,7 +52,7 @@
   <input type="hidden" name="active" value="on"><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立點位</button></div>
 </form></details>{% endif %}
 <div class="section-heading outside"><h2>{{ '已刪除點位' if show_deleted else category_label(selected_category) ~ '巡檢點' if selected_category else '全部巡檢點' }}</h2><span class="count-label">{{ points|length }} 個點位</span></div>
-<div class="management-list">{% for point in points %}<article class="panel point-management">
+<div class="management-list">{% for point in points %}<article class="panel point-management" id="point-{{ point.id }}" tabindex="-1">
   <div class="management-top">
     <div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div>
     <div class="management-meta">

@@ -881,3 +881,18 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .password-setup-bar > span { overflow-wrap: anywhere; min-width: 0; }
 .password-setup-bar button { display: inline-flex; gap: .4rem; align-items: center; min-height: 44px; white-space: nowrap; }
 .guest-body.password-setup .flash-stack { max-width: 36rem; padding: 0; margin: 0 auto 1rem; }
+
+.dashboard-period, .period-view { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
+.dashboard-period .date-filter { align-items: center; gap: .25rem; }
+.dashboard-period .date-filter :is(input[type=date], .button-small) { min-height: 44px; }
+.period-step { display: inline-grid; place-items: center; flex: 0 0 44px; width: 44px; min-height: 44px;
+  color: var(--teal); background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.period-step:is(:hover,:focus-visible) { background: #e7f3ee; }
+.period-step .icon { width: 1.1rem; height: 1.1rem; }
+.period-today { min-height: 44px; white-space: nowrap; }
+@media (max-width: 720px) {
+  .dashboard-period .date-filter { width: 100%; }
+  .dashboard-period .date-filter input[type=date] { min-width: 0; flex: 1 1 auto; }
+  .dashboard-period .period-view { gap: .25rem .5rem; }
+  .dashboard-period .segmented > a { padding-inline: clamp(.45rem, 2vw, .85rem); }
+}

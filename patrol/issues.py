@@ -83,7 +83,8 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
     # Authorize using the locked inspection before parsing form details or
     # materializing a legacy issue. An unauthorized POST must never reveal the
     # private record through an input-error form or leave a newly created case.
-    note = note.strip()
+    # A browser submits CRLF for each single LF shown in the textarea.
+    note = note.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not note or len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
         raise IssueActionError("請填寫 1 至 2,000 字的處理說明，且不可包含無效控制字元。")
     if not re.fullmatch(r"[0-9]{1,10}", expected_event_id or "") or int(expected_event_id) > 2147483647:
