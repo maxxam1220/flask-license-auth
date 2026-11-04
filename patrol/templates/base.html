@@ -2,7 +2,7 @@
 {% from '_scanner.html' import scanner_button, scanner_dialog %}
 {% set detail_page=request.endpoint in ['record_detail','resolve_issue','reopen_issue'] %}
 {% set detail_from_issues=detail_page and (back_url|default('')).split('?')[0] == '/issues' %}
-{% set record_nav_active=request.endpoint in ['records','execution_success'] or (detail_page and not detail_from_issues) %}
+{% set record_nav_active=request.endpoint in ['records','execution_success'] or (request.endpoint == 'checkin_success' and request.args.get('return_to') and back_url|default('')) or (detail_page and not detail_from_issues) %}
 {% set issue_nav_active=request.endpoint == 'issues' or detail_from_issues %}
 <!doctype html>
 <html lang="zh-Hant">

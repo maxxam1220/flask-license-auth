@@ -4,7 +4,7 @@ import re
 from sqlalchemy import and_, or_, select
 
 from models import Inspection, InspectionIssue, IssueEvent, Point, db
-from patrol_access import can_access_category, can_read_inspection, patrol_scope
+from patrol_access import can_access_category, patrol_scope
 
 
 class IssueActionError(ValueError):
@@ -78,7 +78,7 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
     if not can_access_category(actor, record.category):
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    if not can_read_inspection(actor, record):
+    if actor.role != "admin" and record.user_id != actor.id:
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
     # Authorize using the locked inspection before parsing form details or
     # materializing a legacy issue. An unauthorized POST must never reveal the

@@ -16,10 +16,14 @@ def can_access_category(user, category):
     return scope is None or (bool(scope) and category == scope)
 
 
+def can_view_general_team(user):
+    return bool(user and user.role == "inspector" and patrol_scope(user) == "general")
+
+
 def can_read_inspection(user, record):
     if not can_access_category(user, record.category):
         return False
-    if user.role == "admin":
+    if user.role == "admin" or can_view_general_team(user):
         return True
     if record.user_id != user.id:
         return False

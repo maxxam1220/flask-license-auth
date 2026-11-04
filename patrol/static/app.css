@@ -611,6 +611,10 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stage-notice .button { margin-top: 10px; }
 .checkin-quick-action .period-label { white-space: nowrap; }
 .checkin-personal-rule { color: #435e64; font-size: 14px; line-height: 1.65; text-align: start; }
+.team-readonly-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px 14px; border-radius: 6px; background: #edf4f4; color: #344f55; font-size: 14px; line-height: 1.6; }
+.team-readonly-note .icon { flex: none; margin-top: 2px; }
+.team-activity-link > .icon { flex: none; width: 16px; color: var(--teal); }
+.team-activity-link:hover .activity-info strong { text-decoration: underline; }
 @media (max-width: 480px) {
   .toolbar .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
   .toolbar .segmented > a { padding-inline: 4px; text-align: center; }

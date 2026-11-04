@@ -59,20 +59,20 @@ def test_roles_order_receipt_and_time_slot(application, monkeypatch):
     first = executor.post(post, data=first_form)
     assert first.status_code == 302 and "/executions/" in first.location
     assert executor.post(post, data=first_form).location == first.location
-    assert executor.get(first.location).status_code == 200 and inspector.get(first.location).status_code == 403
+    assert executor.get(first.location).status_code == 200 and inspector.get(first.location).status_code == 200
     assert db.session.query(Inspection).count() == 0 and db.session.query(PatrolExecution).count() == 1
     final = payload(inspector, url)
     assert admin.post(post, data=final).status_code == 403
     u = db.session.scalar(db.select(User).where(User.username == "exec"))
     u.role = "inspector"
     db.session.commit()
-    assert executor.get(first.location).status_code == 403
+    assert executor.get(first.location).status_code == 200
     assert executor.post(post, data=final).status_code == 409
     r = inspector.post(post, data=final | {"note":"test anomaly", "is_abnormal":"1"})
     assert r.status_code == 302 and inspector.get(r.location).status_code == 200
     log = db.session.scalar(db.select(Inspection))
     assert log.execution.user_id != log.user_id and log.is_abnormal and log.issue is not None
-    assert peer.get(r.location).status_code == 403 and executor.get(r.location).status_code == 403
+    assert peer.get(r.location).status_code == 200 and executor.get(r.location).status_code == 200
     peer_receipt = peer.post(post, data=payload(peer, url))
     assert peer_receipt.status_code == 302 and peer_receipt.location != r.location
     assert db.session.query(Inspection).count() == 2 and db.session.query(PatrolExecution).count() == 1

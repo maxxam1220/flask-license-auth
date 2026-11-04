@@ -4,11 +4,11 @@
 {% set title='異常追蹤' %}
 {% set selected_status=filters.get('status','open') %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">{{ '管理工作台' if current_user.role == 'admin' else '我的回報' }}</div><h1>異常追蹤</h1><p>{{ '追蹤全站異常回報，確認處理後留下說明與結案紀錄。' if current_user.role == 'admin' else '查看自己回報的異常，處理完成後可填寫說明並結案。' }}</p></div><span class="heading-icon">{{ icon('alert') }}</span></div>
-<section class="issue-overview {{ 'issue-overview-clear' if not open_total }}" aria-label="{{ '全站異常摘要' if current_user.role == 'admin' else '我的異常摘要' }}">
+<div class="page-heading"><div><div class="eyebrow">{{ '管理工作台' if current_user.role == 'admin' else '總務全組' if can_view_general_team else '我的回報' }}</div><h1>異常追蹤</h1><p>{{ '追蹤全站異常回報，確認處理後留下說明與結案紀錄。' if current_user.role == 'admin' else '查看總務全組的異常、處理歷程與照片。你可以為自己回報的案件填寫處理說明並結案。' if can_view_general_team else '查看自己回報的異常，處理完成後可填寫說明並結案。' }}</p></div><span class="heading-icon">{{ icon('alert') }}</span></div>
+<section class="issue-overview {{ 'issue-overview-clear' if not open_total }}" aria-label="{{ '全站異常摘要' if current_user.role == 'admin' else '總務全組異常摘要' if can_view_general_team else '我的異常摘要' }}">
   <span class="issue-overview-icon">{{ icon('alert' if open_total else 'circle-check') }}</span>
-  <div><span>{{ '全站目前未結案' if current_user.role == 'admin' else '我的回報尚未結案' }}</span><strong>{{ open_total }} <small>件異常</small></strong><p>跨日期持續追蹤；後續正常打卡不會自動結案。</p></div>
-  {% if filters.get('point_id') or (is_patrol_admin and filters.get('category')) or filters.get('floor') or selected_status != 'open' %}<a class="button button-secondary" href="{{ url_for('issues') }}">{{ '查看全部未結案' if current_user.role == 'admin' else '查看我的未結案' }} {{ icon('arrow') }}</a>{% endif %}
+  <div><span>{{ '全站目前未結案' if current_user.role == 'admin' else '總務目前未結案' if can_view_general_team else '我的回報尚未結案' }}</span><strong>{{ open_total }} <small>件異常</small></strong><p>跨日期持續追蹤；後續正常打卡不會自動結案。</p></div>
+  {% if filters.get('point_id') or (is_patrol_admin and filters.get('category')) or filters.get('floor') or selected_status != 'open' %}<a class="button button-secondary" href="{{ url_for('issues') }}">{{ '查看全部未結案' if is_patrol_admin or can_view_general_team else '查看我的未結案' }} {{ icon('arrow') }}</a>{% endif %}
 </section>
 <nav class="category-tabs issue-status-tabs" aria-label="異常處理狀態">
 {% for value,label in [('open','未結案'),('resolved','已結案'),('all','全部異常')] %}<a class="{{ 'selected' if selected_status == value }}" aria-current="{{ 'page' if selected_status == value else 'false' }}" href="{{ url_for('issues', status=value, category=filters.get('category',''), floor=filters.get('floor',''), point_id=filters.get('point_id','')) }}">{{ label }}</a>{% endfor %}
@@ -21,14 +21,15 @@
   <label>回報時樓層<select name="floor"><option value="">全部樓層</option>{% for value,label in floor_options %}<option value="{{ value }}" {% if filters.get('floor','')|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
   <button class="button button-primary">套用篩選</button><a class="text-link" href="{{ url_for('issues', status=selected_status) }}">重設篩選</a>
 </form></section>
-<div class="section-heading outside"><div><h2>{{ '未結案異常' if selected_status == 'open' else '已結案異常' if selected_status == 'resolved' else '全部異常回報' }}</h2><p>{{ '開啟詳情可查看原始回報、現場照片與處理歷程。' if current_user.role == 'admin' else '只顯示你本人回報的案件；同事的備註與照片不會出現在這裡。' }}</p></div><span class="count-label">共 {{ pagination.total }} 件</span></div>
+<div class="section-heading outside"><div><h2>{{ '未結案異常' if selected_status == 'open' else '已結案異常' if selected_status == 'resolved' else '全部異常回報' }}</h2><p>{{ '開啟詳情可查看原始回報、現場照片與處理歷程。' if is_patrol_admin or can_view_general_team else '只顯示你本人回報的案件；同事的備註與照片不會出現在這裡。' }}</p></div><span class="count-label">共 {{ pagination.total }} 件</span></div>
 <div class="issue-list">
 {% for record in records %}
+  {% set can_handle = is_patrol_admin or record.user_id == current_user.id %}
   <article class="panel issue-list-card">
     <div class="issue-card-heading"><div><span class="point-code">{{ point_code(record) }}</span><h3>{{ point_name(record) }}</h3></div>{{ issue_status(record) }}</div>
     <div class="issue-card-meta"><span>{% if is_patrol_admin %}{{ category_label(record.category) }} · {% endif %}{{ record_floor(record) }}</span><span>{{ frequency(record.frequency) }}{% if record.frequency == 'daily2' %} · {{ slot_label(record.slot) }}{% endif %}</span>{% if record.point.deleted_at %}<span class="badge badge-neutral">點位已刪除</span>{% elif not record.point.active %}<span class="badge badge-neutral">點位已停用</span>{% endif %}</div>
     <p class="issue-note-preview">{{ record.note[:180] if record.note else '回報時未填寫備註，可開啟詳情查看照片與後續處理。' }}{{ '…' if record.note|length > 180 else '' }}</p>
-    <div class="issue-card-footer"><div><span>回報：{{ record.created_at|localtime }}</span><span>{{ record.user_name or record.user.display_name }}{% if record.photos %} · {{ record.photos|length }} 張照片{% endif %}</span>{% if issue_state(record) == 'resolved' %}<span>結案：{{ record.issue.resolved_at|localtime }}</span>{% endif %}</div><a class="button {{ 'button-primary' if issue_state(record) == 'open' else 'button-secondary' }}" href="{{ url_for('record_detail', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">{{ '查看與處理' if issue_state(record) == 'open' else '查看結案詳情' }} {{ icon('arrow') }}</a></div>
+    <div class="issue-card-footer"><div><span>回報：{{ record.created_at|localtime }}</span><span>{{ reporter_name(record) }}{% if record.photos %} · {{ record.photos|length }} 張照片{% endif %}</span>{% if issue_state(record) == 'resolved' %}<span>結案：{{ record.issue.resolved_at|localtime }}</span>{% endif %}</div><a class="button {{ 'button-primary' if can_handle and issue_state(record) == 'open' else 'button-secondary' }}" href="{{ url_for('record_detail', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">{{ '查看與處理' if can_handle and issue_state(record) == 'open' else '查看結案詳情' if issue_state(record) == 'resolved' else '查看異常詳情' }} {{ icon('arrow') }}</a></div>
   </article>
 {% else %}
   <section class="panel">{{ empty('目前沒有符合的未結案異常' if selected_status == 'open' else '目前沒有符合的已結案異常' if selected_status == 'resolved' else '目前沒有符合的異常回報', '可調整狀態、樓層或點位篩選。新的異常回報會持續顯示，直到完成處理並結案。', 'circle-check' if selected_status == 'open' else 'list') }}</section>

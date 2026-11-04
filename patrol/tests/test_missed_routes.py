@@ -43,6 +43,131 @@ def test_report_counts_only_expired_slots_and_any_employee_completion(applicatio
     assert db.session.query(AuditLog).count() == 0
 
 
+def test_archiving_legacy_point_without_schedule_preserves_past_and_expired_slots(application, seeded, monkeypatch):
+    from test_features import clock
+
+    point = historical_point()
+    db.session.delete(point.schedules[0])
+    db.session.commit()
+    admin = application.test_client()
+    login(admin, 'manager')
+    clock(monkeypatch, 14)
+    before = report_context(application, admin)[1]['occurrences']
+    assert len(before) == 3
+    assert admin.post(f'/admin/points/{point.id}/delete').status_code == 302
+    assert admin.post(f'/admin/points/{point.id}/restore').status_code == 302
+    assert report_context(application, admin)[1]['occurrences'] == before
+
+
+def test_transfer_of_legacy_point_keeps_the_previous_teams_schedule(application, seeded, monkeypatch):
+    from test_features import clock
+
+    point = historical_point()
+    db.session.delete(point.schedules[0])
+    db.session.commit()
+    clock(monkeypatch, 14)
+    admin = application.test_client()
+    login(admin, 'manager')
+    worker = application.test_client()
+    login(worker)
+    before = report_context(application, worker)[1]['occurrences']
+    assert admin.post(f'/admin/points/{point.id}/update', data={
+        'code': '2F-HISTORY', 'name': 'New general office', 'category': 'general', 'floor': '2',
+        'frequency': 'monthly', 'workflow_mode': 'spot', 'active': 'on',
+    }).status_code == 302
+    body, context = report_context(application, worker)
+    assert context['occurrences'] == before and len(before) == 3
+    assert b'New general office' not in body.data
+    exported = worker.get('/missed/export?date_from=2026-11-02&date_to=2026-11-03')
+    assert b'New general office' not in exported.data
+    assert len(list(csv.reader(io.StringIO(exported.data.decode('utf-8-sig'))))) == 4
+
+
+@pytest.mark.parametrize('archive_hour,activate_hour,expected', [(10, 11, ['am', 'pm']),
+                         (10, 12, ['pm']), (10, 14, ['pm']), (13, 14, ['am', 'pm'])])
+def test_safety_reactivation_cannot_make_archived_morning_overdue(application, seeded, monkeypatch,
+                                                                  archive_hour, activate_hour, expected):
+    from test_features import clock
+
+    point = historical_point()
+    admin = application.test_client()
+    login(admin, 'manager')
+    clock(monkeypatch, archive_hour)
+    assert admin.post(f'/admin/points/{point.id}/delete').status_code == 302
+    assert admin.post(f'/admin/points/{point.id}/restore').status_code == 302
+    clock(monkeypatch, activate_hour)
+    fields = {'code': point.code, 'name': 'Restored point', 'frequency': 'daily2', 'floor': str(point.floor),
+              'category': 'safety'}
+    # Renaming the inactive point need not immediately reactivate it.
+    assert admin.post(f'/admin/points/{point.id}/update', data=fields).status_code == 302
+    assert admin.post(f'/admin/points/{point.id}/update', data=fields | {'active': 'on'}).status_code == 302
+    clock(monkeypatch, 8, day=4)
+    occurrences = report_context(application, admin)[1]['occurrences']
+    assert sorted(row['slot'] for row in occurrences if row['due_date'].isoformat() == '2026-11-03') == expected
+
+
+def test_no_op_or_partially_known_schedule_does_not_invent_a_baseline(application, seeded):
+    from datetime import date
+    from models import PointSchedule
+
+    point = historical_point()
+    db.session.delete(point.schedules[0])
+    db.session.commit()
+    admin = application.test_client()
+    login(admin, 'manager')
+    fields = dict(code=point.code, name=point.name, floor=str(point.floor), category=point.category,
+                  frequency=point.frequency, active='on')
+    assert admin.post(f'/admin/points/{point.id}/update', data=fields).status_code == 302
+    assert not point.schedules
+    existing_date = date(2026, 10, 7)
+    point.schedules.append(PointSchedule(effective_date=existing_date, active=True, frequency=point.frequency,
+                                         category=point.category, floor=point.floor))
+    db.session.commit()
+    assert admin.post(f'/admin/points/{point.id}/update', data=fields | {'name': 'Another name'}).status_code == 302
+    assert [s.effective_date for s in point.schedules] == [existing_date, date(2026, 11, 3)]
+
+
+def test_partial_history_keeps_receipts_without_guessing_the_earlier_department(application, seeded):
+    from datetime import date
+
+    point = historical_point()
+    point.schedules[0].effective_date = date(2026, 11, 3)
+    receipt = Inspection(point_id=point.id, user_id=seeded['colleague'].id, period_key='2026-11-02',
+                         created_at=datetime(2026, 11, 2, 0), frequency='daily2', slot='am', category='general',
+                         point_code='1F-ORIGINAL', point_name='Original office', point_floor=1, user_name='Reporter')
+    db.session.add(receipt)
+    db.session.commit()
+    admin = application.test_client()
+    login(admin, 'manager')
+    worker = application.test_client()
+    login(worker)
+    with rendered_contexts(application) as contexts:
+        assert admin.get('/dashboard?date=2026-11-02&category=general').status_code == 200
+    assert contexts[-1][1]['totals'] == {'total': 1, 'done': 1, 'pending': 0}
+    assert contexts[-1][1]['cards'][0]['point'].code == '1F-ORIGINAL'
+    with rendered_contexts(application) as contexts:
+        response = worker.get('/dashboard?date=2026-11-02')
+    assert contexts[-1][1]['cards'] == [] and b'Original office' not in response.data
+    occurrences = report_context(application, worker)[1]['occurrences']
+    assert [(row['due_date'], row['slot']) for row in occurrences] == [(date(2026, 11, 3), 'am')]
+    assert db.session.get(Inspection, receipt.id) is not None
+
+
+def test_partial_irregular_history_does_not_show_a_future_catalog_entry(application, seeded):
+    from datetime import date
+
+    point = historical_point(frequency='irregular', category='general')
+    point.workflow_mode = point.schedules[0].workflow_mode = 'spot'
+    point.schedules[0].effective_date = date(2026, 11, 3)
+    db.session.commit()
+    admin = application.test_client()
+    login(admin, 'manager')
+    for day, expected in [('2026-11-02', []), ('2026-11-03', [point.code])]:
+        with rendered_contexts(application) as contexts:
+            assert admin.get('/dashboard?date=' + day + '&category=general').status_code == 200
+        assert [p.code for p in contexts[-1][1]['irregular_points']] == expected
+
+
 @pytest.mark.parametrize('archive_utc_hour,expected_slots', [(3, []), (4, ['am']), (7, ['am'])])
 def test_restored_inactive_point_edits_keep_only_overdue_slots_in_original_department(application, seeded, monkeypatch,
                                                                                       archive_utc_hour, expected_slots):

@@ -157,8 +157,11 @@ def test_low_level_ownership_is_checked_before_parsing_note(application, seeded,
     assert db.session.get(InspectionIssue, cases["other_legacy"].id) is None
 
 
-def test_author_is_rechecked_after_inspection_lock(application, seeded, cases):
+@pytest.mark.parametrize("category", ["safety", "general"])
+def test_author_is_rechecked_after_inspection_lock(application, seeded, cases, category):
     row = cases["own_legacy"]
+    seeded["inspector"].patrol_category = row.category = category
+    db.session.commit()
     client = staff_client(application)
     injected = {"done": False}
     def change_owner_before_lock(state):

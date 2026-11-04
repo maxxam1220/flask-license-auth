@@ -70,17 +70,21 @@ def schedule_timeline(point):
     return [_value(schedule, "effective_date") for schedule in schedules], schedules
 
 
-def _snapshot(point, schedule):
+def schedule_snapshot(point, schedule):
     def historical(field, fallback):
         value = _value(schedule, field) if schedule is not None else None
         return fallback if value is None else value
 
+    point_id = _value(point, "id")
+    current_category = _value(point, "category", "uncategorized")
+    category = historical("category", current_category)
+    same_category = category == current_category
     return {
-        "point_id": _value(point, "id"),
-        "code": historical("point_code", _value(point, "code")),
-        "name": historical("point_name", _value(point, "name")),
-        "floor": historical("floor", _value(point, "floor")),
-        "category": historical("category", _value(point, "category", "uncategorized")),
+        "point_id": point_id,
+        "code": historical("point_code", _value(point, "code") if same_category else f"#{point_id}"),
+        "name": historical("point_name", _value(point, "name") if same_category else "歷史巡檢點"),
+        "floor": historical("floor", _value(point, "floor") if same_category else None),
+        "category": category,
         "frequency": historical("frequency", _value(point, "frequency")),
         # Schedules from before workflows were introduced represent the original rules.
         "workflow_mode": _value(schedule if schedule is not None else point, "workflow_mode", "standard") or "standard",
@@ -93,6 +97,9 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
     """Yield the schedule binding each slot immediately before its Taipei deadline."""
     dates, schedules = timeline
     last = bisect_right(dates, day) - 1
+    if schedules and last < 0:
+        # A later snapshot cannot tell which team or plan owned an earlier gap.
+        return
     next_midnight = datetime.combine(day + timedelta(days=1), time.min, TAIPEI)
     for morning, deadline in ((True, datetime.combine(day, time(12), TAIPEI)), (False, next_midnight)):
         index = last
@@ -118,7 +125,7 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
                         break
                     schedule = schedules[index - 1]
                 index -= 1
-        snapshot = _snapshot(point, schedule)
+        snapshot = schedule_snapshot(point, schedule)
         frequency = snapshot["frequency"]
         if not snapshot["active"] or snapshot["legacy_unscheduled"] or frequency not in FREQUENCIES or frequency == "irregular":
             continue

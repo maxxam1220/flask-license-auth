@@ -110,7 +110,7 @@ def test_only_own_execution_and_authorized_final_reports_can_export_paired_perso
     assert all(s["record"] is None for s in dash["cards"][0]["slots"])
     assert [e.id for e in dash["recent_executions"]]==[own.id] and not dash["recent"]
     reviewer_client=open_as(application,reviewer)
-    assert reviewer_client.get("/records?stage=execution").status_code==403
+    assert {r.id for r in context(application,reviewer_client,"/records?stage=execution")["executions"]} == {own.id,foreign.id}
     final_csv=csv_rows(reviewer_client.get("/records/export?"+RANGE))
     assert final_csv[-1][-2:]==[other.display_name,"2026-11-02 15:00:00"] and final.note in final_csv[-1]
     admin=open_as(application,seeded["manager"])
@@ -207,9 +207,9 @@ def test_monthly_repeated_personal_reviews_one_team_slot_one_execution_private_r
     assert len(csv_rows(client.get("/missed/export?" + narrow))) == 1
     filters = "date_from=2026-11-01&date_to=2026-11-30&frequency=monthly"
     receipts = context(application, client, "/records?" + filters)["records"]
-    assert [r.id for r in receipts] == [reviews[2].id, reviews[1].id]
+    assert [r.id for r in receipts] == [late.id, reviews[2].id, reviews[1].id, reviews[0].id]
     csv_data = csv_rows(client.get("/records/export?" + filters))
-    assert len(csv_data) == 3 and "private-2" not in str(csv_data) and "private-new-floor" not in str(csv_data)
+    assert len(csv_data) == 5 and "private-2" in str(csv_data) and "private-new-floor" in str(csv_data)
     admin = open_as(application, seeded["manager"])
     report = context(application, admin, "/records?stage=execution&" + filters)
     assert [e.id for e in report["executions"]] == [execution.id] and report["reviewed_execution_ids"] == {execution.id}

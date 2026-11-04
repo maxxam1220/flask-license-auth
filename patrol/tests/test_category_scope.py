@@ -66,6 +66,29 @@ def test_category_query_cannot_broaden_dashboard_missed_issues_records_or_export
             assert all(value not in csv for value in (general.name, general.code, foreign.note, "Colleague private observations"))
 
 
+def test_general_team_dashboard_and_open_cases_follow_the_recorded_category(application, seeded, mixed):
+    _, general, safety_case, _, team_case = mixed
+    seeded["colleague"].patrol_category = "general"
+    db.session.commit()
+    client = open_as(application, seeded, "colleague")
+    day = team_case.period_key
+    dashboard, _ = render(application, client, f"/dashboard?date={day}&category=safety")
+    assert [r.id for r in dashboard["recent"]] == [team_case.id]
+    card = next(c for c in dashboard["cards"] if c["point"].id == general.id)
+    assert card["latest"].id == team_case.id
+    assert dashboard["totals"]["done"] == 1
+
+    # Moving the point later must not hide the team's historical case or
+    # expose the name used in its new category.
+    general.category, general.name = "safety", "Current safety name"
+    db.session.commit()
+    issues, markup = render(application, client, f"/issues?point_id={general.id}&category=safety")
+    assert [r.id for r in issues["records"]] == [team_case.id]
+    assert issues["open_total"] == 1
+    assert issues["selected_point"].name == team_case.point_name
+    assert general.name not in markup and safety_case.note not in markup
+
+
 def test_foreign_qr_id_photo_error_forms_and_binding_cannot_reveal_private_data(application, seeded, mixed):
     _, general, _, _, foreign = mixed
     client = open_as(application, seeded)
@@ -131,6 +154,12 @@ def test_history_uses_own_snapshot_without_exposing_the_new_teams_name(applicati
     point.schedules.append(PointSchedule(effective_date=date(2026, 11, 2), category="general", frequency="daily",
                                          floor=point.floor, point_code=point.code, point_name=point.name, active=True))
     db.session.commit()
+    admin = open_as(application, seeded, "manager")
+    edit = {"category": "general", "frequency": point.frequency, "floor": str(point.floor),
+            "code": point.code, "name": "Renamed after transfer", "active": "on"}
+    assert admin.post(f"/admin/points/{point.id}/update", data=edit).status_code == 302
+    old = point.schedules[0]
+    assert (old.point_code, old.point_name, old.floor) == (None, None, None)
     client = open_as(application, seeded)
     ctx, markup = render(application, client, f"/issues?point_id={point.id}")
     assert (ctx["selected_point"].code, ctx["selected_point"].name) == (original_code, original_name)
@@ -139,6 +168,8 @@ def test_history_uses_own_snapshot_without_exposing_the_new_teams_name(applicati
                  f"/records/{own.id}", f"/checkins/{own.id}"):
         _, markup = render(application, client, path)
         assert point.name not in markup and point.code not in markup
+        if path.startswith(("/dashboard", "/missed")):
+            assert "樓層未記錄" in markup
     assert client.get(f"/c/{point.qr_token}").status_code == 404
     assert client.post(f"/issues/{own.id}/resolve", data={"expected_event_id": "0", "note": "handled"}).status_code == 302
     # Authorizations follow the account on subsequent requests, never the old

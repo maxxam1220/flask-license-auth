@@ -13,6 +13,8 @@ FREQUENCY_OPTIONS = [("daily", "每日一次"), ("daily2", "每日兩次（上�
 
 
 def floor_label(value):
+    if value is None:
+        return "樓層未記錄"
     try:
         return FLOOR_LABELS.get(int(value), str(value))
     except (ValueError, TypeError):

@@ -32,7 +32,7 @@ from general_workflow import execution_in_slot, new_execution, personal_inspecti
 from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from images import PhotoValidationError, process_uploads
-from patrol_access import can_access_category, can_read_inspection, patrol_scope
+from patrol_access import can_access_category, can_read_inspection, can_view_general_team, patrol_scope
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -148,7 +148,7 @@ def normalise_return_to(value, user):
                 if not re.fullmatch(r"[0-9]{1,10}", item) or not 1 <= int(item) <= 2147483647:
                     return None
                 item = str(int(item))
-            if key == "user_id" and (not user or user.role != "admin"):
+            if key == "user_id" and (not user or (user.role != "admin" and not can_view_general_team(user))):
                 continue
             if key == "category" and user and user.role != "admin":
                 item = patrol_scope(user)
@@ -257,6 +257,14 @@ def create_app(config=None):
     app.jinja_env.globals["issue_state"] = issue_state
     app.jinja_env.globals["management_state"] = management_state
 
+    @app.template_global()
+    def reporter_name(record):
+        if record.user_name:
+            return record.user_name
+        if can_view_general_team(g.user) and record.user_id != g.user.id:
+            return f"人員 {record.user_id}"
+        return record.user.display_name
+
     @app.context_processor
     def common_context():
         user = g.get("user")
@@ -267,7 +275,8 @@ def create_app(config=None):
                 return "總務執行人員"
             return {"safety": "職安巡檢員", "general": "總務巡檢員"}.get(patrol_scope(account), "尚未指派")
         return {"current_user": user, "role_label": role_label, "is_patrol_admin": bool(user and user.role == "admin"),
-                "viewer_category": patrol_scope(user) or None, "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
+                "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
+                "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
                 "floor_label": floor_label, "category_label": category_label,
                 "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
@@ -488,12 +497,14 @@ def create_app(config=None):
         return floor, category if scope is None else scope
 
     def private_records(query, category):
-        """Always intersect report ownership and its immutable category snapshot."""
+        """Use the category at submission. Only general inspectors have team-wide reads."""
         scope = patrol_scope(g.user)
         if scope is None:
             return query.where(Inspection.category == category) if category else query
         if not scope:
             return query.where(db.false())
+        if can_view_general_team(g.user):
+            return query.where(Inspection.category == scope)
         if g.user.role == "executor":
             return query.where(Inspection.user_id == g.user.id, Inspection.category == "general",
                                Inspection.executor_visit.is_(True), Inspection.workflow_mode == "spot",
@@ -617,7 +628,7 @@ def create_app(config=None):
     @app.get("/dashboard")
     @login_required
     def dashboard():
-        from missed import VIEW_FREQUENCIES, period_bounds, schedule_timeline, slot_plans
+        from missed import VIEW_FREQUENCIES, period_bounds, schedule_snapshot, schedule_timeline, slot_plans
         instant = now_utc()
         today = local_dt(instant).date()
         selected = parse_date(request.args.get("date"), today)
@@ -630,6 +641,7 @@ def create_app(config=None):
         points = historical_points(scope)
         floor_filter, category_filter = scope_filters()
         executor = g.user.role == "executor"
+        team_view = can_view_general_team(g.user)
         issue_counts = {} if executor else open_issue_counts(category=scope)
         frequencies = VIEW_FREQUENCIES[view]
         # Attribute a completed team slot exactly once to the first inspection's
@@ -670,17 +682,14 @@ def create_app(config=None):
         for point in points:
             point_records = found.get(point.id, [])
             schedule = next((s for s in reversed(point.schedules) if s.effective_date <= reference_day), None)
-            frequency = schedule.frequency if schedule else point.frequency
-            active = schedule.active if schedule else point.active
-            category = schedule.category if schedule else point.category
-            scheduled_floor = schedule.floor if schedule and schedule.floor is not None else point.floor
-            scheduled_code = schedule.point_code if schedule and schedule.point_code is not None else point.code
-            scheduled_name = schedule.point_name if schedule and schedule.point_name is not None else point.name
-            mode = schedule.workflow_mode if schedule else point.workflow_mode
-            legacy_unscheduled = bool(schedule and schedule.legacy_unscheduled)
+            settings = schedule_snapshot(point, schedule)
+            frequency, active, category = settings["frequency"], settings["active"], settings["category"]
+            scheduled_floor, scheduled_code, scheduled_name = settings["floor"], settings["code"], settings["name"]
+            mode, legacy_unscheduled = settings["workflow_mode"], settings["legacy_unscheduled"]
             direct_visit = (mode == "spot" and frequency == "irregular" and not legacy_unscheduled
                             and point.code == scheduled_code and point.workflow_mode == "spot" and executor_can_scan(point))
-            if ((frequency == "irregular" or legacy_unscheduled) and active and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
+            if ((frequency == "irregular" or legacy_unscheduled) and (schedule or not point.schedules) and active
+                    and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
                     and (not category_filter or category_filter == category)
                     and (not floor_filter or int(floor_filter) == scheduled_floor)):
                 irregular_points.append(SimpleNamespace(id=point.id, code=scheduled_code, name=scheduled_name, floor=scheduled_floor,
@@ -720,7 +729,8 @@ def create_app(config=None):
                     status = "done" if record else ("pending" if due and not future_slot else "not_due")
                     visible = record if record and g.user.role == "admin" else None
                     if record and g.user.role == "inspector":
-                        visible = own_records.get((point.id, group_frequency, slot, group_category, group_floor, group_mode))
+                        visible = own_records.get((point.id, group_frequency, slot, group_category, group_floor, group_mode),
+                                                  record if team_view and record.category == scope else None)
                     executed = executed_at.get((point.id, group_frequency, slot)) if group_mode == "two_stage" else None
                     stage_status = None
                     if group_mode == "two_stage":
@@ -743,8 +753,9 @@ def create_app(config=None):
                                                  floor=group_floor, frequency=group_frequency, category=group_category, workflow_mode=group_mode)
                 group_total = sum(slot["due"] for slot in slots)
                 group_done = sum(slot["status"] == "done" for slot in slots)
-                floor_counts[group_floor]["total"] += group_total
-                floor_counts[group_floor]["done"] += group_done
+                if group_floor is not None:
+                    floor_counts[group_floor]["total"] += group_total
+                    floor_counts[group_floor]["done"] += group_done
                 if not floor_filter or group_floor == int(floor_filter):
                     status = "done" if group_done == len(slots) else ("pending" if group_total else "not_due")
                     visible_records = [slot["record"] for slot in slots if slot["record"]]
@@ -753,16 +764,18 @@ def create_app(config=None):
                                   "open_issue_count": issue_counts.get(point.id, 0)})
         total = sum(slot["due"] for card in cards for slot in card["slots"])
         done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
-        recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc()).limit(6)
+        recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc(), Inspection.id.desc()).limit(6)
         recent_query = private_records(recent_query, category_filter)
         if floor_filter:
             recent_query = recent_query.where(Inspection.point_floor == int(floor_filter))
         recent_executions = []
-        if executor and scope == "general":
-            own = select(PatrolExecution).where(PatrolExecution.user_id == g.user.id, PatrolExecution.category == scope)
+        if (executor or team_view) and scope == "general":
+            executions = select(PatrolExecution).where(PatrolExecution.category == scope)
+            if executor:
+                executions = executions.where(PatrolExecution.user_id == g.user.id)
             if floor_filter:
-                own = own.where(PatrolExecution.point_floor == int(floor_filter))
-            recent_executions = db.session.scalars(own.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
+                executions = executions.where(PatrolExecution.point_floor == int(floor_filter))
+            recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                open_issue_counts=issue_counts, device_state=device_status(), irregular_points=irregular_points, spot_points=irregular_points,
@@ -1022,9 +1035,11 @@ def create_app(config=None):
         record = db.get_or_404(PatrolExecution, execution_id)
         if not can_access_category(g.user, record.category):
             abort(404)
-        if g.user.role != "admin" and (g.user.role != "executor" or record.user_id != g.user.id):
+        if (g.user.role != "admin" and not can_view_general_team(g.user)
+                and (g.user.role != "executor" or record.user_id != g.user.id)):
             abort(403)
         return render_template("checkin_success.html", record=record, stage="execute", finalized=execution_reviewed(record),
+                               back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="execution"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category))
 
@@ -1034,6 +1049,7 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         require_inspection_access(record)
         return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
+                               back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="inspection"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category),
                                point_open_issue_count=0 if record.executor_visit else
@@ -1051,7 +1067,8 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         if record.executor_visit:
             require_inspection_access(record)
-            return redirect(url_for("checkin_success", record_id=record.id))
+            source = normalise_return_to(request.args.get("return_to"), g.user)
+            return redirect(url_for("checkin_success", record_id=record.id, return_to=source))
         return render_record_detail(record)
 
     def render_record_detail(record, error=None, status=200):
@@ -1148,7 +1165,7 @@ def create_app(config=None):
             pages = max(1, (total + per_page - 1) // per_page)
             if page > pages:
                 return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
-        open_total = sum(open_issue_counts(user_id=g.user.id if g.user.role != "admin" else None,
+        open_total = sum(open_issue_counts(user_id=None if g.user.role == "admin" or can_view_general_team(g.user) else g.user.id,
                                          category=patrol_scope(g.user)).values())
         return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
                                selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
@@ -1276,7 +1293,7 @@ def create_app(config=None):
         stage = request.args.get("stage", "execution" if executor else "inspection")
         if stage not in ("inspection", "execution"):
             abort(400, description="紀錄階段不正確。")
-        if stage == "execution" and g.user.role not in ("admin", "executor"):
+        if stage == "execution" and g.user.role not in ("admin", "executor") and not can_view_general_team(g.user):
             abort(403)
         model = PatrolExecution if stage == "execution" else Inspection
         query = select(model).where(model.created_at >= start_time, model.created_at < end_time)
@@ -1297,7 +1314,8 @@ def create_app(config=None):
         if abnormal and (stage == "execution" or executor):
             abort(400, description="簽到紀錄不適用異常篩選。")
         if abnormal:
-            query = query.where(Inspection.is_abnormal.is_(abnormal == "1"))
+            # Attendance-only visits have no inspection outcome.
+            query = query.where(Inspection.executor_visit.is_(False), Inspection.is_abnormal.is_(abnormal == "1"))
         frequency = request.args.get("frequency", "")
         if frequency not in ("", "daily", "daily2", "weekly", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
@@ -1305,7 +1323,7 @@ def create_app(config=None):
             query = query.where(model.frequency.in_(("daily", "daily2")))
         elif frequency:
             query = query.where(model.frequency == frequency)
-        if g.user.role != "admin":
+        if g.user.role != "admin" and not can_view_general_team(g.user):
             user_id = str(g.user.id)
         elif user_id:
             query = query.where(model.user_id == parse_id(user_id))
@@ -1329,7 +1347,19 @@ def create_app(config=None):
                                                     selectinload(Inspection.execution)).limit(1001)).all()
         if len(rows) > 1000:
             flash("畫面顯示最近 1,000 筆，完整資料請匯出 CSV 或縮小日期範圍。", "info")
-        users = db.session.scalars(select(User).order_by(User.display_name)).all() if g.user.role == "admin" else []
+        users = []
+        if g.user.role == "admin":
+            users = db.session.scalars(select(User).order_by(User.display_name)).all()
+        elif can_view_general_team(g.user):
+            # Include former or inactive contributors without exposing a current
+            # name from another team. Use one recent saved name per author.
+            model = PatrolExecution if stage == "execution" else Inspection
+            ranked = select(model.user_id, model.user_name, db.func.row_number().over(
+                partition_by=model.user_id, order_by=(model.created_at.desc(), model.id.desc())).label("position")
+            ).where(model.category == "general").subquery()
+            users = [SimpleNamespace(id=user_id, display_name=name or f"人員 {user_id}")
+                     for user_id, name in db.session.execute(select(ranked.c.user_id, ranked.c.user_name)
+                         .where(ranked.c.position == 1).order_by(ranked.c.user_name, ranked.c.user_id))]
         storage = {}
         if g.user.role == "admin":
             storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
@@ -1366,7 +1396,7 @@ def create_app(config=None):
             writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []))
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
-                fields = [cell(row.user_name or row.user.display_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                fields = [cell(reporter_name(row)), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
                           format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
                           category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos),
                           {"open": "未結案", "resolved": "已結案", "": ""}[issue_state(row)],
@@ -1562,6 +1592,14 @@ def create_app(config=None):
         flash("點位設定已儲存。", "success")
         return redirect(destination)
 
+    def preserve_initial_schedule(point, day):
+        # With no history the current point is the report's only known plan.
+        # Never project later settings backwards across a partially known history.
+        if not point.schedules and point.schedule_start <= day:
+            point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency,
+                category=point.category, workflow_mode=point.workflow_mode, active=point.active,
+                floor=point.floor, point_code=point.code, point_name=point.name))
+
     @app.post("/admin/points/create")
     @admin_required
     def create_point():
@@ -1569,8 +1607,7 @@ def create_app(config=None):
         instant = now_utc()
         point = Point(**point_values(), active=True, schedule_start=local_dt(instant).date(), created_at=naive_utc(instant))
         db.session.add(point)
-        point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, category=point.category, workflow_mode=point.workflow_mode, active=True,
-                                             floor=point.floor, point_code=point.code, point_name=point.name))
+        preserve_initial_schedule(point, point.schedule_start)
         return save_point(point, "point_created")
 
     @app.post("/admin/points/<int:point_id>/update")
@@ -1587,6 +1624,8 @@ def create_app(config=None):
         # Freeze unknown snapshots before editing the current point. Older workers
         # may still have inserted NULL snapshots during a rolling deployment.
         for schedule in point.schedules:
+            if schedule.category != point.category:
+                continue
             if schedule.floor is None:
                 schedule.floor = point.floor
             if schedule.point_code is None:
@@ -1595,9 +1634,15 @@ def create_app(config=None):
                 schedule.point_name = point.name
         if point.active != active or any(getattr(point, key) != values[key] for key in values):
             instant = now_utc()
-            changed = (point.workflow_mode != values["workflow_mode"] or (point.workflow_mode != "standard" and
+            day = local_dt(instant).date()
+            preserve_initial_schedule(point, day)
+            # An archived point stays unavailable up to its actual reactivation,
+            # even if an administrator edited the inactive copy after restoring it.
+            reactivating_archive = not point.active and active and next(
+                (s.retired_at is not None for s in reversed(point.schedules) if s.active or s.retired_at is not None), False)
+            changed = (reactivating_archive or point.workflow_mode != values["workflow_mode"] or (point.workflow_mode != "standard" and
                        (point.active != active or point.frequency != values["frequency"] or point.category != values["category"])))
-            point.schedules.append(PointSchedule(effective_date=local_dt(instant).date(), frequency=values["frequency"], category=values["category"], active=active,
+            point.schedules.append(PointSchedule(effective_date=day, frequency=values["frequency"], category=values["category"], active=active,
                                                  workflow_changed_at=naive_utc(instant) if changed else None,
                                                  workflow_mode=values["workflow_mode"], floor=values["floor"], point_code=values["code"], point_name=values["name"]))
         for key, value in values.items():
@@ -1629,6 +1674,7 @@ def create_app(config=None):
             return conflict
         instant = now_utc()
         protect_pending_execution(point)
+        preserve_initial_schedule(point, local_dt(instant).date())
         point.deleted_at = naive_utc(instant)
         point.active = False
         point.qr_token = secrets.token_urlsafe(24)
