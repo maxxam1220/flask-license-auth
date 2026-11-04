@@ -32,7 +32,7 @@
 {% if not is_patrol_admin and not viewer_category %}<section class="panel" id="today-ready" tabindex="-1">{{ empty('等待指派巡檢分類', '請聯絡管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
 {% else %}
 <noscript><p class="scanner-fallback">使用手機內建相機掃描現場 QR Code，再點選連結開啟打卡確認頁。</p></noscript>
-{% if device_state != 'approved' %}<a class="notice-strip" href="{{ url_for('devices') }}">{{ icon('phone') }}<span><strong>{{ '瀏覽器綁定審核中' if device_state == 'pending' else '開始巡檢前，先綁定這支手機的瀏覽器' }}</strong><small>{{ '管理員核准後，即可掃描現場 QR Code 打卡。' if device_state == 'pending' else '每個帳號使用一個已核准的瀏覽器打卡。' }}</small></span>{{ icon('arrow') }}</a>{% endif %}
+{% if device_state != 'approved' %}<a class="notice-strip" href="{{ url_for('devices') }}">{{ icon('phone') }}<span><strong>{{ '瀏覽器綁定審核中' if device_state == 'pending' else '此帳號已有其他瀏覽器可打卡' if approved_elsewhere else '打卡前，請先綁定手機瀏覽器' }}</strong><small>{{ '核准更換前，請繼續用原本的瀏覽器打卡。' if approved_elsewhere and device_state == 'pending' else '可以在這裡查詢；要打卡請使用已核准的瀏覽器。' if approved_elsewhere else '管理員核准後，即可掃描現場 QR Code 打卡。' if device_state == 'pending' else '每個帳號使用一個已核准的瀏覽器打卡。' }}</small></span>{{ icon('arrow') }}</a>{% endif %}
 {% if is_patrol_admin %}<nav class="category-tabs" aria-label="巡檢分類">
   <a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor','')) }}" class="{{ 'selected' if not selected_category }}" aria-current="{{ 'page' if not selected_category else 'false' }}">全部分類</a>
   {% for value,label in category_options %}<a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor',''), category=value) }}" class="{{ 'selected' if selected_category == value }}" aria-current="{{ 'page' if selected_category == value else 'false' }}">{{ label }}</a>{% endfor %}

@@ -8,8 +8,20 @@
 {% set visits = current_user.role == 'executor' and stage == 'inspection' %}
 {% set title = '我的直接簽到' if visits else '執行紀錄' if executing else '巡檢紀錄' %}
 {% set results = executions if executing else records %}
+{% set list_return_url = url_for('records', page=pagination.page if pagination.page > 1 else none, **page_filters) %}
 {% set query_count=namespace(value=0) %}
 {% for key in ['category','floor','frequency','abnormal','user_id'] %}{% if filters.get(key,'') and ((not executing and not visits) or key != 'abnormal') and (is_patrol_admin or key != 'category') and (can_filter_people or key != 'user_id') %}{% set query_count.value=query_count.value + 1 %}{% endif %}{% endfor %}
+{% macro record_pager(label) -%}
+<nav class="pagination record-pagination" aria-label="{{ label }}">
+  {% if pagination.page > 1 %}
+  <a class="button button-secondary" rel="prev" href="{{ url_for('records', page=pagination.page-1, _anchor='record-results', **page_filters) }}">{{ icon('back') }}上一頁</a>
+  {% else %}<span></span>{% endif %}
+  <span aria-current="page">第 {{ pagination.page }} / {{ pagination.pages }} 頁</span>
+  {% if pagination.page < pagination.pages %}
+  <a class="button button-secondary" rel="next" href="{{ url_for('records', page=pagination.page+1, _anchor='record-results', **page_filters) }}">下一頁 {{ icon('arrow') }}</a>
+  {% else %}<span></span>{% endif %}
+</nav>
+{%- endmacro %}
 {% block content %}
 <div class="page-heading"><div><div class="eyebrow">歷史查詢</div><h1>{{ title }}</h1><p>{{ '查看自己在指定不定期點位的簽到時間。' if visits else '查詢總務全組的第一階段簽到，以及各時段的巡檢進度。' if can_view_general_team and executing else '查詢總務全組的巡檢與直接簽到，可依人員、日期或樓層篩選。' if can_view_general_team else '查詢兩階段點的第一階段簽到，以及後續巡檢進度。' if executing else '依分類、日期、樓層或人員，查詢巡檢與異常回報。' if current_user.role == 'admin' else '查看自己完成的巡檢、備註與現場照片。' }}</p></div><a class="button button-secondary" href="{{ url_for('export_records', stage=stage if executing or visits else none, date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), floor=filters.get('floor',''), user_id=filters.get('user_id',''), category=filters.get('category',''), abnormal=filters.get('abnormal',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
 {% if can_filter_people or current_user.role == 'executor' %}
@@ -25,7 +37,7 @@
   {% endfor %}
 </nav>
 {% endif %}
-<div class="records-result-jump"><a class="text-link" href="#record-results">查看篩選結果 <strong>{{ results|length }} 筆</strong> {{ icon('down') }}</a></div>
+<div class="records-result-jump"><a class="text-link" href="#record-results">查看篩選結果 <strong>{{ pagination.total }} 筆</strong> {{ icon('down') }}</a></div>
 {% if current_user.role == 'admin' and not executing %}
 {% set storage_used = photo_storage_used|default(0) %}{% set storage_limit = photo_storage_limit|default(0) %}
 <details class="storage-usage {{ 'storage-usage-full' if storage_limit <= storage_used }}" {% if storage_limit <= storage_used %}open{% endif %}>
@@ -58,7 +70,11 @@
   {% if can_filter_people %}<label>{{ '執行人員' if executing else '人員' }}<select name="user_id"><option value="">{{ '總務全組' if can_view_general_team else '全部人員' }}</option>{% for user in users %}<option value="{{ user.id }}" {% if filters.get('user_id','')|string == user.id|string %}selected{% endif %}>{{ user.display_name }}</option>{% endfor %}</select></label>{% endif %}
   <div class="records-filter-actions"><button class="button button-primary" type="submit">查詢紀錄</button><a class="text-link" href="{{ url_for('records', stage=stage if executing or visits else none) }}">重設</a></div>
 </form></div></section>
-<section id="record-results" class="panel spaced" tabindex="-1" aria-labelledby="record-results-title"><div class="section-heading"><div><h2 id="record-results-title">{{ '直接簽到紀錄' if visits else '執行簽到紀錄' if executing else '完成紀錄' }}</h2><p>{% if not visits %}每日兩次依上午、下午分別記錄。{% endif %}日期範圍最多 367 天。</p></div><span class="count-label">{{ results|length }} 筆</span></div>
+<section id="record-results" class="panel spaced" tabindex="-1" aria-labelledby="record-results-title"><div class="section-heading"><div><h2 id="record-results-title">{{ '直接簽到紀錄' if visits else '執行簽到紀錄' if executing else '完成紀錄' }}</h2><p>{% if not visits %}每日兩次依上午、下午分別記錄。{% endif %}日期範圍最多 367 天。</p></div><span class="count-label">共 {{ pagination.total }} 筆</span></div>
+{% if pagination.pages > 1 %}
+<p class="record-range">顯示第 {{ (pagination.page-1)*pagination.per_page+1 }}–{{ (pagination.page-1)*pagination.per_page+results|length }} 筆</p>
+{{ record_pager('紀錄分頁（上方）') }}
+{% endif %}
 {% if results %}<div class="table-scroll"><table class="records-table"><thead><tr><th scope="col">{{ '執行時間' if executing else '打卡時間' }}</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">{{ '簽到人員' if visits else '執行人員' if executing else '人員' if can_filter_people else '巡檢人員' }}</th><th scope="col">頻率／時段</th><th scope="col">{{ '登記方式' if visits else '時段進度' if executing else '回報內容' }}</th><th scope="col">詳情</th></tr></thead><tbody>{% for record in results %}<tr>
 <td data-label="{{ '執行時間' if executing else '打卡時間' }}" class="tabular">{{ record.created_at|localtime }}</td>
 <td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ point_code(record) }}</span><strong>{{ point_name(record) }}</strong></div></td>
@@ -66,11 +82,12 @@
 <td data-label="{{ '簽到人員' if visits else '執行人員' if executing else '人員' if can_filter_people else '巡檢人員' }}"><strong>{{ reporter_name(record) }}</strong></td>
 <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(record.frequency) }}</span>{% if record.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(record.slot) }}</small>{% endif %}</div></td>
 {% if executing %}{% set state=execution_states[record.id] %}<td data-label="時段進度"><span class="badge {{ 'badge-done' if state == 'done' else 'badge-todo' if state == 'pending' else 'badge-neutral' }}">{{ '已執行、待巡檢' if state == 'pending' else execution_state_labels[state] }}</span></td>
-<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('execution_success', execution_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看簽到 {{ icon('arrow') }}</a></td>
+<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('execution_success', execution_id=record.id, return_to=list_return_url) }}">查看簽到 {{ icon('arrow') }}</a></td>
 {% elif record.executor_visit %}<td data-label="{{ '登記方式' if visits else '回報內容' }}"><span class="badge badge-neutral">不定期 · 直接簽到</span></td>
-<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('checkin_success', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看簽到 {{ icon('arrow') }}</a></td>
+<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('checkin_success', record_id=record.id, return_to=list_return_url) }}">查看簽到 {{ icon('arrow') }}</a></td>
 {% else %}<td data-label="回報內容"><div class="record-report-cell">{% if record.workflow_mode == 'two_stage' %}<span class="badge badge-stage">第二階段 · 巡檢</span>{% elif record.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段巡檢</span>{% endif %}{{ issue_status(record) }}{% if record.note %}<span class="note-summary">{{ record.note[:60] }}{{ '…' if record.note|length > 60 else '' }}</span>{% endif %}{% if record.photos %}<small class="photo-count">{{ icon('camera') }}{{ record.photos|length }} 張照片</small>{% endif %}</div></td>
-<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('record_detail', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看詳情 {{ icon('arrow') }}</a></td>
+<td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('record_detail', record_id=record.id, return_to=list_return_url) }}">查看詳情 {{ icon('arrow') }}</a></td>
 {% endif %}</tr>{% endfor %}</tbody></table></div>{% else %}{{ empty('這段時間尚無符合紀錄','在指定不定期點完成直接簽到後，會在這裡顯示點位及時間。' if visits else '完成第一階段簽到後，就會顯示點位、人員及時間。也可以調整日期或樓層再查詢。' if executing else '試著調整日期、樓層或回報狀態。完成打卡後，紀錄會顯示在這裡。') }}{% endif %}
+{% if pagination.pages > 1 %}{{ record_pager('紀錄分頁（下方）') }}{% endif %}
 </section>
 {% endblock %}

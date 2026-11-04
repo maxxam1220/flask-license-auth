@@ -6,6 +6,18 @@
   let lastAttempt = Date.now();
   let shiftTimer;
   const updateLink = p => p.querySelector('[data-ready-refresh]');
+  function readingPosition(next) {
+    const headerBottom = document.querySelector('.mobile-header')?.getBoundingClientRect().bottom || 0;
+    if (panel.getBoundingClientRect().top >= headerBottom) return null;
+    const nextRows = new Map(Array.from(next.querySelectorAll('[data-ready-point]'), row => [row.dataset.readyPoint, row]));
+    for (const row of panel.querySelectorAll('[data-ready-point]')) {
+      const {top, bottom} = row.getBoundingClientRect();
+      if (top >= innerHeight) break;
+      const replacement = nextRows.get(row.dataset.readyPoint);
+      if (bottom > headerBottom && replacement) return {row: replacement, top};
+    }
+    return null;
+  }
   function refreshIfVisible(minAge = 60000) {
     const rect = panel.getBoundingClientRect();
     if (!document.hidden && rect.bottom > 0 && rect.top < innerHeight &&
@@ -39,9 +51,16 @@
       const fragment = new DOMParser().parseFromString(await res.text(), 'text/html');
       const next = fragment.querySelector('section#today-ready[data-ready-panel]');
       if (!next || !updateLink(next)) throw Error('Missing list');
+      if (next.dataset.readyViewer !== panel.dataset.readyViewer) {
+        // A different login in another tab also changes the navigation and available filters.
+        panel.hidden = true;
+        location.reload();
+        return;
+      }
       const active = document.activeElement;
       const focusedPanel = active === panel;
       const focusedRefresh = active === updateLink(panel);
+      const position = manual ? null : readingPosition(next);
       updateLink(next).href = updateLink(panel).href;
       panel.replaceWith(next);
       panel = next;
@@ -49,6 +68,10 @@
       scheduleShiftChange();
       if (focusedPanel || focusedRefresh) {
         (focusedPanel ? panel : updateLink(panel)).focus({preventScroll: true});
+      }
+      if (position) {
+        const shift = position.row.getBoundingClientRect().top - position.top;
+        if (Math.abs(shift) >= 1) window.scrollBy({top: shift, behavior: 'instant'});
       }
     } catch {
       const feedback = panel.querySelector('[data-ready-feedback]');

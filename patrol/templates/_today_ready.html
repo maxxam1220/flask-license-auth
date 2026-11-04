@@ -1,14 +1,16 @@
 {% from '_ui.html' import icon %}
 {% set executing = current_user.role == 'executor' %}
 {% set scope = selected_category if is_patrol_admin else viewer_category %}
+{% set category_filter = (selected_category or none) if is_patrol_admin else none %}
 {% set heading = '待簽到點位' if executing else '待巡點位' %}
 <section id="today-ready" class="panel ready-panel" tabindex="-1" aria-labelledby="today-ready-title" data-ready-panel
-         data-ready-url="{{ url_for('dashboard_ready', category=selected_category or none, floor=selected_floor or none) }}">
+         data-ready-viewer="{{ current_user.id }}:{{ current_user.auth_version }}:{{ current_user.role }}:{{ viewer_category or '' }}"
+         data-ready-url="{{ url_for('dashboard_ready', category=category_filter, floor=selected_floor or none) }}">
   <div class="ready-heading">
     <h2 id="today-ready-title">{{ heading }}</h2>
     <span class="ready-count">{{ ready_points|length }} 個點位</span>
     <a class="text-link ready-refresh" data-ready-refresh
-       href="{{ url_for('ready', category=selected_category or none, floor=selected_floor or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新列表</a>
+       href="{{ url_for('ready', category=category_filter, floor=selected_floor or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新列表</a>
   </div>
   <p class="ready-scope">
     <time datetime="{{ ready_date }}">{{ ready_date }}</time><span>{{ ready_slot_label }}</span><span>{{ category_label(scope) if scope else '全部分類' }} · {{ floor_label(selected_floor) if selected_floor else '全部樓層' }}</span>
@@ -28,10 +30,14 @@
       </thead>
       <tbody role="rowgroup">
         {% for row in ready_points %}
-        <tr role="row">
+        <tr role="row" data-ready-point="{{ row.id }}">
           <td class="ready-floor" role="cell">{{ floor_label(row.floor) }}</td>
           <td class="ready-code" role="cell">{{ row.code }}</td>
-          <td class="ready-name" role="cell">{{ row.name }}</td>
+          <td class="ready-name" role="cell">{{ row.name }}
+            {% if row.frequency in ('weekly', 'monthly') %}
+            <small class="ready-due">{{ '週巡' if row.frequency == 'weekly' else '月巡' }} · <time datetime="{{ row.period_end }}">{{ '今日到期' if row.period_end == ready_date else row.period_end.strftime('%m/%d') ~ ' 到期' }}</time></small>
+            {% endif %}
+          </td>
           <td class="ready-status" role="cell"><span class="ready-tag {{ 'ready-tag-execute' if row.status_key == 'execute' }}">{{ row.status_label }}</span></td>
         </tr>
         {% endfor %}

@@ -82,12 +82,13 @@
           <div class="photo-field" data-photo-upload>
             <label id="inspection-photo-label" for="inspection-photos">巡檢照片 <span class="optional-label">選填</span></label>
             <label class="photo-picker-box" for="inspection-photos">
-              <span class="photo-picker-caption">{{ icon('camera') }}<span><strong>選擇現場照片</strong><small>可從相簿選擇，或使用手機提供的拍照選項。</small></span></span>
+              <span class="photo-picker-caption">{{ icon('camera') }}<span><strong data-photo-caption>選擇現場照片</strong><small>可從相簿選擇，或使用手機提供的拍照選項。</small></span></span>
               <input id="inspection-photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple aria-labelledby="inspection-photo-label" aria-describedby="photo-guidance photo-feedback" data-photo-input>
             </label>
-            <p id="photo-guidance" class="photo-guidance">最多 3 張，每張不超過 8 MB。支援 JPG、PNG、WebP、HEIC。重新選取會取代目前選擇。</p>
+            <p id="photo-guidance" class="photo-guidance">最多 3 張，每張不超過 8 MB。支援 JPG、PNG、WebP、HEIC。<span data-photo-mode>重新選取會取代目前選擇。</span></p>
             <p id="photo-feedback" class="photo-feedback" role="status" aria-live="polite" data-photo-feedback></p>
             <div class="photo-preview-list" data-photo-previews></div>
+            <div hidden><button type="button" class="button button-secondary" data-photo-clear>清空已選照片</button></div>
           </div>
         </div>
         {% endif %}{% if not simple_signin %}<button class="button button-primary button-full button-large" type="submit" data-loading-text="{{ '正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{{ submit_label }}</button>{% endif %}

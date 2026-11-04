@@ -7,17 +7,20 @@
 {% set phase_status = review_status|default('done' if finalized else 'pending') %}
 {% set own_record = record.user_id == current_user.id %}
 {% set reviewing = not own_record or (back_url and request.args.get('return_to')) %}
+{% set results_url = back_url or url_for('records', stage='execution' if executed else 'inspection') %}
+{% set results_link = results_url ~ ('#issue-results' if results_url.split('?')[0] == '/issues' else '#record-results') %}
 {% set title = ('直接簽到收據' if visit else '執行簽到收據' if executed else '巡檢收據') if reviewing else ('直接簽到完成' if visit else '執行簽到完成' if executed else '打卡成功') %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
 <div class="checkin-wrap receipt-wrap">
-  {% if reviewing %}<a class="back-link" href="{{ back_url or url_for('records', stage='execution' if executed else 'inspection') }}">{{ icon('back') }}返回查詢結果</a>{% endif %}
+  {% if reviewing %}<a class="back-link" href="{{ results_link }}">{{ icon('back') }}返回查詢結果</a>{% endif %}
   <div class="checkin-card success-card">
   {% if not reviewing %}<span class="success-emblem">{{ icon('check') }}</span>{% endif %}
   <span class="eyebrow">{% if record.frequency == 'daily2' %}{{ slot_label(record.slot) }} · {% endif %}{{ '不定期 · 簽到紀錄已儲存' if visit else '第一階段 · 簽到紀錄已儲存' if executed else '巡檢紀錄已儲存' }}</span>
   <h1>{% if not reviewing and current_user.role == 'executor' and (executed or visit) %}<span lang="en">Checked in</span><br>{% endif %}{{ title }}</h1>
   <p class="checkin-location">{% if reviewing %}{{ reporter_name(record) }} 於 {{ record.created_at|localtime }} {{ '完成直接簽到' if visit else '完成第一階段簽到' if executed else '完成巡檢' }}。{% elif visit %}已登記本次到場時間，可繼續掃描下一個點位。{% elif executed %}{% if phase_status == 'done' %}本期已完成第二階段巡檢。{% elif phase_status == 'expired' %}本期已到期，沒有第二階段巡檢紀錄。{% elif phase_status == 'unknown' %}已保留執行簽到，無法確認此筆紀錄的有效期間。{% elif long_period %}已完成第一階段。總務巡檢員可在 {{ long_period.end }} 當日結束前接續，無須同一天到場。{% else %}待巡檢，由總務巡檢員掃描同一點位完成第二階段。{% endif %}{% elif record.execution %}本人巡檢已完成，已連結{{ '本週期' if long_period else '同一時段' }}的執行簽到。{% elif record.workflow_mode == 'spot' %}本人單段巡檢已儲存，其他人員仍可在此點打卡。{% elif record.is_abnormal %}本次異常回報與巡檢紀錄已儲存。{% else %}辛苦了，本次巡檢已完成。{% endif %}</p>
   {% if can_scan and not reviewing %}{{ scanner_button('next', '繼續掃下一點') }}{% endif %}
+  {% if not reviewing and (current_user.patrol_category or is_patrol_admin) %}<a class="button button-text button-full" href="{{ url_for('ready') }}">{{ '查看今日待簽到' if current_user.role == 'executor' else '查看今日待巡' }} {{ icon('arrow') }}</a>{% endif %}
   <div class="success-receipt">
     <span class="point-code">{{ point_code(record) }}</span><h2>{{ point_name(record) }}</h2>
     {% if is_patrol_admin %}<div><span>巡檢分類</span><strong>{{ category_label(record.category) }}</strong></div>{% endif %}
@@ -31,7 +34,7 @@
   </div>
   {% if not visit and point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=record.point_id) if is_patrol_admin or can_view_general_team else '') }}<p>此點位的未結案異常仍持續追蹤。</p></div>{% endif %}
   <a class="button button-secondary button-full" href="{{ progress_url }}">查看巡檢進度 {{ icon('arrow') }}</a>
-  {% if reviewing and (visit or executed) %}<a class="button button-text button-full" href="{{ back_url or url_for('records', stage='execution' if executed else 'inspection') }}">返回查詢結果</a>
+  {% if reviewing and (visit or executed) %}<a class="button button-text button-full" href="{{ results_link }}">返回查詢結果</a>
   {% elif visit %}<a class="button button-text button-full" href="{{ url_for('records', stage='inspection') }}">{{ '查看我的直接簽到' if current_user.role == 'executor' else '返回巡檢紀錄' }}</a>
   {% elif executed %}<a class="button button-text button-full" href="{{ url_for('records', stage='execution') }}">返回執行紀錄</a>
   {% else %}<a class="button button-text button-full" href="{{ url_for('record_detail', record_id=record.id, return_to=back_url if reviewing else none) }}">{{ '查看並處理本次異常' if issue_state(record) == 'open' and (is_patrol_admin or own_record) else '查看本次異常詳情' if record.is_abnormal else '查看本次備註與照片' }}</a>{% endif %}

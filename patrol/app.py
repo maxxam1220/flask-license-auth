@@ -126,10 +126,10 @@ def normalise_return_to(value, user):
             return None
         if parsed.path == "/issues" and not user:
             return None
-        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=8)
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=9)
         if len({key for key, _ in pairs}) != len(pairs):
             return None
-        allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency", "stage"}
+        allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency", "stage", "page"}
                    if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page"})
         values = {}
         for key, item in pairs:
@@ -346,7 +346,9 @@ def create_app(config=None):
             if not expected or not received or not received.isascii() or not hmac.compare_digest(expected, received):
                 abort(400, description="表單已過期，請重新載入頁面後再試。")
         if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz"):
-            if request.method == "GET" and request.endpoint not in (None, "login"):
+            if (request.method == "GET" and request.endpoint not in (None, "login")
+                    and (request.endpoint == "checkin" or not session.get("after_password")
+                         or session["after_password"] == url_for("dashboard"))):
                 session["after_password"] = safe_next(request.full_path.rstrip("?"))
             return redirect(url_for("change_password", next=safe_next(session.get("after_password"))))
 
@@ -454,6 +456,19 @@ def create_app(config=None):
     def device_status():
         binding = device_binding()
         return binding.status if binding else "none"
+
+    def binding_overview(bindings=None):
+        """Identify this browser and this account's approved device in one read."""
+        token = request.cookies.get(DEVICE_COOKIE, "")
+        digest = hash_device_token(token) if token and len(token) <= 256 else None
+        if bindings is None:
+            relevant = DeviceBinding.status == "approved"
+            if digest:
+                relevant = db.or_(relevant, DeviceBinding.token_hash == digest)
+            bindings = db.session.scalars(select(DeviceBinding).where(DeviceBinding.user_id == g.user.id, relevant)).all()
+        current = next((row for row in bindings if row.token_hash == digest), None)
+        other = next((row for row in bindings if row.status == "approved" and row is not current), None)
+        return current, other
 
     def parse_date(value, default):
         if not value:
@@ -843,10 +858,12 @@ def create_app(config=None):
             if floor_filter:
                 executions = executions.where(PatrolExecution.point_floor == int(floor_filter))
             recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
+        current_binding, approved_elsewhere = binding_overview()
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                missed_count=sum(card["missed_count"] for card in cards),
-                               open_issue_counts=issue_counts, device_state=device_status(), irregular_points=irregular_points, spot_points=irregular_points,
+                               open_issue_counts=issue_counts, device_state=current_binding.status if current_binding else "none",
+                               approved_elsewhere=approved_elsewhere, irregular_points=irregular_points, spot_points=irregular_points,
                                recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
                                missed_query_url=url_for("missed", date_from=period_day.isoformat(),
                                    date_to=period_end.isoformat(), category=category_filter, floor=floor_filter,
@@ -1279,7 +1296,8 @@ def create_app(config=None):
     @login_required
     def devices():
         bindings = db.session.scalars(select(DeviceBinding).where(DeviceBinding.user_id == g.user.id).order_by(DeviceBinding.created_at.desc())).all()
-        return render_template("devices.html", current_binding=device_binding(), bindings=bindings, next_url=binding_destination())
+        current, other = binding_overview(bindings)
+        return render_template("devices.html", current_binding=current, approved_elsewhere=other, bindings=bindings, next_url=binding_destination())
 
     @app.post("/devices/request")
     @login_required
@@ -1317,10 +1335,11 @@ def create_app(config=None):
         if binding.status not in ("approved", "pending"):
             flash("這筆綁定已經處理，請查看目前狀態。", "info")
             return redirect(destination)
+        was_pending = binding.status == "pending"
         binding.status = "revoked"
         audit("device_self_revoked", binding.id)
         db.session.commit()
-        flash("已解除此瀏覽器綁定。", "success")
+        flash(f"已撤回「{binding.label}」的綁定申請。" if was_pending else f"已解除「{binding.label}」的綁定。", "success")
         return redirect(destination)
 
     @app.get("/admin/devices")
@@ -1440,22 +1459,34 @@ def create_app(config=None):
     def records():
         query, filters = record_query()
         stage = filters["stage"]
+        model = PatrolExecution if stage == "execution" else Inspection
+        page = parse_id(request.args.get("page", "1"))
+        per_page = 50
+        # Count only matching IDs; related people, points, photos and stage
+        # progress are loaded only for the page currently being viewed.
+        total = db.session.scalar(query.with_only_columns(db.func.count(model.id)).order_by(None))
+        pages = max(1, (total + per_page - 1) // per_page)
+        page_filters = {key: value for key, value in filters.items() if value}
+        if g.user.role != "admin":
+            page_filters.pop("category", None)
+            if not can_view_general_team(g.user):
+                page_filters.pop("user_id", None)
+        if page > pages:
+            return redirect(url_for("records", **page_filters, page=pages, _anchor="record-results"))
+        query = query.offset((page - 1) * per_page).limit(per_page)
         if stage == "execution":
-            rows = db.session.execute(query.limit(1001)).all()
+            rows = db.session.execute(query).all()
         elif g.user.role == "executor":
-            rows = db.session.scalars(query.limit(1001)).all()
+            rows = db.session.scalars(query).all()
         else:
             rows = db.session.scalars(query.options(selectinload(Inspection.photos), selectinload(Inspection.issue),
-                                                    selectinload(Inspection.execution)).limit(1001)).all()
-        if len(rows) > 1000:
-            flash("畫面顯示最近 1,000 筆，完整資料請匯出 CSV 或縮小日期範圍。", "info")
+                                                    selectinload(Inspection.execution))).all()
         users = []
         if g.user.role == "admin":
             users = db.session.scalars(select(User).order_by(User.display_name)).all()
         elif can_view_general_team(g.user):
             # Include former or inactive contributors without exposing a current
             # name from another team. Use one recent saved name per author.
-            model = PatrolExecution if stage == "execution" else Inspection
             ranked = select(model.user_id, model.user_name, db.func.row_number().over(
                 partition_by=model.user_id, order_by=(model.created_at.desc(), model.id.desc())).label("position")
             ).where(model.category == "general").subquery()
@@ -1478,7 +1509,6 @@ def create_app(config=None):
         if g.user.role == "admin":
             storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
                        "photo_storage_limit": app.config["PHOTO_STORAGE_LIMIT_BYTES"]}
-        rows = rows[:1000]
         execution_states = {}
         if stage == "execution":
             instant = now_utc()
@@ -1488,6 +1518,8 @@ def create_app(config=None):
                                executions=[row for row, _ in rows] if stage == "execution" else [],
                                reviewed_execution_ids={row.id for row, reviewed in rows if reviewed} if stage == "execution" else set(),
                                execution_states=execution_states, execution_state_labels=EXECUTION_STATUS_LABELS,
+                               pagination={"page": page, "pages": pages, "total": total, "per_page": per_page},
+                               page_filters=page_filters,
                                stage=stage, users=users, filters=filters, **storage)
 
     def write_record_csv(writer, query, filters):

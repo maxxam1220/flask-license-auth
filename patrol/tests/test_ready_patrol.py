@@ -198,3 +198,18 @@ def test_changed_frequency_preserves_the_personal_checkin_limit(application):
     assert rendered[-1][1]["can_confirm"] is False
     assert ready(application, peer)[point.code] == "inspect"
     assert ready(application, admin)[point.code] == "inspect"
+
+
+def test_weekly_and_monthly_rows_show_their_own_taipei_due_date(application, monkeypatch):
+    now = datetime(2026, 11, 29, 23, 59, tzinfo=TAIPEI)  # Sunday; the month ends Monday.
+    monkeypatch.setattr(app_module, "now_utc", lambda: now)
+    _, inspector, *_ = actors(application)
+    feature_point(code="Q-WEEK", frequency="weekly", category="general")
+    feature_point(code="Q-MONTH", frequency="monthly", category="general")
+    full_page = inspector.get("/ready").text
+    assert '週巡 · <time datetime="2026-11-29">今日到期</time>' in full_page
+    assert '月巡 · <time datetime="2026-11-30">11/30 到期</time>' in full_page
+    now += timedelta(minutes=1)
+    refreshed = inspector.get("/dashboard/ready").text
+    assert '週巡 · <time datetime="2026-12-06">12/06 到期</time>' in refreshed
+    assert '月巡 · <time datetime="2026-11-30">今日到期</time>' in refreshed

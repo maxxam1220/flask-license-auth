@@ -40,6 +40,7 @@
 .ready-mobile-key { display: none; }
 .ready-floor, .ready-code { font-weight: 650; color: #425b57; font-size: var(--reading-secondary); font-variant-numeric: tabular-nums; }
 .ready-name { color: var(--ink); font-size: var(--reading-body); font-weight: 650; }
+.ready-due { display: block; color: var(--muted); font-size: var(--reading-secondary); font-weight: 500; }
 .ready-tag {
   display: inline-block; max-width: 100%; padding: .16rem .4rem; border-radius: 4px;
   color: #194e82; background: #e6f0ff; font-size: var(--reading-secondary); font-weight: 650; text-wrap: balance;

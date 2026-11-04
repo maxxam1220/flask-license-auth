@@ -21,6 +21,11 @@
 .report-page .section-heading h2, .report-page .missed-point-summary > summary strong { font-size: 1.35rem; }
 .report-page .missed-count { font-size: 1.15em; }
 .report-page .missed-count, .report-page .missed-deadline { line-height: 1.45; }
+.record-range { margin: 0; color: var(--muted); font-size: var(--report-support); }
+.record-pagination { display: grid; grid-template-columns: 1fr auto 1fr; }
+.record-pagination > :first-child { justify-self: start; }
+.record-pagination > :last-child { justify-self: end; }
+.record-range + .record-pagination { margin: .4rem 0 .9rem; }
 .report-scope-line { display: flex; align-items: center; justify-content: space-between; gap: 0 18px; flex-wrap: wrap; }
 .report-scope-line p { margin: 0; }
 .report-scope-line .text-link { min-height: 44px; font-size: var(--report-body); }

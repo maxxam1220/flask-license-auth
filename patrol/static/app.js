@@ -248,11 +248,30 @@
       const input = container.querySelector('[data-photo-input]');
       const feedback = container.querySelector('[data-photo-feedback]');
       const previewList = container.querySelector('[data-photo-previews]');
+      const caption = container.querySelector('[data-photo-caption]');
+      const modeHint = container.querySelector('[data-photo-mode]');
+      const clear = container.querySelector('[data-photo-clear]');
       if (!input || !feedback || !previewList) return;
       const supportedTypes = new Set(['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/x-png', 'image/webp', 'image/heic', 'image/heif']);
       const maxSize = 8 * 1024 * 1024;
       let previewUrls = [];
-      let canRemove = typeof DataTransfer === 'function';
+      let selected = Array.from(input.files);
+      let canCombine = false;
+      try {
+        // Some mobile browsers expose FileList but do not allow assigning it.
+        const probe = input.cloneNode(false);
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(['x'], 'test.jpg', {type: 'image/jpeg'}));
+        probe.files = transfer.files;
+        canCombine = probe.files.length === 1;
+      } catch { /* Keep the native picker and its replacement instructions. */ }
+
+      function setFiles(files) {
+        const transfer = new DataTransfer();
+        files.forEach(file => transfer.items.add(file));
+        input.files = transfer.files;
+        if (input.files.length !== files.length) throw new Error('File selection was not updated');
+      }
 
       function supportsPhoto(file) {
         const type = file.type.toLowerCase();
@@ -261,7 +280,7 @@
 
       function validatePhotos(files) {
         let message = '';
-        if (files.length > 3) message = `目前選了 ${files.length} 張照片，最多只能附 3 張，請移除多餘照片或重新選擇。`;
+        if (files.length > 3) message = `目前選了 ${files.length} 張照片，最多只能附 3 張。請${canCombine ? '移除多餘照片，或清空後重新選擇' : '重新選擇'}。`;
         else if (files.some(file => file.size === 0)) message = '有照片是空白檔案，請移除並重新選擇。';
         else if (files.some(file => file.size > maxSize)) message = '有照片超過 8 MB，請移除或更換較小的照片。';
         else if (files.some(file => !supportsPhoto(file))) message = '請選擇 JPG、PNG、WebP 或 HEIC 照片。';
@@ -275,7 +294,13 @@
         previewUrls.forEach(url => URL.revokeObjectURL(url));
         previewUrls = [];
         previewList.replaceChildren();
-        const files = Array.from(input.files || []);
+        const files = Array.from(input.files);
+        selected = files;
+        if (clear) clear.parentElement.hidden = !files.length;
+        const atLimit = canCombine && files.length >= 3;
+        input.setAttribute('aria-disabled', String(atLimit));
+        if (caption) caption.textContent = atLimit ? '已達照片張數上限' : !files.length ? '選擇現場照片' : canCombine ? '繼續新增照片' : '重新選擇照片';
+        if (modeHint) modeHint.textContent = atLimit ? '請先移除照片再新增。' : canCombine ? '可分次拍照或選取，相片會累加。' : '重新選取會取代目前選擇。';
         validatePhotos(files);
         files.slice(0, 6).forEach((file, index) => {
           const figure = document.createElement('figure');
@@ -304,10 +329,11 @@
           const name = document.createElement('span');
           name.textContent = file.name;
           const size = document.createElement('small');
-          size.textContent = `${(file.size / 1024 / 1024).toFixed(1)} MB`;
+          size.textContent = file.size < 1024 ? `${file.size} B` : file.size < 1024 * 1024
+            ? `${Math.round(file.size / 1024)} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`;
           caption.append(name, size);
           figure.append(caption);
-          if (canRemove) {
+          if (canCombine) {
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'button button-secondary button-small photo-remove';
@@ -315,14 +341,11 @@
             remove.setAttribute('aria-label', `移除照片 ${index + 1}：${file.name}`);
             remove.addEventListener('click', () => {
               try {
-                const transfer = new DataTransfer();
-                files.forEach((item, itemIndex) => { if (itemIndex !== index) transfer.items.add(item); });
-                input.files = transfer.files;
-                if (input.files.length !== files.length - 1) throw new Error('File selection was not updated');
+                setFiles(files.filter((_, itemIndex) => itemIndex !== index));
                 renderPhotos();
                 input.focus();
               } catch (_) {
-                canRemove = false;
+                canCombine = false;
                 renderPhotos();
                 feedback.textContent = '此瀏覽器不支援逐張移除，請使用檔案選擇按鈕重新選擇照片。';
               }
@@ -333,7 +356,32 @@
         });
       }
 
-      input.addEventListener('change', renderPhotos);
+      input.addEventListener('click', event => {
+        // Keep the native field enabled so its attachments still submit.
+        if (canCombine && selected.length >= 3) event.preventDefault();
+      });
+      input.addEventListener('change', () => {
+        // The native picker replaces its FileList on each visit, even after a
+        // single camera shot. Submit the same ordered files shown in the preview.
+        if (canCombine && selected.length) {
+          try {
+            setFiles([...selected, ...input.files]);
+          } catch {
+            canCombine = false;
+            renderPhotos();
+            feedback.textContent += ' 此瀏覽器只能保留最後一次選取的照片，請核對清單。';
+            return;
+          }
+        }
+        renderPhotos();
+      });
+      clear?.addEventListener('click', () => {
+        input.value = '';
+        renderPhotos();
+        feedback.textContent = '已清空照片。';
+        input.focus();
+      });
+      window.addEventListener('pageshow', event => { if (event.persisted) renderPhotos(); });
       renderPhotos();
       container.classList.add('photo-picker-ready');
     });

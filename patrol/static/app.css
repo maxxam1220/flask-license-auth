@@ -869,3 +869,15 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .toolbar .date-filter { width: 100%; }
   .toolbar .date-filter input[type=date] { flex: 1; min-width: 0; }
 }
+
+.binding-existing { margin-block: 1rem; overflow-wrap: anywhere; }
+.binding-replace { border-top: 1px solid var(--line); }
+.binding-replace > summary { padding-block: .75rem; min-height: 44px; color: var(--teal); cursor: pointer; font-weight: 650; }
+.binding-replace[open] .form-stack { margin-block: .5rem 0; }
+.guest-body.password-setup .main-content { padding: clamp(1rem, 4vw, 3rem) 1rem; }
+.password-setup .narrow-page { max-width: 36rem; margin-inline: auto; }
+.password-setup-bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  margin-bottom: 1.5rem; border-bottom: 1px solid var(--line); color: var(--teal); font-weight: 650; }
+.password-setup-bar > span { overflow-wrap: anywhere; min-width: 0; }
+.password-setup-bar button { display: inline-flex; gap: .4rem; align-items: center; min-height: 44px; white-space: nowrap; }
+.guest-body.password-setup .flash-stack { max-width: 36rem; padding: 0; margin: 0 auto 1rem; }

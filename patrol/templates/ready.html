@@ -13,7 +13,7 @@
     <div class="eyebrow">{{ '巡檢工作台' if is_patrol_admin else role_label(current_user) }}</div>
     <h1>{{ title }}</h1>
     {% if is_patrol_admin or viewer_category %}
-    <p>{{ '可前往執行簽到的兩階段點位。' if executing else '兩階段點位會在執行人員簽到後列入。' }}</p>
+    <p>{% if executing %}可前往執行簽到的兩階段點位。{% elif viewer_category == 'safety' or selected_category == 'safety' %}列出目前尚待完成的職安巡檢點。{% else %}兩階段點位會在執行人員簽到後列入。{% endif %}</p>
     {% endif %}
   </div>
   {% if can_scan %}<div class="dashboard-actions">{{ scanner_button('dashboard', '掃描巡檢點') }}</div>{% endif %}

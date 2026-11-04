@@ -13,6 +13,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
     today = local_now.date()
     executor = user.role == "executor"
     current_half = "am" if local_now.hour < 12 else "pm"
+    period_ranges = {frequency: period_bounds(today, frequency) for frequency in ("daily", "daily2", "weekly", "monthly")}
     candidates = {}
     for point in points:
         # historical_points() can include a former team's redacted point.
@@ -35,7 +36,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
                 created_at = created_at.replace(tzinfo=timezone.utc)
             if created_at and created_at >= deadline:
                 continue
-            period_key = period_bounds(today, point.frequency)[0].isoformat()
+            period_key = period_ranges[point.frequency][0].isoformat()
             candidates[point.id, point.frequency, period_key, slot] = point
             break
     if not candidates:
@@ -84,5 +85,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
                 status, label = "review", "已簽到待巡檢"
         else:
             status, label = "inspect", "待巡檢"
-        result.append(dict(floor=point.floor, code=point.code, name=point.name, status_key=status, status_label=label))
+        result.append(dict(id=point.id, floor=point.floor, code=point.code, name=point.name,
+                           frequency=point.frequency, period_end=period_ranges[point.frequency][1],
+                           status_key=status, status_label=label))
     return result

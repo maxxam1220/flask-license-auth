@@ -4,7 +4,8 @@
 {% set detail_from_issues=detail_page and (back_url|default('')).split('?')[0] == '/issues' %}
 {% set record_nav_active=request.endpoint in ['records','execution_success'] or (request.endpoint == 'checkin_success' and request.args.get('return_to') and back_url|default('')) or (detail_page and not detail_from_issues) %}
 {% set issue_nav_active=request.endpoint == 'issues' or detail_from_issues %}
-{% set workspace_nav = current_user and request.endpoint != 'login' %}
+{% set password_setup = current_user and current_user.must_change_password and request.endpoint == 'change_password' %}
+{% set workspace_nav = current_user and request.endpoint != 'login' and not password_setup %}
 {% set ready_nav_label = '今日待簽到' if current_user and current_user.role == 'executor' else '今日待巡' %}
 {% set ready_nav_active = request.endpoint == 'ready' %}
 {% set ready_nav_href = url_for('ready') %}

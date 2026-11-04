@@ -7,7 +7,7 @@
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
 <div class="record-detail-wrap">
-<div class="record-back-links"><a class="back-link" href="{{ back_url }}">{{ icon('back') }}{{ back_label }}</a>{% if current_issue_state and back_url.split('?')[0] != url_for('issues') %}<a class="text-link" href="{{ url_for('issues') }}">異常追蹤 {{ icon('arrow') }}</a>{% endif %}</div>
+<div class="record-back-links"><a class="back-link" href="{{ back_url }}#{{ 'issue-results' if back_url.split('?')[0] == url_for('issues') else 'record-results' }}">{{ icon('back') }}{{ back_label }}</a>{% if current_issue_state and back_url.split('?')[0] != url_for('issues') %}<a class="text-link" href="{{ url_for('issues') }}">異常追蹤 {{ icon('arrow') }}</a>{% endif %}</div>
 <div class="page-heading detail-heading">
   <div><div class="eyebrow">巡檢紀錄 <span class="detail-point-code">{{ point_code(record) }}</span></div><h1>{{ point_name(record) }}</h1></div>
   <div class="record-status-badge">
