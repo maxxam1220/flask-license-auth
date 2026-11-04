@@ -32,23 +32,25 @@ def _utc(instant):
     return instant.astimezone(timezone.utc)
 
 
-def _completion_keys(completions):
+def _completion_keys(completions, default_mode="standard"):
     keys = set()
     for item in completions:
         if isinstance(item, (tuple, list)) and not hasattr(item, "point_id"):
-            point_id, frequency, period_key, slot = item
+            point_id, frequency, period_key, slot, *modes = item
+            mode = modes[0] if modes else default_mode
         else:
             point_id = _value(item, "point_id")
             frequency = _value(item, "frequency")
             period_key = _value(item, "period_key")
             slot = _value(item, "slot", "any")
+            mode = _value(item, "workflow_mode", default_mode)
         if isinstance(period_key, date):
             period_key = period_key.isoformat()
-        keys.add((point_id, frequency, period_key, slot or "any"))
+        keys.add((point_id, frequency, period_key, slot or "any", mode or default_mode))
     return keys
 
 
-def _timeline(point):
+def schedule_timeline(point):
     schedules = list(_value(point, "schedules", ()) or ())
     ordered = sorted(enumerate(schedules), key=lambda pair: (
         _value(pair[1], "effective_date"), _value(pair[1], "id") or 0, pair[0]))
@@ -68,11 +70,57 @@ def _snapshot(point, schedule):
         "floor": historical("floor", _value(point, "floor")),
         "category": historical("category", _value(point, "category", "uncategorized")),
         "frequency": historical("frequency", _value(point, "frequency")),
+        # Schedules from before workflows were introduced represent the original rules.
+        "workflow_mode": _value(schedule if schedule is not None else point, "workflow_mode", "standard") or "standard",
         "active": historical("active", _value(point, "active", True)),
     }
 
 
-def calculate_missed(points, completions, date_from, date_to, now, *, category="", floor=None, frequency=""):
+def slot_plans(point, day, timeline, *, for_missed=False, weekly_view=False):
+    """Yield the schedule binding each slot immediately before its Taipei deadline."""
+    dates, schedules = timeline
+    last = bisect_right(dates, day) - 1
+    next_midnight = datetime.combine(day + timedelta(days=1), time.min, TAIPEI)
+    for morning, deadline in ((True, datetime.combine(day, time(12), TAIPEI)), (False, next_midnight)):
+        index = last
+        # Rewind any workflow change after (or exactly at) this expiry. Ordinary
+        # renames made later the same day cannot override the pre-change snapshot.
+        for j in range(last, -1, -1):
+            if dates[j] != day:
+                break
+            changed = _value(schedules[j], "workflow_changed_at")
+            if changed is not None and _utc(changed) >= deadline:
+                index = j - 1
+        if index < 0 <= last:
+            continue
+        schedule = schedules[index] if index >= 0 else None
+        if for_missed:
+            # An ordinary disable applies the whole day. A retirement instead
+            # preserves obligations that expired before the point was retired,
+            # also after a subsequent inactive rename/restore on the same day.
+            while index > 0 and dates[index] == day and not _value(schedules[index], "active", True):
+                retired = _value(schedules[index], "retired_at")
+                if retired is not None:
+                    if deadline > _utc(retired):
+                        break
+                    schedule = schedules[index - 1]
+                index -= 1
+        snapshot = _snapshot(point, schedule)
+        frequency = snapshot["frequency"]
+        if not snapshot["active"] or frequency not in FREQUENCIES:
+            continue
+        if morning and frequency != "daily2":
+            continue
+        if frequency == "weekly" and for_missed and day.weekday() != 6:
+            continue
+        if not for_missed and (frequency == "weekly") != weekly_view:
+            continue
+        slot = ("am" if morning else "pm") if frequency == "daily2" else "any"
+        yield snapshot, slot, deadline
+
+
+def calculate_missed(points, completions, date_from, date_to, now, *, category="", floor=None, frequency="",
+                     executions=(), two_stage_only=False):
     """Return expired missing occurrences as plain dicts, newest deadline first.
 
     The inputs may be preloaded ORM objects or attribute/mapping-based fixtures;
@@ -104,7 +152,10 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
 
     instant = _utc(now)
     last_due_day = min(date_to, instant.astimezone(TAIPEI).date())
-    completed = _completion_keys(completions)
+    # A genuine scheduled inspection predating a same-period workflow change
+    # continues to satisfy that slot. An optional spot check never does.
+    completed = {key[:4] for key in _completion_keys(completions) if key[4] in ("standard", "two_stage")}
+    executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
     for point in points:
@@ -116,49 +167,37 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         first_due_day = max(date_from, schedule_start) if schedule_start else date_from
         created_at = _value(point, "created_at")
         created_at = _utc(created_at) if created_at is not None else None
-        effective_dates, schedules = _timeline(point)
+        timeline = schedule_timeline(point)
         due_day = first_due_day
         while due_day <= last_due_day:
-            index = bisect_right(effective_dates, due_day) - 1
-            schedule = schedules[index] if index >= 0 else None
-            cutoff = instant
-            # Restoring leaves the point inactive. Edits to that inactive
-            # point can append more rows after its deletion on the same day.
-            # Only a deletion supplies a cutoff; an ordinary disable still
-            # applies for the full day. Stop at a subsequent active period.
-            while index > 0 and effective_dates[index] == due_day and not _value(schedules[index], "active", True):
-                retired_at = _value(schedules[index], "retired_at")
-                if retired_at is not None:
-                    cutoff = min(cutoff, _utc(retired_at))
-                    schedule = schedules[index - 1]
-                index -= 1
-            snapshot = _snapshot(point, schedule)
-            period_frequency = snapshot["frequency"]
-            if (snapshot["active"] and period_frequency in FREQUENCIES
-                    and (not category or snapshot["category"] == category)
-                    and (floor is None or snapshot["floor"] == floor)
-                    and (not frequency or period_frequency == frequency
-                         or (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
-                next_midnight = datetime.combine(due_day + timedelta(days=1), time.min, TAIPEI)
+            for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True):
+                period_frequency, mode = snapshot["frequency"], snapshot["workflow_mode"]
+                if (mode == "spot" or (two_stage_only and mode != "two_stage")
+                        or (category and snapshot["category"] != category)
+                        or (floor is not None and snapshot["floor"] != floor)
+                        or (frequency and period_frequency != frequency
+                            and not (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
+                    continue
                 if period_frequency == "weekly":
-                    slots = (("any", next_midnight),) if due_day.weekday() == 6 else ()
                     period_start = due_day - timedelta(days=6)
                     period_label = f"{period_start.isoformat()} – {due_day.isoformat()}"
                 else:
-                    slots = (("am", datetime.combine(due_day, time(12), TAIPEI)), ("pm", next_midnight)) if period_frequency == "daily2" else (("any", next_midnight),)
                     period_start = due_day
                     period_label = due_day.isoformat()
                 period_key = period_start.isoformat()
-                for slot, local_deadline in slots:
-                    deadline = local_deadline.astimezone(timezone.utc)
-                    if deadline > cutoff or (created_at is not None and deadline <= created_at):
-                        continue
-                    if (point_id, period_frequency, period_key, slot) in completed:
-                        continue
-                    occurrences.append({key: value for key, value in snapshot.items() if key != "active"} | {
-                        "period_key": period_key, "period_label": period_label, "slot": slot,
-                        "due_date": due_day, "deadline": deadline,
-                    })
+                deadline = local_deadline.astimezone(timezone.utc)
+                if deadline > instant or (created_at is not None and deadline <= created_at):
+                    continue
+                key = (point_id, period_frequency, period_key, slot, mode)
+                if key[:4] in completed:
+                    continue
+                missing_stage = ""
+                if mode == "two_stage":
+                    missing_stage = "已執行、未巡檢" if key in executed else "未執行"
+                occurrences.append({key: value for key, value in snapshot.items() if key != "active"} | {
+                    "period_key": period_key, "period_label": period_label, "slot": slot,
+                    "due_date": due_day, "deadline": deadline, "missing_stage_label": missing_stage,
+                })
             due_day += timedelta(days=1)
     occurrences.sort(key=lambda row: (-row["deadline"].timestamp(), FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)),
                                       row["code"], row["point_id"], row["slot"]))

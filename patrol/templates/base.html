@@ -2,7 +2,7 @@
 {% from '_scanner.html' import scanner_button, scanner_dialog %}
 {% set detail_page=request.endpoint in ['record_detail','resolve_issue','reopen_issue'] %}
 {% set detail_from_issues=detail_page and (back_url|default('')).split('?')[0] == '/issues' %}
-{% set record_nav_active=request.endpoint == 'records' or (detail_page and not detail_from_issues) %}
+{% set record_nav_active=request.endpoint in ['records','execution_success'] or (detail_page and not detail_from_issues) %}
 {% set issue_nav_active=request.endpoint == 'issues' or detail_from_issues %}
 <!doctype html>
 <html lang="zh-Hant">
@@ -15,9 +15,9 @@
   <div class="sidebar-label">工作空間</div>
   <nav class="nav-links">
     <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}">{{ icon('grid') }}巡檢總覽</a>
-    <a class="nav-link {% if record_nav_active %}active{% endif %}" href="{{ url_for('records') }}" aria-current="{{ 'page' if record_nav_active else 'false' }}">{{ icon('list') }}巡檢紀錄</a>
+    <a class="nav-link {% if record_nav_active %}active{% endif %}" href="{{ url_for('records') }}" aria-current="{{ 'page' if record_nav_active else 'false' }}">{{ icon('list') }}{{ '執行紀錄' if current_user.role == 'executor' else '巡檢紀錄' }}</a>
     <a class="nav-link {% if request.endpoint == 'missed' %}active{% endif %}" href="{{ url_for('missed') }}" aria-current="{{ 'page' if request.endpoint == 'missed' else 'false' }}">{{ icon('clock') }}漏打查詢</a>
-    <a class="nav-link {% if issue_nav_active %}active{% endif %}" href="{{ url_for('issues') }}" aria-current="{{ 'page' if issue_nav_active else 'false' }}">{{ icon('alert') }}異常追蹤</a>
+    {% if current_user.role != 'executor' %}<a class="nav-link {% if issue_nav_active %}active{% endif %}" href="{{ url_for('issues') }}" aria-current="{{ 'page' if issue_nav_active else 'false' }}">{{ icon('alert') }}異常追蹤</a>{% endif %}
     <a class="nav-link {% if request.endpoint == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}" aria-current="{{ 'page' if request.endpoint == 'devices' else 'false' }}">{{ icon('phone') }}我的綁定</a>
   </nav>
   {% if is_patrol_admin %}<div class="sidebar-label">管理設定</div><nav class="nav-links">
@@ -29,7 +29,7 @@
 </aside>
 <header class="mobile-header"><a class="brand" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點</span></a>
   {% if can_scan %}{{ scanner_button('header', '掃描巡檢點') }}{% endif %}
-  <details class="mobile-menu"><summary aria-label="開啟選單">{{ icon('menu') }}</summary><nav><span class="mobile-account">{{ current_user.display_name }}<small>{{ role_label(current_user) }}</small></span><a href="{{ url_for('missed') }}" aria-current="{{ 'page' if request.endpoint == 'missed' else 'false' }}">漏打查詢</a><a href="{{ url_for('issues') }}" aria-current="{{ 'page' if issue_nav_active else 'false' }}">異常追蹤</a>{% if is_patrol_admin %}<a href="{{ url_for('points') }}" aria-current="{{ 'page' if request.endpoint == 'points' else 'false' }}">巡檢點管理</a><a href="{{ url_for('admin_devices') }}" aria-current="{{ 'page' if request.endpoint == 'admin_devices' else 'false' }}">綁定審核</a><a href="{{ url_for('users') }}" aria-current="{{ 'page' if request.endpoint == 'users' else 'false' }}">人員管理</a>{% endif %}<a href="{{ url_for('change_password') }}">變更密碼</a><form action="{{ url_for('logout') }}" method="post">{{ csrf() }}<button class="text-button">登出</button></form></nav></details></header>
+  <details class="mobile-menu"><summary aria-label="開啟選單">{{ icon('menu') }}</summary><nav><span class="mobile-account">{{ current_user.display_name }}<small>{{ role_label(current_user) }}</small></span><a href="{{ url_for('missed') }}" aria-current="{{ 'page' if request.endpoint == 'missed' else 'false' }}">漏打查詢</a>{% if current_user.role != 'executor' %}<a href="{{ url_for('issues') }}" aria-current="{{ 'page' if issue_nav_active else 'false' }}">異常追蹤</a>{% endif %}{% if is_patrol_admin %}<a href="{{ url_for('points') }}" aria-current="{{ 'page' if request.endpoint == 'points' else 'false' }}">巡檢點管理</a><a href="{{ url_for('admin_devices') }}" aria-current="{{ 'page' if request.endpoint == 'admin_devices' else 'false' }}">綁定審核</a><a href="{{ url_for('users') }}" aria-current="{{ 'page' if request.endpoint == 'users' else 'false' }}">人員管理</a>{% endif %}<a href="{{ url_for('change_password') }}">變更密碼</a><form action="{{ url_for('logout') }}" method="post">{{ csrf() }}<button class="text-button">登出</button></form></nav></details></header>
 {% endif %}
 <div class="app-content">
 {% if config.get('DEMO_MODE') %}<div class="demo-banner">本機示範環境<span>資料與正式系統分開儲存</span></div>{% endif %}
@@ -38,8 +38,8 @@
 {% block content %}{% endblock %}
 <footer class="page-footer"><span>巡點 · 廠區巡檢系統</span><span>時間以台灣時間顯示</span></footer>
 </main></div>
-{% if current_user %}<nav class="mobile-nav" aria-label="手機主要導覽">
-  {% for endpoint,label,name,active in [('dashboard','總覽','grid',request.endpoint == 'dashboard'),('records','紀錄','list',record_nav_active),('missed','漏打','clock',request.endpoint == 'missed'),('issues','異常','alert',issue_nav_active),('devices','我的綁定','phone',request.endpoint == 'devices')] %}
+{% if current_user %}<nav class="mobile-nav{{ ' mobile-nav-executor' if current_user.role == 'executor' }}" aria-label="手機主要導覽">
+  {% for endpoint,label,name,active in [('dashboard','總覽','grid',request.endpoint == 'dashboard'),('records','紀錄','list',record_nav_active),('missed','漏打','clock',request.endpoint == 'missed'),('issues','異常','alert',issue_nav_active),('devices','我的綁定','phone',request.endpoint == 'devices')] if endpoint != 'issues' or current_user.role != 'executor' %}
   <a href="{{ url_for(endpoint) }}" aria-current="{{ 'page' if active else 'false' }}" class="{{ 'active' if active }}">{{ icon(name) }}<span>{{ label }}</span></a>
   {% endfor %}
 </nav>{% endif %}

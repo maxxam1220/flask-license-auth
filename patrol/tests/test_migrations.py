@@ -8,7 +8,7 @@ from sqlalchemy import (Boolean, CheckConstraint, Column, Date, DateTime, Foreig
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.schema import CreateColumn, CreateTable
+from sqlalchemy.schema import CreateColumn, CreateIndex, CreateTable
 
 import migrations
 from migrations import LATEST_VERSION, SchemaMigrationError, upgrade_schema
@@ -217,7 +217,8 @@ def test_fresh_database_and_idempotent_upgrade(engine):
         assert connection.exec_driver_sql("SELECT * FROM patrol_schema_versions").all() == before
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
-    assert len(inspect(engine).get_table_names()) == 12
+    assert len(inspect(engine).get_table_names()) == 13
+    assert inspect(engine).has_table("patrol_executions")
     assert inspect(engine).has_table("patrol_revoked_sessions")
 
 
@@ -247,9 +248,12 @@ def test_v1_indexes_unique_constraints_and_foreign_keys_survive(engine, legacy):
     upgrade_schema(engine)
     after_inspector = inspect(engine)
     for name in legacy.tables:
-        assert {index["name"] for index in after_inspector.get_indexes(name)} == index_names[name]
+        additions = ({"patrol_execution_review_once", "patrol_spot_request_once", "patrol_one_required_inspection_per_slot",
+                      "patrol_recent_spot_at_point"}
+                     if name == "patrol_inspections" else set())
+        assert {index["name"] for index in after_inspector.get_indexes(name)} == index_names[name] | additions
         assert {(tuple(key["constrained_columns"]), key["referred_table"], tuple(key["referred_columns"]))
-                for key in after_inspector.get_foreign_keys(name)} == foreign_keys[name]
+                for key in after_inspector.get_foreign_keys(name) if key["name"] != "patrol_final_execution_slot"} == foreign_keys[name]
     with pytest.raises(IntegrityError), engine.begin() as connection:
         connection.exec_driver_sql("UPDATE patrol_inspections SET user_id=99999 WHERE id=51")
     with pytest.raises(IntegrityError), engine.begin() as connection:
@@ -375,7 +379,10 @@ def test_postgres_schema_compiles_expected_defaults_binary_and_slot_key():
     dialect = postgresql.dialect()
     inspection_ddl = str(CreateTable(Inspection.__table__).compile(dialect=dialect))
     photo_ddl = str(CreateTable(InspectionPhoto.__table__).compile(dialect=dialect))
-    assert "UNIQUE (point_id, frequency, period_key, slot)" in inspection_ddl
+    slot_index = next(index for index in Inspection.__table__.indexes if index.name == "patrol_one_required_inspection_per_slot")
+    assert str(CreateIndex(slot_index).compile(dialect=dialect)) == (
+        "CREATE UNIQUE INDEX patrol_one_required_inspection_per_slot ON patrol_inspections "
+        "(point_id, frequency, period_key, slot) WHERE workflow_mode <> 'spot'")
     assert "is_abnormal BOOLEAN DEFAULT false NOT NULL" in inspection_ddl
     assert "slot VARCHAR(8) DEFAULT 'any' NOT NULL" in inspection_ddl
     assert "data BYTEA NOT NULL" in photo_ddl
@@ -442,6 +449,18 @@ def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, ve
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN RETIRED_AT",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_CODE",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_NAME",
+                                             "ALTER TABLE PATROL_POINTS ADD COLUMN WORKFLOW_MODE",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN WORKFLOW_MODE",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN WORKFLOW_CHANGED_AT",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN WORKFLOW_MODE",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN EXECUTION_ID",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN SPOT_REQUEST_ID",
+                                             "ALTER TABLE PATROL_INSPECTIONS DROP CONSTRAINT PATROL_ONE_INSPECTION_PER_SLOT",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD CONSTRAINT PATROL_FINAL_EXECUTION_SLOT",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD CONSTRAINT PATROL_INSPECTION_WORKFLOW",
+                                             "DROP TABLE PATROL_INSPECTIONS",
+                                             "ALTER TABLE _PATROL_MIGRATE_INSPECTIONS RENAME TO PATROL_INSPECTIONS",
+                                             "UPDATE PATROL_POINTS SET WORKFLOW_MODE=",
                                              "UPDATE PATROL_POINT_SCHEDULES SET FLOOR=",
                                              "UPDATE PATROL_POINT_SCHEDULES SET POINT_CODE=",
                                              "UPDATE PATROL_POINT_SCHEDULES SET POINT_NAME=")) for statement in changing_statements)
@@ -764,7 +783,7 @@ def test_v5_adds_empty_revocation_table_and_preserves_other_tables(engine, versi
 
     assert upgrade_schema(engine) == LATEST_VERSION
     with engine.begin() as connection:
-        assert set(inspect(connection).get_table_names()) == old_tables | {"patrol_revoked_sessions"}
+        assert set(inspect(connection).get_table_names()) == old_tables | {"patrol_revoked_sessions", "patrol_executions"}
         after = snapshot(connection, version_five)
         assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
         assert after == before

@@ -204,13 +204,18 @@ def test_same_day_reclassification_never_adds_duplicate_slot_obligation(applicat
         "floor": "11", "category": "general", "frequency": "daily2", "active": "on"}).status_code == 302
     with rendered_contexts(application) as contexts:
         client.get("/dashboard?floor=11")
-    assert contexts[-1][1]["totals"] == {"total": 2, "done": 1, "pending": 1}
+    # General points now default to spot. Preserve the safety AM completion;
+    # the afternoon spot is optional and does not create a PM obligation.
+    assert contexts[-1][1]["totals"] == {"total": 1, "done": 1, "pending": 0}
     with rendered_contexts(application) as contexts:
         client.get("/dashboard?floor=11&category=general")
     context = contexts[-1][1]
-    assert context["totals"] == {"total": 1, "done": 0, "pending": 1}
-    assert [slot["key"] for card in context["cards"] for slot in card["slots"]] == ["pm"]
-    assert submit(client, point, "pm").status_code == 302
+    assert context["totals"] == {"total": 0, "done": 0, "pending": 0}
+    assert [p.id for p in context["spot_points"]] == [point.id]
+    with rendered_contexts(application) as contexts:
+        client.get(f"/c/{point.qr_token}")
+    ticket = contexts[-1][1]["spot_ticket"]
+    assert submit(client, point, "pm", workflow_mode="spot", spot_ticket=ticket).status_code == 302
     rows = db.session.scalars(db.select(Inspection).where(Inspection.point_id == point.id).order_by(Inspection.id)).all()
     assert [(row.slot, row.category) for row in rows] == [("am", "safety"), ("pm", "general")]
 

@@ -124,7 +124,8 @@ def test_postgres_v1_rows_defaults_sequences_and_cross_app_isolation(engine, leg
     assert [(c["name"], str(c["type"]), c["nullable"], c["default"]) for c in after.get_columns("unrelated_license")] == [
         (c["name"], str(c["type"]), c["nullable"], c["default"]) for c in unrelated_columns]
     assert after.get_indexes("unrelated_license") == unrelated_indexes
-    assert {table: after.get_foreign_keys(table) for table in legacy.tables} == foreign_keys
+    assert {table: [fk for fk in after.get_foreign_keys(table) if fk["name"] != "patrol_final_execution_slot"]
+            for table in legacy.tables} == foreign_keys
     assert "custom_point_name_index" in {index["name"] for index in after.get_indexes("patrol_points")}
     assert "custom_point_name" in {check["name"] for check in after.get_check_constraints("patrol_points")}
     assert upgrade_schema(engine) == LATEST_VERSION

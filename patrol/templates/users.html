@@ -2,13 +2,13 @@
 {% from '_ui.html' import icon, csrf, management_revision, empty %}
 {% set title='人員管理' %}
 {% macro role_options(selected, prompt) -%}
-  {% if selected not in ['admin','safety','general'] %}<option value="" selected disabled>{{ prompt }}</option>{% endif %}
-  {% for value,label in [('safety','職安巡檢員'), ('general','總務巡檢員'), ('admin','系統管理員')] %}
+  {% if selected not in ['admin','safety','general','general_executor'] %}<option value="" selected disabled>{{ prompt }}</option>{% endif %}
+  {% for value,label in [('safety','職安巡檢員'), ('general_executor','總務執行人員'), ('general','總務巡檢員'), ('admin','系統管理員')] %}
   <option value="{{ value }}"{% if selected == value %} selected{% endif %}>{{ label }}</option>
   {% endfor %}
 {%- endmacro %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>人員管理</h1><p>職安與總務巡檢員各自負責所屬分類；管理員可以查看並管理全部分類。</p></div><span class="heading-icon">{{ icon('users') }}</span></div>
+<div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>人員管理</h1><p>總務兩階段點位先由執行人員簽到，再由另一位總務巡檢員完成巡檢。管理員可管理兩種分類的人員與點位。</p></div><span class="heading-icon">{{ icon('users') }}</span></div>
 <details class="panel disclosure create-disclosure"><summary><span>{{ icon('plus') }}新增人員</span>{{ icon('down') }}</summary>
   <form action="{{ url_for('create_user') }}" method="post" class="edit-form">{{ csrf() }}<div class="form-grid">
     <label>員工帳號<input name="username" required maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：staff001"></label>
@@ -19,7 +19,7 @@
 </details>
 <div class="section-heading outside"><h2>所有人員</h2><span class="count-label">{{ users|length }} 人</span></div>
 <div class="management-list">{% for user in users %}
-{% set selected_role='admin' if user.role == 'admin' else user.patrol_category %}
+{% set selected_role='admin' if user.role == 'admin' else 'general_executor' if user.role == 'executor' else user.patrol_category %}
 <article class="panel user-management">
   <div class="management-top"><div class="management-identity"><span class="avatar large-avatar">{{ user.display_name[:1] }}</span><div><h3>{{ user.display_name }}{% if user.id == current_user.id %}<small class="you-label">你</small>{% endif %}</h3><span class="muted">{{ user.username }}</span></div></div>
     <div class="management-meta"><span class="badge {{ 'badge-todo' if not selected_role else 'badge-neutral' }}">{{ role_label(user) }}</span><span class="badge {{ 'badge-done' if user.active else 'badge-revoked' }}">{{ '啟用中' if user.active else '已停用' }}</span></div>

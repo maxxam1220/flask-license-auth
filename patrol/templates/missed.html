@@ -9,7 +9,7 @@
   <article class="stat-card"><span class="stat-label">已到期漏打總數</span><div class="stat-value {{ 'danger-text' if totals.missed }}">{{ totals.missed }}<small>次巡檢</small></div><span class="stat-icon {{ 'amber' if totals.missed else 'positive' }}">{{ icon('clock' if totals.missed else 'circle-check') }}</span></article>
   <article class="stat-card"><span class="stat-label">受影響點位</span><div class="stat-value">{{ totals.points }}<small>個點位</small></div><span class="stat-icon neutral">{{ icon('pin') }}</span></article>
 </section>
-<p class="missed-scope-note">總數涵蓋所選條件的全部結果；同一個點位各時段分別計次，尚未到期的不計入。</p>
+<p class="missed-scope-note">總數涵蓋所選條件的全部結果；同一個點位各時段分別計次，尚未到期的不計入。{% if is_patrol_admin or viewer_category == 'general' %}總務兩階段點每時段最多計一次漏打，抽查點不列入。{% endif %}</p>
 <section class="panel filter-panel records-query-panel" data-records-query>
   <button class="records-query-toggle" type="button" aria-expanded="true" aria-controls="missed-query-fields" data-query-toggle hidden>
     <span class="records-query-summary"><span class="records-query-title">查詢條件 <small>{{ '已套用 ' ~ query_count.value ~ ' 項' if query_count.value else '全部分類與樓層' if is_patrol_admin else '全部樓層與頻率' }}</small></span><span class="records-query-dates"><span>應完成日</span><time datetime="{{ filters.get('date_from','') }}">{{ filters.get('date_from','') }}</time><span>至</span><time datetime="{{ filters.get('date_to','') }}">{{ filters.get('date_to','') }}</time></span></span>
@@ -48,7 +48,7 @@
     <td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ item.code }}</span><strong>{{ item.name }}</strong></div></td>
     <td data-label="{{ '分類／樓層' if is_patrol_admin else '樓層' }}"><div>{% if is_patrol_admin %}{{ category_label(item.category) }}<small class="cell-hint">{{ floor_label(item.floor) }}</small>{% else %}{{ floor_label(item.floor) }}{% endif %}</div></td>
     <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(item.frequency) }}</span>{% if item.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(item.slot) }}</small>{% endif %}</div></td>
-    <td data-label="到期時間"><time class="missed-deadline">{{ item.deadline|localtime }}</time></td>
+    <td data-label="到期時間"><div><time class="missed-deadline">{{ item.deadline|localtime }}</time>{% if item.workflow_mode == 'two_stage' %}<small class="cell-hint stage-gap">{{ item.missing_stage_label }}</small>{% endif %}</div></td>
   </tr>{% endfor %}
   </tbody></table></div>{% else %}{{ empty('所選條件沒有已到期的漏打','目前沒有符合的漏打時段。仍在巡檢時間內的點位，可至總覽查看進度。','circle-check') }}<div class="empty-actions"><a class="button button-secondary" href="{{ url_for('dashboard', category=filters.get('category','')) }}">返回巡檢總覽 {{ icon('arrow') }}</a></div>{% endif %}
 </section>

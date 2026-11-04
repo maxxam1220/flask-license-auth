@@ -7,14 +7,17 @@ No credentials, application data, or connection URLs are logged here.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, exists, inspect, literal, select, text
-from sqlalchemy.schema import CreateColumn, CreateTable
+from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, case, exists, inspect, literal, select, text
+from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
-from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, RevokedSession, SchemaVersion, User, db
+from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, PatrolExecution, Point, PointSchedule,
+                    RevokedSession, SchemaVersion, User, db, protect_execution_link)
 
 
-LATEST_VERSION = 6
+LATEST_VERSION = 7
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -106,6 +109,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v4_to_v5(connection)
         if current < 6:
             RevokedSession.__table__.create(connection, checkfirst=True)
+        if current < 7:
+            _upgrade_v6_to_v7(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -187,6 +192,54 @@ def _upgrade_v4_to_v5(connection):
     _add_missing_columns(connection, PointSchedule.__tablename__, [PointSchedule.__table__.c.retired_at])
 
 
+def _upgrade_v6_to_v7(connection):
+    points, schedules, inspections = Point.__table__, PointSchedule.__table__, Inspection.__table__
+    for table in (points, schedules):
+        _add_missing_columns(connection, table.name, [table.c.workflow_mode])
+    _add_missing_columns(connection, schedules.name, [schedules.c.workflow_changed_at])
+    PatrolExecution.__table__.create(connection, checkfirst=True)
+    additions = [inspections.c[name] for name in ("workflow_mode", "execution_id", "spot_request_id")]
+    final_constraints = [constraint for constraint in inspections.constraints
+                         if constraint.name in ("patrol_final_execution_slot", "patrol_inspection_workflow")]
+    if connection.dialect.name == "sqlite":
+        _sqlite_rebuild(connection, inspections.name, additions, new_constraints=final_constraints, remove_slot_key=True)
+    else:
+        _add_missing_columns(connection, inspections.name, additions)
+        quote = connection.dialect.identifier_preparer.quote
+        for constraint in inspect(connection).get_unique_constraints(inspections.name):
+            if tuple(constraint["column_names"]) == NEW_INSPECTION_KEY:
+                connection.exec_driver_sql(f"ALTER TABLE patrol_inspections DROP CONSTRAINT {quote(constraint['name'])}")
+        for constraint in final_constraints:
+            connection.execute(AddConstraint(constraint, isolate_from_table=False))
+    for index in inspections.indexes:
+        if index.name in ("patrol_one_required_inspection_per_slot", "patrol_spot_request_once", "patrol_execution_review_once",
+                          "patrol_recent_spot_at_point"):
+            index.create(connection, checkfirst=True)
+    protect_execution_link(connection)
+
+    # A general point changes on the local rollout date. Its earlier daily/weekly
+    # obligations and all existing final records retain their original meaning.
+    changed_at = datetime.now(timezone.utc)
+    today = changed_at.astimezone(ZoneInfo("Asia/Taipei")).date()
+    start, cutoff = points.c.schedule_start, literal(today)
+    fields = ["point_id", "effective_date", "frequency", "category", "floor", "point_code", "point_name",
+              "active", "workflow_mode"]
+    general = (points.c.category == "general") & (points.c.workflow_mode == "standard")
+
+    def snapshot_at(effective, mode):
+        return select(points.c.id, effective, points.c.frequency, points.c.category, points.c.floor,
+                      points.c.code, points.c.name, points.c.active, literal(mode)).where(general)
+
+    needs_baseline = ~exists(select(schedules.c.id).where(
+        schedules.c.point_id == points.c.id, schedules.c.effective_date <= start))
+    baseline = snapshot_at(start, "standard").where(start <= cutoff, needs_baseline)
+    connection.execute(schedules.insert().from_select(fields, baseline, include_defaults=False))
+    first_spot_day = case((start > cutoff, start), else_=cutoff)
+    spot_rows = snapshot_at(first_spot_day, "spot").add_columns(literal(changed_at.replace(tzinfo=None)))
+    connection.execute(schedules.insert().from_select([*fields, "workflow_changed_at"], spot_rows, include_defaults=False))
+    connection.execute(points.update().where(general).values(workflow_mode="spot"))
+
+
 def _compact(expression):
     return re.sub(r"\s+", "", expression).strip("()").lower()
 
@@ -225,7 +278,8 @@ def _postgres_replace_constraints(connection):
         connection.exec_driver_sql(f"ALTER TABLE patrol_inspections ADD CONSTRAINT {SLOT_CONSTRAINT} UNIQUE ({columns})")
 
 
-def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False, replace_inspection_key=False):
+def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False, replace_inspection_key=False,
+                    new_constraints=(), remove_slot_key=False):
     """SQLite's documented create/copy/drop/rename sequence, within our transaction.
 
     Reflection preserves existing columns and non-target constraints. Explicit
@@ -247,7 +301,16 @@ def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False,
     for column in new_columns:
         if column.name not in replacement.c:
             replacement.append_column(Column(column.name, column.type, nullable=column.nullable,
-                                             server_default=column.server_default.arg))
+                                             server_default=column.server_default.arg if column.server_default is not None else None))
+
+    for constraint in new_constraints:
+        if isinstance(constraint, CheckConstraint):
+            replacement.append_constraint(CheckConstraint(str(constraint.sqltext), name=constraint.name))
+        else:
+            Table(PatrolExecution.__tablename__, metadata, autoload_with=connection)
+            replacement.append_constraint(db.ForeignKeyConstraint(
+                [element.parent.name for element in constraint.elements],
+                [element.target_fullname for element in constraint.elements], name=constraint.name))
 
     if replace_floor:
         for constraint in list(replacement.constraints):
@@ -259,6 +322,10 @@ def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False,
             if isinstance(constraint, UniqueConstraint) and tuple(column.name for column in constraint.columns) in (OLD_INSPECTION_KEY, NEW_INSPECTION_KEY):
                 replacement.constraints.remove(constraint)
         replacement.append_constraint(UniqueConstraint(*NEW_INSPECTION_KEY, name=SLOT_CONSTRAINT))
+    if remove_slot_key:
+        for constraint in list(replacement.constraints):
+            if isinstance(constraint, UniqueConstraint) and tuple(column.name for column in constraint.columns) == NEW_INSPECTION_KEY:
+                replacement.constraints.remove(constraint)
 
     # CreateTable, unlike Table.create(), does not create colliding index names.
     connection.execute(CreateTable(replacement))
@@ -274,13 +341,15 @@ def _validate_current(connection):
     inspector = inspect(connection)
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
-                                   "patrol_inspection_issues", "patrol_issue_events", revoked}
+                                   "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     for table_name, required in {
-        "patrol_points": ("category",),
-        "patrol_point_schedules": ("category",),
-        "patrol_inspections": ("category", "slot", "note", "is_abnormal"),
+        "patrol_points": ("category", "workflow_mode"),
+        "patrol_point_schedules": ("category", "workflow_mode"),
+        "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode"),
+        "patrol_executions": ("user_id", "binding_id", "point_id", "frequency", "period_key", "slot", "created_at",
+                              "category", "point_code", "point_name", "point_floor", "user_name"),
         "patrol_inspection_photos": ("inspection_id", "data", "mime_type", "size_bytes", "width", "height", "created_at"),
         "patrol_inspection_issues": ("inspection_id", "status", "opened_at", "resolved_by_name", "resolution_note"),
         "patrol_issue_events": ("inspection_id", "actor_id", "actor_name", "action", "note", "created_at"),
@@ -301,8 +370,28 @@ def _validate_current(connection):
     if not any(index["column_names"] == ["user_id"] for index in inspector.get_indexes(revoked)):
         raise SchemaMigrationError("Session revocation account index is missing.")
     keys = _unique_keys(connection, "patrol_inspections")
-    if NEW_INSPECTION_KEY not in keys or OLD_INSPECTION_KEY in keys:
-        raise SchemaMigrationError("Inspection uniqueness does not match the slot-based schema.")
+    final_indexes = {index["name"]: index for index in inspector.get_indexes("patrol_inspections")}
+    if NEW_INSPECTION_KEY in keys or OLD_INSPECTION_KEY in keys:
+        raise SchemaMigrationError("Inspection uniqueness does not match the workflow schema.")
+    for name, fields, unique, condition in (
+        ("patrol_one_required_inspection_per_slot", NEW_INSPECTION_KEY, True, "workflow_mode<>'spot'"),
+        ("patrol_spot_request_once", ("spot_request_id",), True, "spot_request_idisnotnull"),
+        ("patrol_execution_review_once", ("execution_id",), True, "execution_idisnotnull"),
+        ("patrol_recent_spot_at_point", ("point_id", "created_at"), False, "workflow_mode='spot'"),
+    ):
+        index = final_indexes.get(name, {})
+        predicate = index.get("dialect_options", {}).get(f"{connection.dialect.name}_where")
+        normalized = re.sub(r"::text|[()\s]", "", str(predicate).lower())
+        if tuple(index.get("column_names", [])) != fields or bool(index.get("unique")) != unique or normalized != condition:
+            raise SchemaMigrationError(f"Missing or invalid workflow index: {name}.")
+    if "patrol_inspection_workflow" not in {check["name"] for check in inspector.get_check_constraints(Inspection.__tablename__)}:
+        raise SchemaMigrationError("Final inspection workflow validation is missing.")
+    if NEW_INSPECTION_KEY not in _unique_keys(connection, PatrolExecution.__tablename__):
+        raise SchemaMigrationError("First-stage slot uniqueness is missing.")
+    if not any(fk["constrained_columns"] == ["execution_id", *NEW_INSPECTION_KEY]
+               and fk["referred_table"] == PatrolExecution.__tablename__ and fk["referred_columns"] == ["id", *NEW_INSPECTION_KEY]
+               for fk in inspector.get_foreign_keys(Inspection.__tablename__)):
+        raise SchemaMigrationError("Final inspections must reference the same first-stage slot.")
     checks = inspector.get_check_constraints("patrol_points")
     if not any(check["name"] == "patrol_point_floor" for check in checks):
         raise SchemaMigrationError("Point floor validation is missing.")
@@ -319,7 +408,8 @@ def _validate_current(connection):
         raise SchemaMigrationError("Issue event action validation is missing.")
     for table_name, name, expected_type in ((User.__tablename__, "patrol_category", db.String),
                                             (Point.__tablename__, "deleted_at", db.DateTime),
-                                            (PointSchedule.__tablename__, "retired_at", db.DateTime)):
+                                            (PointSchedule.__tablename__, "retired_at", db.DateTime),
+                                            (PointSchedule.__tablename__, "workflow_changed_at", db.DateTime)):
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         column = columns.get(name)
         if (not column or not column["nullable"] or column["default"] is not None

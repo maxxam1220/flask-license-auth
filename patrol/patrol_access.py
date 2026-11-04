@@ -6,6 +6,8 @@ def patrol_scope(user):
     if user and user.role == "admin":
         return None
     category = getattr(user, "patrol_category", None)
+    if user and user.role == "executor":
+        return "general" if category == "general" else ""
     return category if user and user.role == "inspector" and category in ("safety", "general") else ""
 
 
@@ -15,4 +17,5 @@ def can_access_category(user, category):
 
 
 def can_read_inspection(user, record):
-    return can_access_category(user, record.category) and (user.role == "admin" or record.user_id == user.id)
+    return can_access_category(user, record.category) and (user.role == "admin" or
+            (user.role == "inspector" and record.user_id == user.id))

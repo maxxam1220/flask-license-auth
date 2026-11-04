@@ -10,6 +10,8 @@ from sqlalchemy.engine import Engine
 
 db = SQLAlchemy()
 
+POINT_WORKFLOW_RULE = "workflow_mode = 'standard' OR (category = 'general' AND workflow_mode IN ('spot','two_stage'))"
+
 
 @event.listens_for(Engine, "connect")
 def configure_sqlite(connection, _):
@@ -54,6 +56,8 @@ class Point(db.Model):
     floor = db.Column(db.Integer, nullable=False)
     frequency = db.Column(db.String(10), nullable=False, default="daily")
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
+    workflow_mode = db.Column(db.String(10), db.CheckConstraint(POINT_WORKFLOW_RULE, name="patrol_point_workflow"),
+                              nullable=False, default="standard", server_default="standard")
     active = db.Column(db.Boolean, nullable=False, default=True)
     deleted_at = db.Column(db.DateTime, nullable=True)
     qr_token = db.Column(db.String(100), nullable=False, unique=True, default=lambda: secrets.token_urlsafe(24))
@@ -70,6 +74,9 @@ class PointSchedule(db.Model):
     effective_date = db.Column(db.Date, nullable=False)
     frequency = db.Column(db.String(10), nullable=False)
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
+    workflow_mode = db.Column(db.String(10), db.CheckConstraint(POINT_WORKFLOW_RULE, name="patrol_schedule_workflow"),
+                              nullable=False, default="standard", server_default="standard")
+    workflow_changed_at = db.Column(db.DateTime)
     # Nullable so older workers can finish during a rolling deployment.
     floor = db.Column(db.Integer)
     point_code = db.Column(db.String(30))
@@ -94,6 +101,36 @@ class DeviceBinding(db.Model):
                                postgresql_where=db.text("status = 'approved'")),)
 
 
+class PatrolExecution(db.Model):
+    """The executor's submitted first stage, independently retained before and after review."""
+    __tablename__ = "patrol_executions"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"), nullable=False, index=True)
+    point_id = db.Column(db.Integer, db.ForeignKey("patrol_points.id"), nullable=False)
+    binding_id = db.Column(db.Integer, db.ForeignKey("patrol_device_bindings.id"), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+    frequency = db.Column(db.String(10), nullable=False)
+    period_key = db.Column(db.String(10), nullable=False)
+    slot = db.Column(db.String(8), nullable=False)
+    category = db.Column(db.String(20), nullable=False, default="general", server_default="general")
+    point_code = db.Column(db.String(30), nullable=False)
+    point_name = db.Column(db.String(100), nullable=False)
+    point_floor = db.Column(db.Integer, nullable=False)
+    user_name = db.Column(db.String(100), nullable=False)
+    user = db.relationship(User)
+    point = db.relationship(Point)
+    inspection = db.relationship("Inspection", back_populates="execution", uselist=False,
+                                 foreign_keys="Inspection.execution_id", viewonly=True)
+    __table_args__ = (
+        db.CheckConstraint("category = 'general'", name="patrol_execution_general"),
+        db.CheckConstraint("(frequency IN ('daily','weekly') AND slot = 'any') OR "
+                           "(frequency = 'daily2' AND slot IN ('am','pm'))", name="patrol_execution_valid_slot"),
+        db.UniqueConstraint("point_id", "frequency", "period_key", "slot", name="patrol_one_execution_per_slot"),
+        # A final review may only reference the first stage from the exact same obligation.
+        db.UniqueConstraint("id", "point_id", "frequency", "period_key", "slot", name="patrol_execution_identity"),
+    )
+
+
 class Inspection(db.Model):
     __tablename__ = "patrol_inspections"
     id = db.Column(db.Integer, primary_key=True)
@@ -105,6 +142,9 @@ class Inspection(db.Model):
     frequency = db.Column(db.String(10), nullable=False)
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
     slot = db.Column(db.String(8), nullable=False, default="any", server_default="any")
+    workflow_mode = db.Column(db.String(10), nullable=False, default="standard", server_default="standard")
+    execution_id = db.Column(db.Integer)
+    spot_request_id = db.Column(db.String(64))
     note = db.Column(db.Text, nullable=False, default="", server_default="")
     is_abnormal = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     point_code = db.Column(db.String(30), nullable=False)
@@ -113,9 +153,54 @@ class Inspection(db.Model):
     user_name = db.Column(db.String(100), nullable=False, default="")
     user = db.relationship(User)
     point = db.relationship(Point)
+    execution = db.relationship(PatrolExecution, back_populates="inspection", foreign_keys=[execution_id])
     photos = db.relationship("InspectionPhoto", back_populates="inspection", lazy="select", cascade="all, delete-orphan")
     issue = db.relationship("InspectionIssue", back_populates="inspection", uselist=False, lazy="select")
-    __table_args__ = (db.UniqueConstraint("point_id", "frequency", "period_key", "slot", name="patrol_one_inspection_per_slot"),)
+    __table_args__ = (
+        db.Index("patrol_one_required_inspection_per_slot", "point_id", "frequency", "period_key", "slot", unique=True,
+                 sqlite_where=db.text("workflow_mode <> 'spot'"), postgresql_where=db.text("workflow_mode <> 'spot'")),
+        db.ForeignKeyConstraint(["execution_id", "point_id", "frequency", "period_key", "slot"],
+                                ["patrol_executions.id", "patrol_executions.point_id", "patrol_executions.frequency",
+                                 "patrol_executions.period_key", "patrol_executions.slot"],
+                                name="patrol_final_execution_slot"),
+        db.CheckConstraint("(workflow_mode = 'standard' AND execution_id IS NULL AND spot_request_id IS NULL) OR "
+                           "(workflow_mode = 'spot' AND category = 'general' AND execution_id IS NULL "
+                           "AND spot_request_id IS NOT NULL AND spot_request_id <> '') OR "
+                           "(workflow_mode = 'two_stage' AND category = 'general' AND execution_id IS NOT NULL "
+                           "AND spot_request_id IS NULL)", name="patrol_inspection_workflow"),
+        db.Index("patrol_spot_request_once", "spot_request_id", unique=True,
+                 sqlite_where=db.text("spot_request_id IS NOT NULL"), postgresql_where=db.text("spot_request_id IS NOT NULL")),
+        db.Index("patrol_execution_review_once", "execution_id", unique=True,
+                 sqlite_where=db.text("execution_id IS NOT NULL"), postgresql_where=db.text("execution_id IS NOT NULL")),
+        db.Index("patrol_recent_spot_at_point", "point_id", "created_at",
+                 sqlite_where=db.text("workflow_mode = 'spot'"), postgresql_where=db.text("workflow_mode = 'spot'")),
+    )
+
+
+def protect_execution_link(connection):
+    """A historical final cannot be reassigned, detached or retrofitted to a different first stage."""
+    if connection.dialect.name == "sqlite":
+        connection.exec_driver_sql("""
+            CREATE TRIGGER patrol_execution_link_fixed BEFORE UPDATE OF execution_id ON patrol_inspections
+            WHEN NEW.execution_id IS NOT OLD.execution_id
+            BEGIN SELECT RAISE(ABORT, 'Patrol execution link is immutable'); END
+        """)
+    elif connection.dialect.name == "postgresql":
+        connection.exec_driver_sql("""
+            CREATE OR REPLACE FUNCTION patrol_keep_execution_link() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'Patrol execution link is immutable' USING ERRCODE = '23514'; END
+            $$
+        """)
+        connection.exec_driver_sql("""
+            CREATE TRIGGER patrol_execution_link_fixed BEFORE UPDATE OF execution_id ON patrol_inspections
+            FOR EACH ROW WHEN (NEW.execution_id IS DISTINCT FROM OLD.execution_id)
+            EXECUTE FUNCTION patrol_keep_execution_link()
+        """)
+
+
+@event.listens_for(Inspection.__table__, "after_create")
+def install_execution_link_protection(_table, connection, **_):
+    protect_execution_link(connection)
 
 
 class InspectionPhoto(db.Model):

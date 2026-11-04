@@ -160,6 +160,19 @@
     });
 
     document.querySelectorAll('form[data-point-form]').forEach(form => {
+      const workflow = form.querySelector('[data-workflow-control]');
+      if (workflow) {
+        const categoryInputs = form.querySelectorAll('input[name=category]');
+        const select = workflow.querySelector('select');
+        const updateWorkflow = () => {
+          const general = form.elements.namedItem('category')?.value === 'general';
+          workflow.hidden = !general;
+          select.disabled = !general;
+          if (general && !select.value) select.value = 'spot';
+        };
+        categoryInputs.forEach(input => input.addEventListener('change', updateWorkflow));
+        updateWorkflow();
+      }
       const floor = form.elements.namedItem('floor');
       const code = form.elements.namedItem('code');
       if (!floor || !code) return;

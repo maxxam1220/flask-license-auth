@@ -68,3 +68,5 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 - 後續 push 仍保持在 `patrol-v1`。此新服務設定關閉自動部署，完成驗證後手動部署指定提交；不要為了更新巡檢服務直接合併至 `main`。
 
 參考：[Render monorepo](https://render.com/docs/monorepo-support)、[Web Service](https://render.com/docs/web-services)、[Private Network](https://render.com/docs/private-network)、[Waitress 反向代理](https://docs.pylonsproject.org/projects/waitress/en/stable/reverse-proxy.html)。
+
+版本 7 新增總務點位打卡方式、執行紀錄與巡檢配對，舊總務排程留歷史快照，生效後預設抽查。部署前確認資料庫匯出已完成，盡量選總務無人送單時段；部署後再設定兩段式設備與執行人員。若需修正，部署支援版本 7 的修正版，不降版或覆蓋共用授權資料庫。
