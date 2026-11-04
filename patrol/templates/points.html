@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_ui.html' import icon, csrf, frequency, empty, open_issue_badge %}
+{% from '_ui.html' import icon, csrf, management_revision, frequency, empty, open_issue_badge %}
 {% set title='巡檢點管理' %}
 {% set show_deleted = selected_list == 'deleted' %}
 {% macro category_choices(selected, allow_legacy=false) %}
@@ -37,15 +37,15 @@
 </form></details>{% endif %}
 <div class="section-heading outside"><h2>{{ '已刪除點位' if show_deleted else category_label(selected_category) ~ '巡檢點' if selected_category else '全部巡檢點' }}</h2><span class="count-label">{{ points|length }} 個點位</span></div>
 <div class="management-list">{% for point in points %}<article class="panel point-management">
-  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
+  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
   {% if show_deleted %}
   <div class="archive-row"><span class="muted">刪除時間：{{ point.deleted_at|localtime }}</span><div class="archive-actions">
     <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all') }}">查看歷史案件</a>
-    <form method="post" action="{{ url_for('restore_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="還原 {{ point.code }}「{{ point.name }}」後，點位會回到現有清單並維持停用。舊 QR 不會恢復；請重新啟用並列印新標籤。" data-confirm-title="還原巡檢點" data-confirm-label="確認還原">{{ csrf() }}<button class="button button-primary button-small">還原點位</button></form>
+    <form method="post" action="{{ url_for('restore_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="還原 {{ point.code }}「{{ point.name }}」後，點位會回到現有清單並維持停用。舊 QR 不會恢復；請重新啟用並列印新標籤。" data-confirm-title="還原巡檢點" data-confirm-label="確認還原">{{ csrf() }}{{ management_revision(point) }}<button class="button button-primary button-small">還原點位</button></form>
   </div></div>
   {% else %}
   <details class="disclosure compact-disclosure"><summary><span>編輯或刪除點位</span>{{ icon('down') }}</summary>
-  <form method="post" action="{{ url_for('update_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form>{{ csrf() }}
+  <form method="post" action="{{ url_for('update_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form>{{ csrf() }}{{ management_revision(point) }}
     <div class="form-grid point-fields">
       {{ category_choices(point.category, point.category == 'uncategorized') }}
       <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if point.floor == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
@@ -55,8 +55,8 @@
     </div>
     <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if point.active %}checked{% endif %}>啟用此巡檢點</label><button class="button button-primary button-small">儲存變更</button></div>
   </form>
-  <div class="danger-zone"><div><strong>更換 QR Code</strong><small>舊標籤連結會立即失效，需重新列印並更換現場標籤。</small></div><form action="{{ url_for('rotate_point_qr', point_id=point.id, floor=selected_floor, category=selected_category) }}" method="post" data-confirm="{{ point.code }} 的舊 QR Code 將立即失效，現場標籤需要重新列印及更換。" data-confirm-title="更換點位 QR Code" data-confirm-label="確認更換" data-confirm-danger="true">{{ csrf() }}<button class="button button-danger button-small">更換 QR Code</button></form></div>
-  <div class="danger-zone"><div><strong>刪除點位</strong><small>會移至已刪除清單，舊 QR 失效；編號、紀錄及異常案件保留。</small></div><form method="post" action="{{ url_for('delete_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="刪除 {{ point.code }}「{{ point.name }}」後，舊 QR 立即失效。編號、歷史巡檢與異常案件會保留；日後可由已刪除清單還原。" data-confirm-title="刪除巡檢點" data-confirm-label="確認刪除" data-confirm-danger="true">{{ csrf() }}<button class="button button-danger button-small">刪除點位</button></form></div>
+  <div class="danger-zone"><div><strong>更換 QR Code</strong><small>舊標籤連結會立即失效，需重新列印並更換現場標籤。</small></div><form action="{{ url_for('rotate_point_qr', point_id=point.id, floor=selected_floor, category=selected_category) }}" method="post" data-confirm="{{ point.code }} 的舊 QR Code 將立即失效，現場標籤需要重新列印及更換。" data-confirm-title="更換點位 QR Code" data-confirm-label="確認更換" data-confirm-danger="true">{{ csrf() }}{{ management_revision(point) }}<button class="button button-danger button-small">更換 QR Code</button></form></div>
+  <div class="danger-zone"><div><strong>刪除點位</strong><small>會移至已刪除清單，舊 QR 失效；編號、紀錄及異常案件保留。</small></div><form method="post" action="{{ url_for('delete_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="刪除 {{ point.code }}「{{ point.name }}」後，舊 QR 立即失效。編號、歷史巡檢與異常案件會保留；日後可由已刪除清單還原。" data-confirm-title="刪除巡檢點" data-confirm-label="確認刪除" data-confirm-danger="true">{{ csrf() }}{{ management_revision(point) }}<button class="button button-danger button-small">刪除點位</button></form></div>
   </details>{% endif %}
 </article>{% else %}{{ empty('沒有符合的已刪除點位' if show_deleted else '這個篩選條件沒有點位','可調整分類或樓層查看其他已刪除點位。' if show_deleted else '可調整分類或樓層，或點選「新增巡檢點」建立位置。','pin') }}{% endfor %}</div>
 {% endblock %}

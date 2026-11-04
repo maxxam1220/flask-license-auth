@@ -120,16 +120,18 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         due_day = first_due_day
         while due_day <= last_due_day:
             index = bisect_right(effective_dates, due_day) - 1
-            cutoff = instant
-            # Restore leaves a point inactive. If it is deleted again on the
-            # same day, retain the first deletion's cutoff and prior schedule.
-            while index > 0 and effective_dates[index] == due_day:
-                retired_at = _value(schedules[index], "retired_at")
-                if retired_at is None:
-                    break
-                cutoff = min(cutoff, _utc(retired_at))
-                index -= 1
             schedule = schedules[index] if index >= 0 else None
+            cutoff = instant
+            # Restoring leaves the point inactive. Edits to that inactive
+            # point can append more rows after its deletion on the same day.
+            # Only a deletion supplies a cutoff; an ordinary disable still
+            # applies for the full day. Stop at a subsequent active period.
+            while index > 0 and effective_dates[index] == due_day and not _value(schedules[index], "active", True):
+                retired_at = _value(schedules[index], "retired_at")
+                if retired_at is not None:
+                    cutoff = min(cutoff, _utc(retired_at))
+                    schedule = schedules[index - 1]
+                index -= 1
             snapshot = _snapshot(point, schedule)
             period_frequency = snapshot["frequency"]
             if (snapshot["active"] and period_frequency in FREQUENCIES

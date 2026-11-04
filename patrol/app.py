@@ -1,10 +1,12 @@
 """Factory patrol: QR confirmation, approved browsers and durable records."""
 from datetime import date, datetime, time, timedelta, timezone
 from functools import wraps
+import base64
 import csv
 import hashlib
 import hmac
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -31,6 +33,7 @@ from issues import IssueActionError, issue_state, issue_version, open_issue_cond
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
+QR_RETURN_PATH = re.compile(r"/c/([A-Za-z0-9_-]{1,100})")
 
 
 def now_utc():
@@ -52,6 +55,22 @@ def local_dt(value):
 
 def hash_device_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def checkin_location_revision(point):
+    """Identify the actual location shown on the confirmation form."""
+    location = (str(point.id), point.code, point.name, str(point.floor), point.category)
+    return hashlib.sha256("\x00".join(location).encode("utf-8")).hexdigest()
+
+
+def management_state(item):
+    """Detect a browser tab submitting settings that have since changed."""
+    if isinstance(item, Point):
+        values = (item.id, item.code, item.name, item.floor, item.category, item.frequency,
+                  item.active, item.qr_token, item.deleted_at.isoformat() if item.deleted_at else None)
+    else:
+        values = (item.id, item.display_name, item.role, item.patrol_category, item.active, item.auth_version)
+    return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
 
 
 def period_for(point, instant):
@@ -206,6 +225,7 @@ def create_app(config=None):
 
     app.jinja_env.globals["csrf_token"] = csrf_token
     app.jinja_env.globals["issue_state"] = issue_state
+    app.jinja_env.globals["management_state"] = management_state
 
     @app.context_processor
     def common_context():
@@ -282,8 +302,14 @@ def create_app(config=None):
             # It is normalized with the authenticated role after sign-in.
             source = request.form.get("return_to", "")
             return url_for("record_detail", record_id=args["inspection_id"], return_to=source[:1600])
-        destinations = {"request_device": "devices", "revoke_own_device": "devices", "change_password": "change_password",
-                        "create_point": "points", "update_point": "points", "rotate_point_qr": "points",
+        if request.endpoint in ("request_device", "revoke_own_device"):
+            # Preserve the scanned QR through sign-in. The authenticated GET
+            # rechecks point availability and category before showing the link.
+            destination = request.form.get("next", "")
+            return devices_url(destination if QR_RETURN_PATH.fullmatch(destination) else "")
+        if request.endpoint == "change_password":
+            return url_for("change_password", next=safe_next(request.form.get("next")))
+        destinations = {"create_point": "points", "update_point": "points", "rotate_point_qr": "points",
                         "delete_point": "points", "restore_point": "points",
                         "create_user": "users", "update_user": "users", "reset_password": "users",
                         "approve_device": "admin_devices", "reject_device": "admin_devices", "revoke_device": "admin_devices"}
@@ -368,7 +394,7 @@ def create_app(config=None):
         value = request.form.get("next") if request.method == "POST" else request.args.get("next")
         if value is None:
             value = session.get("after_binding", "")
-        match = re.fullmatch(r"/c/([A-Za-z0-9_-]{1,100})", value or "")
+        match = QR_RETURN_PATH.fullmatch(value or "")
         point = db.session.scalar(select(Point).where(Point.qr_token == match.group(1))) if match else None
         if (point and point.deleted_at is None and can_access_category(g.user, point.category)
                 and point.active and point.schedule_start <= local_dt(now_utc()).date()):
@@ -464,6 +490,10 @@ def create_app(config=None):
                 session.permanent = True
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 if user.must_change_password:
+                    if urlsplit(next_url).path == url_for("change_password"):
+                        # This GET already contains the safe post-change return
+                        # target. Do not nest it as the next destination again.
+                        return redirect(next_url)
                     session["after_password"] = next_url
                     return redirect(url_for("change_password"))
                 return redirect(next_url)
@@ -644,6 +674,7 @@ def create_app(config=None):
             existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency == "weekly" else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
+                               point_revision=checkin_location_revision(point),
                                progress_url=url_for("dashboard", view="weekly" if point.frequency == "weekly" else "daily",
                                                     date=key, floor=point.floor, category=point.category),
                                current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
@@ -655,6 +686,17 @@ def create_app(config=None):
     def checkin(token):
         point = get_point(token)
         return checkin_form(point, token)
+
+    def existing_checkin_response(record, token, note, abnormal, uploads):
+        if note or abnormal or any(upload.filename for upload in uploads):
+            # A concurrent completion won. Do not present its receipt as proof
+            # that this form's separate observations or photos were saved.
+            flash("這個點位本期已有紀錄，本次填寫的回報內容未追加。若現場有新的異常，請聯絡管理員處理。", "warning")
+            return redirect(url_for("checkin", token=token))
+        flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
+        if can_read_inspection(g.user, record):
+            return redirect(url_for("checkin_success", record_id=record.id))
+        return redirect(url_for("checkin", token=token))
 
     @app.post("/c/<token>/confirm")
     @login_required
@@ -674,19 +716,23 @@ def create_app(config=None):
             return checkin_form(get_point(token), token, message, status)
         if request.form.get("frequency") != point.frequency:
             return form_error("點位巡檢頻率已更新，或此表單已過期。請確認最新設定後重新送出；照片需重新選擇。", 409)
+        confirmed_location = request.form.get("point_revision")
+        if confirmed_location is not None and confirmed_location != checkin_location_revision(point):
+            return form_error("點位名稱、樓層、編號或分類已更新。請重新核對現場位置，再確認打卡。", 409)
         if ((point.frequency == "daily2" and (not submitted_slot or not submitted_period))
                 or (submitted_slot is not None and submitted_slot != slot)
                 or (submitted_period is not None and submitted_period != key)):
             return form_error("巡檢日期或時段已變更，請確認目前時段後重新送出。照片需重新選擇。", 409)
+        note = request.form.get("note", "").strip()
+        abnormal = request.form.get("is_abnormal", "") in ("on", "1", "true", "yes")
+        uploads = request.files.getlist("photos")
         record = inspection_in_slot(point, key, slot)
         if record:
-            flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
-            return redirect(url_for("checkin_success", record_id=record.id)) if can_read_inspection(g.user, record) else redirect(url_for("checkin", token=token))
-        note = request.form.get("note", "").strip()
+            return existing_checkin_response(record, token, note, abnormal, uploads)
         if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
             return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
         try:
-            photos = process_uploads(request.files.getlist("photos"))
+            photos = process_uploads(uploads)
         except PhotoValidationError as error:
             return form_error(str(error))
         if photos:
@@ -701,7 +747,7 @@ def create_app(config=None):
         record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(final_instant),
                             period_key=key, frequency=point.frequency, slot=slot, category=point.category,
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
-                            note=note, is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"))
+                            note=note, is_abnormal=abnormal)
         record.photos.extend(InspectionPhoto(**photo) for photo in photos)
         open_issue_for(record)
         db.session.add(record)
@@ -714,7 +760,7 @@ def create_app(config=None):
             record = inspection_in_slot(point, key, slot)
             if not record:
                 raise
-            flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
+            return existing_checkin_response(record, token, note, abnormal, uploads)
         if not can_read_inspection(g.user, record):
             return redirect(url_for("checkin", token=token))
         session.pop("after_binding", None)
@@ -883,15 +929,19 @@ def create_app(config=None):
     @app.post("/devices/<int:binding_id>/revoke")
     @login_required
     def revoke_own_device(binding_id):
-        binding = db.get_or_404(DeviceBinding, binding_id)
+        lock_current_user()
+        binding = db.get_or_404(DeviceBinding, binding_id, populate_existing=True)
         if binding.user_id != g.user.id:
             abort(403)
-        lock_current_user()
+        destination = devices_url(binding_destination())
+        if binding.status not in ("approved", "pending"):
+            flash("這筆綁定已經處理，請查看目前狀態。", "info")
+            return redirect(destination)
         binding.status = "revoked"
         audit("device_self_revoked", binding.id)
         db.session.commit()
         flash("已解除此瀏覽器綁定。", "success")
-        return redirect(devices_url(binding_destination()))
+        return redirect(destination)
 
     @app.get("/admin/devices")
     @admin_required
@@ -1121,6 +1171,15 @@ def create_app(config=None):
         floor, category = scope_filters()
         return url_for("points", floor=floor or None, category=category or None, list="deleted" if deleted else None)
 
+    def check_management_state(item, destination):
+        # Older forms and clients did not submit a revision. All new admin
+        # forms include one; compare against the row after taking the lock.
+        expected = request.form.get("expected_state")
+        if expected is not None and expected != management_state(item):
+            db.session.rollback()
+            return render_template("error.html", code=409, message="這個分頁上的資料已變更，本次操作未套用。",
+                                   recovery_url=destination, recovery_label="返回清單查看最新設定"), 409
+
     def managed_point(point_id, *, deleted=False):
         condition = Point.deleted_at.is_not(None) if deleted else Point.deleted_at.is_(None)
         point = db.session.scalar(select(Point).where(Point.id == point_id, condition)
@@ -1156,6 +1215,8 @@ def create_app(config=None):
     def update_point(point_id):
         lock_current_admin()
         point = managed_point(point_id)
+        if conflict := check_management_state(point, point_list_url()):
+            return conflict
         values = point_values(point)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
         # Freeze unknown snapshots before editing the current point. Older workers
@@ -1181,6 +1242,8 @@ def create_app(config=None):
         lock_current_admin()
         point = managed_point(point_id)
         destination = point_list_url()
+        if conflict := check_management_state(point, destination):
+            return conflict
         point.qr_token = secrets.token_urlsafe(24)
         audit("qr_rotated", point.code)
         db.session.commit()
@@ -1193,6 +1256,8 @@ def create_app(config=None):
         lock_current_admin()
         point = managed_point(point_id)
         destination = point_list_url()
+        if conflict := check_management_state(point, destination):
+            return conflict
         instant = now_utc()
         point.deleted_at = naive_utc(instant)
         point.active = False
@@ -1210,23 +1275,28 @@ def create_app(config=None):
         lock_current_admin()
         point = managed_point(point_id, deleted=True)
         destination = point_list_url(deleted=True)
+        if conflict := check_management_state(point, destination):
+            return conflict
         point.deleted_at, point.active = None, False
         audit("point_restored", point.code)
         db.session.commit()
         flash("點位已還原為停用。請至現有點位啟用，再列印新的 QR Code。", "success")
         return redirect(destination)
 
+    def qr_image(point, factory=None):
+        address = app.config["PUBLIC_BASE_URL"] + url_for("checkin", token=point.qr_token)
+        img = qrcode.make(address, image_factory=factory, box_size=10, border=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        output = io.BytesIO()
+        img.save(output)
+        return output.getvalue()
+
     @app.get("/admin/points/<int:point_id>/qr.svg")
     @admin_required
     def point_qr(point_id):
         point = db.get_or_404(Point, point_id)
-        if point.deleted_at is not None:
+        if point.deleted_at is not None or not point.active:
             abort(404)
-        address = app.config["PUBLIC_BASE_URL"] + url_for("checkin", token=point.qr_token)
-        img = qrcode.make(address, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
-        output = io.BytesIO()
-        img.save(output)
-        response = make_response(output.getvalue())
+        response = make_response(qr_image(point, qrcode.image.svg.SvgPathImage))
         response.headers["Content-Type"] = "image/svg+xml"
         return response
 
@@ -1244,7 +1314,10 @@ def create_app(config=None):
             if len(ids) > 2000:
                 abort(400)
             query = query.where(Point.id.in_([parse_id(x) for x in ids.split(",")]))
-        return render_template("print_qr.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category,
+        points = db.session.scalars(query.order_by(*point_order())).all()
+        # The code and label come from the same snapshot, in one HTTP response.
+        qr_images = {point.id: base64.b64encode(qr_image(point)).decode("ascii") for point in points}
+        return render_template("print_qr.html", points=points, qr_images=qr_images, selected_floor=floor, selected_category=category,
                                public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
 
     @app.get("/admin/users")
@@ -1288,6 +1361,8 @@ def create_app(config=None):
         user = lock_admin_users(user_id)[user_id]
         if not user:
             abort(404)
+        if conflict := check_management_state(user, url_for("users")):
+            return conflict
         name = request.form.get("display_name", "").strip()
         role, category = submitted_role()
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
@@ -1312,6 +1387,8 @@ def create_app(config=None):
         user = lock_admin_users(user_id)[user_id]
         if not user:
             abort(404)
+        if conflict := check_management_state(user, url_for("users")):
+            return conflict
         password = request.form.get("password", "")
         if not 12 <= len(password) <= 256:
             abort(400, description="密碼需為 12 至 256 個字元。")

@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_ui.html' import icon, csrf, empty %}
+{% from '_ui.html' import icon, csrf, management_revision, empty %}
 {% set title='人員管理' %}
 {% macro role_options(selected, prompt) -%}
   {% if selected not in ['admin','safety','general'] %}<option value="" selected disabled>{{ prompt }}</option>{% endif %}
@@ -26,14 +26,14 @@
   </div>
   {% if not selected_role %}<p class="assignment-note">{{ icon('info') }}請在帳號設定指派角色，此人員才能開始巡檢。</p>{% endif %}
   <details class="disclosure compact-disclosure"><summary><span>帳號設定</span>{{ icon('down') }}</summary>
-    <form method="post" action="{{ url_for('update_user', user_id=user.id) }}" class="edit-form">{{ csrf() }}
+    <form method="post" action="{{ url_for('update_user', user_id=user.id) }}" class="edit-form">{{ csrf() }}{{ management_revision(user) }}
       <div class="form-grid two-fields">
         <label>顯示姓名<input name="display_name" value="{{ user.display_name }}" required maxlength="80"></label>
         <label>角色<select name="role" required {% if user.id == current_user.id %}disabled{% endif %}>{{ role_options(selected_role, '尚未指派，請選擇角色') }}</select>{% if user.id == current_user.id %}<input type="hidden" name="role" value="admin">{% endif %}</label>
       </div>
       <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if user.active %}checked{% endif %} {% if user.id == current_user.id %}disabled{% endif %}>啟用此帳號</label>{% if user.id == current_user.id %}<input type="hidden" name="active" value="on">{% endif %}<button class="button button-primary button-small">儲存變更</button></div>
     </form>
-    {% if user.id != current_user.id %}<form method="post" action="{{ url_for('reset_password', user_id=user.id) }}" class="password-reset-form" data-confirm="重設 {{ user.display_name }} 的密碼後，此人員須使用新密碼重新登入。" data-confirm-title="重設人員密碼" data-confirm-label="確認重設" data-confirm-danger="true">{{ csrf() }}<label>重設初始密碼<input name="password" type="password" required minlength="12" autocomplete="new-password" placeholder="至少 12 個字元"></label><button class="button button-secondary button-small">重設密碼</button></form>
+    {% if user.id != current_user.id %}<form method="post" action="{{ url_for('reset_password', user_id=user.id) }}" class="password-reset-form" data-confirm="重設 {{ user.display_name }} 的密碼後，此人員須使用新密碼重新登入。" data-confirm-title="重設人員密碼" data-confirm-label="確認重設" data-confirm-danger="true">{{ csrf() }}{{ management_revision(user) }}<label>重設初始密碼<input name="password" type="password" required minlength="12" autocomplete="new-password" placeholder="至少 12 個字元"></label><button class="button button-secondary button-small">重設密碼</button></form>
     {% else %}<div class="fine-note">如需變更自己的密碼，請使用<a href="{{ url_for('change_password') }}">變更密碼</a>功能。</div>{% endif %}
   </details>
 </article>

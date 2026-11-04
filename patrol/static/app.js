@@ -95,6 +95,17 @@
       button.addEventListener('click', () => window.print());
     });
 
+    // Keep the selected floor visible when the horizontal row is rebuilt after a query.
+    const floorNav = document.querySelector('[data-floor-navigation]');
+    if (floorNav) {
+      const target = floorNav.querySelector('[aria-current=page]') || floorNav.querySelector('[data-has-visits]');
+      if (target && floorNav.scrollWidth > floorNav.clientWidth) {
+        const row = floorNav.getBoundingClientRect();
+        const item = target.getBoundingClientRect();
+        if (item.left < row.left || item.right > row.right) floorNav.scrollLeft += item.left - row.left;
+      }
+    }
+
     // Keep the full search form usable without JavaScript; collapse only on phones.
     document.querySelectorAll('[data-records-query]').forEach(panel => {
       const toggle = panel.querySelector('[data-query-toggle]');
@@ -268,6 +279,7 @@
 
       input.addEventListener('change', renderPhotos);
       renderPhotos();
+      container.classList.add('photo-picker-ready');
     });
 
     const mobileMenu = document.querySelector('.mobile-menu');

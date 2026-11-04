@@ -8,13 +8,13 @@
     <div class="checkin-topline"><span>{{ icon('qr') }}{{ category_label(point.category) if is_patrol_admin else '現場打卡' }}</span><span>{{ floor_label(point.floor) }}</span></div>
     <div class="checkin-point-icon">{{ icon('pin') }}</div>
     <span class="eyebrow">{{ '此時段已有巡檢紀錄' if existing and point.frequency == 'daily2' else '此點已完成巡檢' if existing else '確認巡檢位置' }}</span>
-    <h1>{{ point.code }}</h1>
+    <h1{% if point.code|length > 12 %} class="long-point-code"{% endif %}>{{ point.code }}</h1>
     <p class="checkin-location">{{ point.name }}</p>
     {% if not existing and point.active and device_state == 'approved' %}
     <div class="checkin-quick-action">
       <p>{{ current_slot_label if point.frequency == 'daily2' else frequency(point.frequency) }} · {{ period_label }}</p>
       <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="正在上傳並儲存…">{{ icon('check') }}確認打卡</button>
-      <small>需要回報異常、備註或照片時，請先填寫下方內容。</small>
+      <a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>
     </div>
     {% endif %}
     {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id) if current_user.role == 'admin' else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p>{% if current_user.role != 'admin' %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point.id) }}">查看我在此點的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
@@ -38,15 +38,18 @@
         <input type="hidden" name="slot" value="{{ current_slot }}">
         <input type="hidden" name="period_key" value="{{ current_period_key }}">
         <input type="hidden" name="frequency" value="{{ point.frequency }}">
-        <div class="inspection-fields">
+        <input type="hidden" name="point_revision" value="{{ point_revision }}">
+        <div class="inspection-fields" id="inspection-fields" tabindex="-1">
           <label class="abnormal-toggle"><input type="checkbox" name="is_abnormal" value="on" {% if is_abnormal %}checked{% endif %}><span>{{ icon('alert') }}發現異常<small>勾選後可在「異常追蹤」查看，處理完成後由你或管理員結案。</small></span></label>
           <label for="inspection-note">巡檢備註 <span class="optional-label">選填</span></label>
           <textarea id="inspection-note" name="note" rows="4" maxlength="2000" placeholder="記錄現場狀況、發現的問題或處理方式…" data-character-count="note-count">{{ note|default('') }}</textarea>
           <div class="field-meta"><span>正常巡檢可留空。</span><span id="note-count" aria-live="off">{{ (note|default(''))|length }} / 2,000</span></div>
           <div class="photo-field" data-photo-upload>
-            <label for="inspection-photos">巡檢照片 <span class="optional-label">選填</span></label>
-            <div class="photo-picker-box">{{ icon('camera') }}<div><strong>附上現場照片</strong><p>可從相簿選擇，或使用手機提供的拍照選項。</p></div></div>
-            <input id="inspection-photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple aria-describedby="photo-guidance photo-feedback" data-photo-input>
+            <label id="inspection-photo-label" for="inspection-photos">巡檢照片 <span class="optional-label">選填</span></label>
+            <label class="photo-picker-box" for="inspection-photos">
+              <span class="photo-picker-caption">{{ icon('camera') }}<span><strong>選擇現場照片</strong><small>可從相簿選擇，或使用手機提供的拍照選項。</small></span></span>
+              <input id="inspection-photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple aria-labelledby="inspection-photo-label" aria-describedby="photo-guidance photo-feedback" data-photo-input>
+            </label>
             <p id="photo-guidance" class="photo-guidance">最多 3 張，每張不超過 8 MB。支援 JPG、PNG、WebP、HEIC。重新選取會取代目前選擇。</p>
             <p id="photo-feedback" class="photo-feedback" role="status" aria-live="polite" data-photo-feedback></p>
             <div class="photo-preview-list" data-photo-previews></div>

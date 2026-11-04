@@ -1,12 +1,77 @@
 """Admin transitions must preserve history, invalidate stale access and QR labels."""
 from datetime import timedelta
+import base64
+import io
+import re
 
 import pytest
+from PIL import Image
+import qrcode
 from sqlalchemy import select
 
 from models import AuditLog, InspectionIssue, InspectionPhoto, User, db
 from test_app import (FIXED_NOW, PASSWORD, application, approve_browser, login,
                       record, seeded)
+
+
+def form_revision(client, page, action):
+    markup = client.get(page).get_data(as_text=True)
+    form = re.search(r'<form\b[^>]*\baction="' + re.escape(action) + r'(?:\?[^"]*)?"[^>]*>(.*?)</form>',
+                     markup, re.DOTALL)
+    assert form
+    return re.search(r'name="expected_state" value="([^"]+)"', form.group(1))[1]
+
+
+def test_old_account_tab_cannot_undo_department_or_reset_credentials(application, seeded):
+    client = application.test_client()
+    login(client, "manager")
+    staff = seeded["inspector"]
+    path = f"/admin/users/{staff.id}"
+    before = form_revision(client, "/admin/users", path + "/update")
+    form = {"display_name": staff.display_name, "role": "general", "active": "on", "expected_state": before}
+    assert client.post(path + "/update", data=form).status_code == 302
+    stale = client.post(path + "/update", data={**form, "display_name": "Old page", "role": "safety"})
+    assert stale.status_code == 409 and b'href="/admin/users"' in stale.data
+    assert client.post(path + "/reset-password", data={"password": PASSWORD + "2", "expected_state": before}).status_code == 409
+    assert staff.patrol_category == "general" and staff.display_name != "Old page" and staff.check_password(PASSWORD)
+
+
+def test_old_point_forms_cannot_overwrite_edit_or_invalidate_new_label(application, seeded):
+    client = application.test_client()
+    login(client, "manager")
+    point = seeded["daily"]
+    path = f"/admin/points/{point.id}"
+    before = form_revision(client, "/admin/points", path + "/rotate-qr")
+    form = {"expected_state": before}
+    assert client.post(path + "/rotate-qr", data=form).status_code == 302
+    token = point.qr_token
+    for operation in ("/rotate-qr", "/update", "/delete"):
+        assert client.post(path + operation, data=form).status_code == 409
+    assert point.qr_token == token and point.active and point.deleted_at is None
+    current = form_revision(client, "/admin/points", path + "/delete")
+    assert client.post(path + "/delete", data={"expected_state": current}).status_code == 302
+    assert client.post(path + "/restore", data=form).status_code == 409
+    latest = form_revision(client, "/admin/points?list=deleted", path + "/restore")
+    assert client.post(path + "/restore", data={"expected_state": latest}).status_code == 302
+
+
+def test_print_sheet_pairs_each_label_with_its_own_complete_qr(application, seeded):
+    client = application.test_client()
+    login(client, "manager")
+    body = client.get("/admin/points/print", headers={"X-Forwarded-Host": "incorrect.example"}).get_data(as_text=True)
+    labels = dict(re.findall(r'<h2>([^<]+)</h2><p>[^<]*</p><img src="data:image/png;base64,([^"]+)"', body))
+    assert set(labels) == {seeded["daily"].code, seeded["weekly"].code}
+    for point in (seeded["daily"], seeded["weekly"]):
+        image = Image.open(io.BytesIO(base64.b64decode(labels[point.code], validate=True))).convert("1")
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, border=4)
+        qr.add_data(f"https://patrol.example.test/c/{point.qr_token}")
+        matrix = qr.get_matrix()
+        scale = image.width // len(matrix)
+        assert image.width == image.height == scale * len(matrix)
+        assert [[image.getpixel((x * scale + scale // 2, y * scale + scale // 2)) == 0
+                 for x in range(len(matrix))] for y in range(len(matrix))] == matrix
+    empty = client.get("/admin/points/print?category=general").get_data(as_text=True)
+    assert "data-print" not in empty and 'href="/admin/points?category=general"' in empty
 
 
 def test_role_change_revokes_old_session_but_keeps_phone_and_password(application, seeded):

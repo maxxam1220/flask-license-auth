@@ -43,6 +43,44 @@ def test_report_counts_only_expired_slots_and_any_employee_completion(applicatio
     assert db.session.query(AuditLog).count() == 0
 
 
+@pytest.mark.parametrize('archive_utc_hour,expected_slots', [(3, []), (4, ['am']), (7, ['am'])])
+def test_restored_inactive_point_edits_keep_only_overdue_slots_in_original_department(application, seeded, monkeypatch,
+                                                                                      archive_utc_hour, expected_slots):
+    from datetime import timezone
+
+    point = historical_point()
+    old_code, old_name = point.code, point.name
+    admin = application.test_client()
+    login(admin, 'manager')
+    worker = application.test_client()
+    login(worker)
+    monkeypatch.setattr(app_module, 'now_utc', lambda: datetime(2026, 11, 3, archive_utc_hour, tzinfo=timezone.utc))
+    assert admin.post(f'/admin/points/{point.id}/delete').status_code == 302
+    assert admin.post(f'/admin/points/{point.id}/restore').status_code == 302
+    # An inactive edit records a new schedule row but cannot rewrite the
+    # old department's noon deadline, location or printed name.
+    assert admin.post(f'/admin/points/{point.id}/update', data={
+        'code': '2F-RESTORED', 'name': 'Private general office', 'floor': '2', 'category': 'general',
+        'frequency': 'weekly',
+    }).status_code == 302
+    monkeypatch.setattr(app_module, 'now_utc', lambda: datetime(2026, 11, 5, 4, tzinfo=timezone.utc))
+    query = '?date_from=2026-11-03&date_to=2026-11-04&floor=11&frequency=daily2'
+    with rendered_contexts(application) as contexts:
+        response = worker.get('/missed' + query)
+    assert response.status_code == 200 and b'Private general office' not in response.data
+    results = contexts[-1][1]['occurrences']
+    assert [(row['due_date'].isoformat(), row['slot'], row['code'], row['name']) for row in results] == [
+        ('2026-11-03', slot, old_code, old_name) for slot in expected_slots]
+    exported = worker.get('/missed/export' + query)
+    assert exported.status_code == 200 and b'Private general office' not in exported.data
+    csv_rows = list(csv.reader(io.StringIO(exported.data.decode('utf-8-sig'))))[1:]
+    assert [(row[0], row[3], row[4], row[5], row[7]) for row in csv_rows] == [
+        ('2026-11-03', '1M', old_code, old_name, '上午') for _ in expected_slots]
+    with rendered_contexts(application) as contexts:
+        admin.get('/missed?date_from=2026-11-03&date_to=2026-11-04&floor=2&category=general')
+    assert contexts[-1][1]['occurrences'] == []
+
+
 def test_csv_matches_all_filtered_results_and_sanitizes_labels(application, seeded):
     point = historical_point()
     point.name = '=HYPERLINK("https://example.test")'
