@@ -17,7 +17,7 @@ from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Pa
                     RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 8
+LATEST_VERSION = 9
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -113,6 +113,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v6_to_v7(connection)
         if current < 8:
             _upgrade_v7_to_v8(connection)
+        if current < 9:
+            _add_missing_columns(connection, Inspection.__tablename__, [Inspection.__table__.c.executor_visit])
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -423,7 +425,8 @@ def _validate_current(connection):
     for table_name, required in {
         "patrol_points": ("category", "workflow_mode"),
         "patrol_point_schedules": ("category", "workflow_mode", "legacy_unscheduled"),
-        "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled"),
+        "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled",
+                               "executor_visit"),
         "patrol_executions": ("user_id", "binding_id", "point_id", "frequency", "period_key", "slot", "created_at",
                               "category", "point_code", "point_name", "point_floor", "user_name"),
         "patrol_inspection_photos": ("inspection_id", "data", "mime_type", "size_bytes", "width", "height", "created_at"),
@@ -434,6 +437,10 @@ def _validate_current(connection):
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
             raise SchemaMigrationError(f"Required non-null columns are missing in {table_name}.")
+        if table_name == Inspection.__tablename__:
+            visit = columns["executor_visit"]
+            if not isinstance(visit["type"], db.Boolean) or _compact(str(visit["default"])) not in ("false", "0"):
+                raise SchemaMigrationError("Executor visit history requires a boolean column with a false default.")
     revoked_columns = {column["name"]: column["type"] for column in inspector.get_columns(revoked)}
     if (inspector.get_pk_constraint(revoked)["constrained_columns"] != ["token_hash"]
             or getattr(revoked_columns["token_hash"], "length", None) != 64
@@ -462,7 +469,8 @@ def _validate_current(connection):
         normalized = re.sub(r"::text|[()\s]", "", str(predicate).lower())
         if tuple(index.get("column_names", [])) != fields or bool(index.get("unique")) != unique or normalized != condition:
             raise SchemaMigrationError(f"Missing or invalid workflow index: {name}.")
-    if not {"patrol_inspection_workflow", "patrol_personal_day_required"} <= {check["name"] for check in inspector.get_check_constraints(Inspection.__tablename__)}:
+    if not {"patrol_inspection_workflow", "patrol_personal_day_required", "patrol_executor_visit_fields"} <= {
+            check["name"] for check in inspector.get_check_constraints(Inspection.__tablename__)}:
         raise SchemaMigrationError("Final inspection workflow validation is missing.")
     if NEW_INSPECTION_KEY not in _unique_keys(connection, PatrolExecution.__tablename__):
         raise SchemaMigrationError("First-stage slot uniqueness is missing.")

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import CheckConstraint, MetaData, Table, inspect, select, text
+from sqlalchemy import CheckConstraint, MetaData, Table, func, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,7 +16,7 @@ import general_workflow
 from general_workflow import new_execution
 from migrations import LATEST_VERSION, upgrade_schema
 from models import DeviceBinding, Inspection, PatrolExecution, Point, PointSchedule, RevokedSession, User
-from test_migrations import engine as sqlite_store, version_two, version_three, version_four, version_five
+from test_migrations import engine as sqlite_store, snapshot, version_two, version_three, version_four, version_five
 from test_postgres import engine as postgres_store
 
 
@@ -334,3 +334,55 @@ def test_v8_two_people_concurrently_review_one_execution_and_both_halves_remain_
             session.add(Inspection(**(spot | dict(frequency="irregular", slot="any")), spot_request_id="jun03-any",
                                    created_at=datetime(2026, 6, 3, 12)))
             session.flush()
+
+
+@pytest.fixture
+def v8(engine, v7):
+    """Build the actual v8 layout and leave an old inspector's account in its new executor role."""
+    with engine.connect() as conn:
+        if conn.dialect.name == "sqlite":
+            conn.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            conn.commit()
+            conn.exec_driver_sql("BEGIN IMMEDIATE")
+        try:
+            migrations._upgrade_v7_to_v8(conn)
+            conn.exec_driver_sql("INSERT INTO patrol_schema_versions(version) VALUES (8)")
+            conn.exec_driver_sql("UPDATE patrol_users SET role='executor', patrol_category='general' WHERE id=18")
+            metadata = MetaData()
+            metadata.reflect(conn)
+            assert "executor_visit" not in metadata.tables["patrol_inspections"].c
+            conn.commit()
+            return metadata
+        finally:
+            conn.rollback()
+            if conn.dialect.name == "sqlite":
+                conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+                conn.commit()
+
+
+def test_v9_marks_only_new_executor_visits_and_retains_every_historical_row(engine, v8):
+    with engine.connect() as conn:
+        before = snapshot(conn, v8)
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.begin() as conn:
+        after = snapshot(conn, v8)
+        assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
+        assert before == after
+        assert not conn.scalar(select(func.count(Inspection.id)).where(Inspection.executor_visit.is_(True)))
+        assert conn.exec_driver_sql("SELECT role FROM patrol_users WHERE id=18").scalar_one() == "executor"
+        # An older process can still submit its ordinary inspection without the new field.
+        values = dict(point_id=24, user_id=18, created_at=datetime(2026, 12, 1, 3), personal_day=date(2026, 12, 1),
+                      period_key="2026-12-01", slot="any", workflow_mode="spot", frequency="irregular", category="general",
+                      point_floor=1, point_code="1F-G24", point_name="測試", user_name="測試員", note="", is_abnormal=False)
+        old = v8.tables["patrol_inspections"]
+        old_id = conn.scalar(old.insert().values(**values, spot_request_id="old-process-ticket").returning(old.c.id))
+        assert conn.scalar(select(Inspection.executor_visit).where(Inspection.id == old_id)) is False
+        values["user_id"] = 19
+        result = conn.execute(Inspection.__table__.insert().values(**values, spot_request_id="new-visit", executor_visit=True)
+                              .returning(Inspection.id)).scalar_one()
+        assert conn.scalar(select(Inspection.executor_visit).where(Inspection.id == result)) is True
+    assert upgrade_schema(engine) == LATEST_VERSION
+    values["user_id"] = 17
+    for change in ({"frequency": "daily"}, {"note": "異常說明"}, {"is_abnormal": True}):
+        with pytest.raises(IntegrityError), engine.begin() as conn:
+            conn.execute(Inspection.__table__.insert().values(**(values | change), spot_request_id="bad-visit", executor_visit=True))

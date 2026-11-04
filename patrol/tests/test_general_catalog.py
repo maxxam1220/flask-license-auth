@@ -80,6 +80,7 @@ def test_preflight_empty_or_incomplete_database(manifest):
     (7, "weekly", -1, False),       # A v7 spot will match an irregular row after upgrade.
     (7, "daily", 0, True),          # It looks like a daily match until v8 converts it.
     (8, "daily", 0, False),         # A native v8 single-stage daily point stays scheduled.
+    (9, "daily", 0, False),         # Attendance markers do not affect point settings or repeat starts.
     (6, "weekly", -1, False),       # v6 general -> v7 spot -> v8 irregular.
 ])
 def test_read_only_preflight_projects_only_the_pending_upgrade(manifest, version, stored_frequency, desired_index, conflict):

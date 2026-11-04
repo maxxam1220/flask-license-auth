@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 import io
 
 import pytest
-from models import DeviceBinding, Inspection, PatrolExecution, Point, PointSchedule, User, db
+from models import DeviceBinding, Inspection, InspectionPhoto, PatrolExecution, Point, PointSchedule, User, db
 from test_app import app_module, application, seeded, login, rendered_contexts  # noqa: F401
 
 DAY = date(2026, 11, 2)
@@ -104,7 +104,7 @@ def test_only_own_execution_and_authorized_final_reports_can_export_paired_perso
     own_csv=csv_rows(client.get("/records/export?"+RANGE))
     assert own_csv[0][0]=="執行人員" and len(own_csv)==2
     assert other.display_name not in str(own_csv) and final.note not in str(own_csv)
-    assert client.get("/records/export?stage=inspection").status_code==403
+    assert len(csv_rows(client.get("/records/export?stage=inspection&" + RANGE))) == 1
     dash=context(application,client,"/dashboard?date=2026-11-02")
     assert dash["totals"]=={"total":2,"done":1,"pending":1} and dash["spot_points"]==[]
     assert all(s["record"] is None for s in dash["cards"][0]["slots"])
@@ -237,3 +237,71 @@ def test_irregular_list_monthly_misses_and_exact_frequency_filters(application, 
     assert not context(application, client, "/missed?" + filters + "&frequency=irregular")["occurrences"]
     csv_data = csv_rows(client.get("/records/export?" + filters + "&frequency=irregular"))
     assert len(csv_data) == 2 and csv_data[1][2:4] == [one.code, one.name]
+
+
+def test_executor_direct_receipts_are_scoped_to_submission_role_in_every_read_path(application, seeded, workflow):
+    executor, _, peer, scheduled, _ = workflow
+    direct = point("1F-DIRECT", "spot", frequency="irregular")
+    application.config["EXECUTOR_VISIT_CODES"] = {direct.code}
+    first_stage = PatrolExecution(**values(executor, scheduled, "am"))
+    # This same account was previously an inspector at the same point.
+    old_fields = values(executor, direct, "any") | {"created_at": datetime(2026,11,1,1), "period_key": "2026-11-01"}
+    old = Inspection(**old_fields, workflow_mode="spot", spot_request_id="e"*32, note="OLD-INSPECTOR-ONLY", is_abnormal=True)
+    old.photos.append(InspectionPhoto(data=b"private image", size_bytes=13, width=1, height=1))
+    visit = Inspection(**values(executor,direct,"any"), workflow_mode="spot", spot_request_id="f"*32, executor_visit=True)
+    theirs = Inspection(**values(peer,direct,"any"), workflow_mode="spot", spot_request_id="b1"*16, executor_visit=True)
+    db.session.add_all([first_stage, old, visit, theirs])
+    db.session.commit()
+    client = open_as(application, executor)
+    filters = f"date_from=2026-11-01&date_to=2026-11-02&user_id={peer.id}&category=safety"
+    direct_url = "/records?stage=inspection&" + filters
+    assert [r.id for r in context(application, client, direct_url)["records"]] == [visit.id]
+    assert [r.id for r in context(application, client, "/records?" + filters)["executions"]] == [first_stage.id]
+    csv_data = csv_rows(client.get("/records/export?stage=inspection&" + filters))
+    assert csv_data == [["簽到人員","樓層","點位編號","點位名稱","簽到時間（台北）"],
+                        [executor.display_name,"1F",direct.code,direct.name,"2026-11-02 15:00:00"]]
+    assert client.get(direct_url + "&abnormal=1").status_code == 400
+    dash = context(application, client, "/dashboard")
+    assert [r.id for r in dash["recent"]] == [visit.id] and [r.id for r in dash["recent_executions"]] == [first_stage.id]
+    assert [p.id for p in dash["irregular_points"]] == [direct.id]
+    assert context(application, client, f"/checkins/{visit.id}")["point_open_issue_count"] == 0
+    for forbidden in (old, theirs):
+        for route in (f"/records/{forbidden.id}", f"/checkins/{forbidden.id}"):
+            assert client.get(route).status_code == 403
+    assert client.get(f"/photos/{old.photos[0].id}").status_code == 403
+    assert client.get("/issues").status_code == 403
+    assert client.post(f"/issues/{old.id}/resolve", data={"note":"x","expected_event_id":"0"}).status_code == 403
+    admin = open_as(application, seeded["manager"])
+    admin_csv = csv_rows(admin.get("/records/export?date_from=2026-11-01&date_to=2026-11-02&category=general"))
+    labels = admin_csv[0]
+    visits = [r for r in admin_csv[1:] if r[labels.index("作業模式")] == "直接簽到"]
+    assert len(visits) == 2 and all(r[9:16] == [""] * 7 for r in visits)
+    assert any(r[labels.index("備註")] == old.note for r in admin_csv[1:])
+    # Historical receipts remain available after an authorized point is renamed
+    # or removed from the register. They use the role and fields at submission.
+    direct.code = "1F-RENAMED"
+    db.session.commit()
+    application.config["EXECUTOR_VISIT_CODES"] = frozenset()
+    assert context(application, client, f"/checkins/{visit.id}")["stage"] == "visit"
+    response = client.get(f"/records/{visit.id}")
+    assert response.status_code == 302 and response.location.endswith(f"/checkins/{visit.id}")
+    assert [r.id for r in context(application, client, direct_url)["records"]] == [visit.id]
+    assert not context(application, client, "/dashboard")["irregular_points"]
+
+
+def test_executor_optional_dashboard_uses_exact_authorized_codes_and_current_workflow(application, workflow):
+    executor, _, _, _, _ = workflow
+    eligible = point("1F-AUTH-OK", "spot", frequency="irregular")
+    custom = point("1F-AUTH-OTHER", "spot", frequency="irregular")
+    wrong_case = point("1f-auth-case", "spot", frequency="irregular")
+    wrong_schedule = point("1F-AUTH-SCHED", "spot", frequency="daily")
+    different = point("1F-AUTH-CHANGED", "spot", frequency="irregular")
+    historical = point("1F-AUTH-LEGACY", "spot", frequency="irregular", legacy=True)
+    different.frequency = "daily"
+    db.session.commit()
+    application.config["EXECUTOR_VISIT_CODES"] = frozenset({
+        eligible.code, wrong_case.code.upper(), wrong_schedule.code, different.code, historical.code})
+    client = open_as(application, executor)
+    dash = context(application, client, "/dashboard")
+    assert [p.id for p in dash["irregular_points"]] == [eligible.id]
+    assert custom.code not in client.get("/dashboard").get_data(as_text=True)

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import inspect, literal, select
 
+from migrations import LATEST_VERSION
 from models import AuditLog, Point, PointSchedule, SchemaVersion, db
 
 
@@ -84,14 +85,14 @@ def _import_plan(connection, rows, *, version=8, has_category=True, lock=False):
 
 
 def preflight_general_catalog(engine, rows=None):
-    """Read-only projection of the import after upgrading an existing schema to v8."""
+    """Compare the register with the point settings expected after upgrade."""
     rows = _required_rows(rows)
     with engine.connect() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
         version_table = SchemaVersion.__table__
         version = (connection.scalar(select(db.func.max(version_table.c.version))) or 0) if version_table.name in tables else 0
-        if version > 8:
+        if version > LATEST_VERSION:
             raise ValueError("資料庫版本較新，無法預檢總務清冊。")
         if Point.__tablename__ not in tables:
             if version or AuditLog.__tablename__ in tables:

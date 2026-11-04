@@ -205,7 +205,12 @@ def create_app(config=None):
     )
     app.config.update(provided)
     # The private register is supplied only to the designated patrol service.
-    general_codes = {row["code"].casefold(): (row["code"], row["floor"]) for row in general_catalogue_rows()}
+    register = general_catalogue_rows()
+    general_codes = {row["code"].casefold(): (row["code"], row["floor"]) for row in register}
+    app.config["EXECUTOR_VISIT_CODES"] = frozenset(
+        row["code"] for row in register
+        if row["category"] == "general" and row["workflow_mode"] == "spot" and row["frequency"] == "irregular"
+    )
     app.config["SESSION_COOKIE_SECURE"] = app.config["COOKIE_SECURE"]
     if app.config["APP_ENV"] == "production":
         if not app.config["SECRET_KEY"] or len(app.config["SECRET_KEY"]) < 32:
@@ -440,6 +445,11 @@ def create_app(config=None):
             return fallback
         return value
 
+    def executor_can_scan(point):
+        return point.category == "general" and (point.workflow_mode == "two_stage" or
+                (point.workflow_mode == "spot" and point.frequency == "irregular" and
+                 point.code in app.config["EXECUTOR_VISIT_CODES"]))
+
     def binding_destination():
         """Keep a scanned point through approval, without trusting a return URL."""
         value = request.form.get("next") if request.method == "POST" else request.args.get("next")
@@ -448,7 +458,7 @@ def create_app(config=None):
         match = QR_RETURN_PATH.fullmatch(value or "")
         point = db.session.scalar(select(Point).where(Point.qr_token == match.group(1))) if match else None
         if (point and point.deleted_at is None and can_access_category(g.user, point.category)
-                and (g.user.role != "executor" or point.workflow_mode == "two_stage")
+                and (g.user.role != "executor" or executor_can_scan(point))
                 and point.active and point.schedule_start <= local_dt(now_utc()).date()):
             target = url_for("checkin", token=point.qr_token)
             session["after_binding"] = target
@@ -485,7 +495,9 @@ def create_app(config=None):
         if not scope:
             return query.where(db.false())
         if g.user.role == "executor":
-            return query.where(db.false())
+            return query.where(Inspection.user_id == g.user.id, Inspection.category == "general",
+                               Inspection.executor_visit.is_(True), Inspection.workflow_mode == "spot",
+                               Inspection.frequency == "irregular")
         return query.where(Inspection.user_id == g.user.id, Inspection.category == scope)
 
     def historical_points(scope):
@@ -666,7 +678,9 @@ def create_app(config=None):
             scheduled_name = schedule.point_name if schedule and schedule.point_name is not None else point.name
             mode = schedule.workflow_mode if schedule else point.workflow_mode
             legacy_unscheduled = bool(schedule and schedule.legacy_unscheduled)
-            if ((frequency == "irregular" or legacy_unscheduled) and active and (not executor or mode == "two_stage") and point.schedule_start <= reference_day
+            direct_visit = (mode == "spot" and frequency == "irregular" and not legacy_unscheduled
+                            and point.code == scheduled_code and point.workflow_mode == "spot" and executor_can_scan(point))
+            if ((frequency == "irregular" or legacy_unscheduled) and active and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
                     and (not category_filter or category_filter == category)
                     and (not floor_filter or int(floor_filter) == scheduled_floor)):
                 irregular_points.append(SimpleNamespace(id=point.id, code=scheduled_code, name=scheduled_name, floor=scheduled_floor,
@@ -752,7 +766,7 @@ def create_app(config=None):
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                open_issue_counts=issue_counts, device_state=device_status(), irregular_points=irregular_points, spot_points=irregular_points,
-                               recent=[] if executor else db.session.scalars(recent_query).all(), recent_executions=recent_executions,
+                               recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
                                missed_query_url=url_for("missed", date_from=period_day.isoformat(),
                                    date_to=period_end.isoformat(), category=category_filter, floor=floor_filter,
                                    frequency="daily_all" if view == "daily" else view),
@@ -767,12 +781,10 @@ def create_app(config=None):
         scope = patrol_scope(g.user)
         if scope is not None:
             query = query.where(Point.category == scope if scope else db.false())
-        if g.user.role == "executor":
-            query = query.where(Point.workflow_mode == "two_stage")
         if lock:
             query = query.with_for_update().execution_options(populate_existing=True)
         point = db.session.scalar(query)
-        if not point:
+        if not point or (g.user.role == "executor" and not executor_can_scan(point)):
             abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
         if not point.active or point.schedule_start > local_dt(now_utc()).date():
             abort(403, description="此巡檢點目前尚未啟用或已停用。")
@@ -789,6 +801,8 @@ def create_app(config=None):
 
     def checkin_stage(point, first):
         if point.workflow_mode != "two_stage":
+            if g.user.role == "executor":
+                return "visit", executor_can_scan(point), ""
             return "inspect", g.user.role in ("inspector", "admin"), ""
         if g.user.role == "executor":
             return "execute", first is None, "本時段已登記執行，請由總務巡檢員接續巡檢。" if first else ""
@@ -822,14 +836,17 @@ def create_app(config=None):
         slot = slot_for(point, instant)
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None
         stage, allowed, notice = checkin_stage(point, first)
-        existing = prior_inspection(point, key, slot, day) if stage == "inspect" else None
+        existing = prior_inspection(point, key, slot, day) if stage != "execute" else None
         if existing and not can_access_category(g.user, existing.category):
             # The obligation is shared even after a point changes teams. Only
             # reveal that it is satisfied, never the old team's actor or time.
             existing = {"created_at": None, "user_name": "本期已有紀錄"}
         elif existing and not can_read_inspection(g.user, existing):
             # Never give another inspector's notes, attachments or identity to the template.
-            existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
+            if stage == "visit":
+                existing = {"created_at": None, "user_name": "你今天已在此點登記"}
+            else:
+                existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
                                stage=stage, can_confirm=allowed and not existing, stage_notice=notice,
@@ -858,14 +875,19 @@ def create_app(config=None):
             prefix = "你今天在這個點位的時段已有紀錄" if personal else "這個點位本期已有紀錄"
             flash(prefix + "，本次填寫的回報內容未追加。若現場有新的異常，請聯絡管理員處理。", "warning")
             return redirect(url_for("checkin", token=token))
-        flash("你已完成本日此時段的巡檢，以下是你的紀錄。" if personal else "這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
+        if g.user.role == "executor":
+            flash("你今天已在此點登記。", "info")
+        else:
+            flash("你已完成本日此時段的巡檢，以下是你的紀錄。" if personal else "這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
         if can_read_inspection(g.user, record):
             return redirect(url_for("checkin_success", record_id=record.id))
         return redirect(url_for("checkin", token=token))
 
     def previous_spot_response(record):
         require_inspection_access(record)
-        flash("這份巡檢表單先前已送出。以下是原紀錄，重送時更改的備註、異常或照片不會追加。", "info")
+        message = ("你今天已在此點簽到，以下是原紀錄。" if record.executor_visit else
+                   "這份巡檢表單先前已送出。以下是原紀錄，重送時更改的備註、異常或照片不會追加。")
+        flash(message, "info")
         return redirect(url_for("checkin_success", record_id=record.id))
 
     @app.post("/c/<token>/confirm")
@@ -912,9 +934,12 @@ def create_app(config=None):
         stage, allowed, notice = checkin_stage(point, first)
         if mode == "two_stage" and g.user.role == "admin":
             abort(403, description=notice)
-        if mode == "two_stage" and request.form.get("stage") != stage:
+        submitted_stage = request.form.get("stage")
+        if (mode == "two_stage" or "visit" in (stage, submitted_stage)) and submitted_stage != stage:
             return form_error("打卡階段與目前角色不符，請重新核對。", 409)
-        if stage == "execute" and (note or abnormal or any(upload.filename for upload in uploads)):
+        if stage in ("execute", "visit") and (note or abnormal or any(upload.filename for upload in uploads)):
+            if stage == "visit":
+                return form_error("直接簽到只記錄人員、點位與時間。")
             return form_error("執行登記不接受巡檢回報內容；備註、照片及異常請於巡檢階段填寫。")
         if stage == "execute" and first and first.user_id == g.user.id:
             return redirect(url_for("execution_success", execution_id=first.id))
@@ -928,7 +953,7 @@ def create_app(config=None):
             previous = db.session.scalar(select(Inspection).where(Inspection.spot_request_id == request_id))
             if previous:
                 return previous_spot_response(previous)
-        record = prior_inspection(point, key, slot, day) if stage == "inspect" else None
+        record = prior_inspection(point, key, slot, day) if stage != "execute" else None
         if record:
             return existing_checkin_response(record, token, note, abnormal, uploads)
         if stage == "execute":
@@ -968,12 +993,12 @@ def create_app(config=None):
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
                             workflow_mode=mode, execution_id=first.id if first else None, spot_request_id=request_id,
                             personal_day=day if mode in ("spot", "two_stage") else None,
-                            note=note, is_abnormal=abnormal)
+                            executor_visit=stage == "visit", note=note, is_abnormal=abnormal)
         record.photos.extend(InspectionPhoto(**photo) for photo in photos)
         open_issue_for(record)
         db.session.add(record)
         binding.last_seen_at = naive_utc(final_instant)
-        audit("checkin", point.code)
+        audit("executor_visit" if record.executor_visit else "checkin", point.code)
         try:
             db.session.commit()
         except IntegrityError:
@@ -1008,10 +1033,11 @@ def create_app(config=None):
     def checkin_success(record_id):
         record = db.get_or_404(Inspection, record_id)
         require_inspection_access(record)
-        return render_template("checkin_success.html", record=record, stage="inspect", finalized=True,
+        return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category),
-                               point_open_issue_count=open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0))
+                               point_open_issue_count=0 if record.executor_visit else
+                               open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0))
 
     def require_inspection_access(record):
         if not can_access_category(g.user, record.category):
@@ -1023,6 +1049,9 @@ def create_app(config=None):
     @login_required
     def record_detail(record_id):
         record = db.get_or_404(Inspection, record_id)
+        if record.executor_visit:
+            require_inspection_access(record)
+            return redirect(url_for("checkin_success", record_id=record.id))
         return render_record_detail(record)
 
     def render_record_detail(record, error=None, status=200):
@@ -1247,7 +1276,7 @@ def create_app(config=None):
         stage = request.args.get("stage", "execution" if executor else "inspection")
         if stage not in ("inspection", "execution"):
             abort(400, description="紀錄階段不正確。")
-        if (stage == "execution" and g.user.role not in ("admin", "executor")) or (executor and stage != "execution"):
+        if stage == "execution" and g.user.role not in ("admin", "executor"):
             abort(403)
         model = PatrolExecution if stage == "execution" else Inspection
         query = select(model).where(model.created_at >= start_time, model.created_at < end_time)
@@ -1265,8 +1294,8 @@ def create_app(config=None):
         abnormal = request.args.get("abnormal", "")
         if abnormal not in ("", "0", "1"):
             abort(400, description="異常篩選選項不正確。")
-        if abnormal and stage == "execution":
-            abort(400, description="執行紀錄不適用異常篩選。")
+        if abnormal and (stage == "execution" or executor):
+            abort(400, description="簽到紀錄不適用異常篩選。")
         if abnormal:
             query = query.where(Inspection.is_abnormal.is_(abnormal == "1"))
         frequency = request.args.get("frequency", "")
@@ -1293,6 +1322,8 @@ def create_app(config=None):
         stage = filters["stage"]
         if stage == "execution":
             rows = db.session.execute(query.limit(1001)).all()
+        elif g.user.role == "executor":
+            rows = db.session.scalars(query.limit(1001)).all()
         else:
             rows = db.session.scalars(query.options(selectinload(Inspection.photos), selectinload(Inspection.issue),
                                                     selectinload(Inspection.execution)).limit(1001)).all()
@@ -1324,6 +1355,11 @@ def create_app(config=None):
                 writer.writerow([cell(row.user_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
                                  category_label(row.category), slot_label(row.slot), "已巡檢" if reviewed else "待巡檢"])
+        elif g.user.role == "executor":
+            writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"])
+            for row in db.session.scalars(query.execution_options(yield_per=500)):
+                writer.writerow([cell(row.user_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                                 format_localtime(row.created_at)])
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
             header = ["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"]
@@ -1337,7 +1373,13 @@ def create_app(config=None):
                           cell(row.issue.resolved_by_name) if row.issue else "", format_localtime(row.issue.resolved_at) if row.issue and row.issue.resolved_at else "",
                           cell(row.issue.resolution_note) if row.issue else ""]
                 if has_workflows:
-                    mode_label = "抽查" if row.legacy_unscheduled else {"standard": "一般巡檢", "spot": "單段巡檢", "two_stage": "執行後巡檢"}[row.workflow_mode]
+                    if row.executor_visit:
+                        # Direct visits record attendance only. Empty report fields
+                        # keep a visit distinct from an inspection reporting no issue.
+                        fields[9:] = [""] * 7
+                        mode_label = "直接簽到"
+                    else:
+                        mode_label = "抽查" if row.legacy_unscheduled else {"standard": "一般巡檢", "spot": "單段巡檢", "two_stage": "執行後巡檢"}[row.workflow_mode]
                     fields.extend([mode_label,
                                    cell(row.execution.user_name) if row.execution else "",
                                    format_localtime(row.execution.created_at) if row.execution else ""])

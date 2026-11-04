@@ -17,5 +17,15 @@ def can_access_category(user, category):
 
 
 def can_read_inspection(user, record):
-    return can_access_category(user, record.category) and (user.role == "admin" or
-            (user.role == "inspector" and record.user_id == user.id))
+    if not can_access_category(user, record.category):
+        return False
+    if user.role == "admin":
+        return True
+    if record.user_id != user.id:
+        return False
+    if user.role == "executor":
+        # The immutable role-at-submission marker distinguishes a direct visit
+        # from receipts this same account submitted as an inspector in the past.
+        return (record.executor_visit and record.category == "general" and
+                record.workflow_mode == "spot" and record.frequency == "irregular")
+    return user.role == "inspector"

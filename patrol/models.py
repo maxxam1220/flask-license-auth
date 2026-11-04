@@ -162,6 +162,10 @@ class Inspection(db.Model):
     personal_day = db.Column(db.Date, default=inspection_personal_day)
     legacy_slot_repeat = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     legacy_unscheduled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    executor_visit = db.Column(db.Boolean, db.CheckConstraint(
+        "NOT executor_visit OR (workflow_mode = 'spot' AND category = 'general' AND frequency = 'irregular' "
+        "AND slot = 'any' AND note = '' AND NOT is_abnormal)", name="patrol_executor_visit_fields"),
+        nullable=False, default=False, server_default=db.false())
     note = db.Column(db.Text, nullable=False, default="", server_default="")
     is_abnormal = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     point_code = db.Column(db.String(30), nullable=False)
