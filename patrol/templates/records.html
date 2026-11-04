@@ -1,8 +1,9 @@
 {% extends 'base.html' %}
+{% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, frequency, empty, slot_label, issue_status %}
 {% set title='巡檢紀錄' %}
 {% set query_count=namespace(value=0) %}
-{% for key in ['category','floor','frequency','abnormal','user_id'] %}{% if filters.get(key,'') %}{% set query_count.value=query_count.value + 1 %}{% endif %}{% endfor %}
+{% for key in ['category','floor','frequency','abnormal','user_id'] %}{% if filters.get(key,'') and (is_patrol_admin or key not in ['category','user_id']) %}{% set query_count.value=query_count.value + 1 %}{% endif %}{% endfor %}
 {% block content %}
 <div class="page-heading"><div><div class="eyebrow">歷史查詢</div><h1>巡檢紀錄</h1><p>{{ '依分類、日期、樓層或人員，查詢巡檢與異常回報。' if current_user.role == 'admin' else '查看自己完成的巡檢、備註與現場照片。' }}</p></div><a class="button button-secondary" href="{{ url_for('export_records', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), floor=filters.get('floor',''), user_id=filters.get('user_id',''), category=filters.get('category',''), abnormal=filters.get('abnormal',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
 <div class="records-result-jump"><a class="text-link" href="#record-results">查看篩選結果 <strong>{{ records|length }} 筆</strong> {{ icon('down') }}</a></div>
@@ -21,7 +22,7 @@
 </button>
 
 {% if query_count.value %}<div class="applied-query-filters" aria-label="已套用的查詢條件">
-  {% if filters.get('category') %}<span class="query-chip"><span class="query-chip-label">分類</span><span class="query-chip-value">{{ category_label(filters.get('category')) }}</span></span>{% endif %}
+  {% if is_patrol_admin and filters.get('category') %}<span class="query-chip"><span class="query-chip-label">分類</span><span class="query-chip-value">{{ category_label(filters.get('category')) }}</span></span>{% endif %}
   {% if filters.get('floor') %}<span class="query-chip"><span class="query-chip-label">樓層</span><span class="query-chip-value">{{ floor_label(filters.get('floor')) }}</span></span>{% endif %}
   {% if filters.get('frequency') %}<span class="query-chip"><span class="query-chip-label">頻率</span><span class="query-chip-value">{{ '每日巡檢（含兩次）' if filters.get('frequency') == 'daily_all' else frequency(filters.get('frequency')) }}</span></span>{% endif %}
   {% if filters.get('abnormal') in ['0','1'] %}<span class="query-chip"><span class="query-chip-label">回報</span><span class="query-chip-value">{{ '有異常回報' if filters.get('abnormal') == '1' else '一般紀錄' }}</span></span>{% endif %}
@@ -30,7 +31,7 @@
 <div id="records-query-fields" data-query-fields><form class="filter-form records-filter-form" method="get" data-date-range>
   <label>開始日期<input name="date_from" type="date" value="{{ filters.get('date_from','') }}" required></label>
   <label>結束日期<input name="date_to" type="date" value="{{ filters.get('date_to','') }}" required></label>
-  <label>巡檢分類<select name="category"><option value="">全部分類</option>{% for value,label in category_options %}<option value="{{ value }}" {% if filters.get('category','') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  {% if is_patrol_admin %}<label>巡檢分類<select name="category"><option value="">全部分類</option>{% for value,label in category_options %}<option value="{{ value }}" {% if filters.get('category','') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>{% endif %}
   <label>樓層<select name="floor"><option value="">全部樓層</option>{% for value,label in floor_options %}<option value="{{ value }}" {% if filters.get('floor','')|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
   <label>巡檢頻率<select name="frequency"><option value="">全部頻率</option>{% for value,label in [('daily_all','每日巡檢（含兩次）'),('daily','每日一次'),('daily2','每日兩次'),('weekly','每週一次')] %}<option value="{{ value }}" {% if filters.get('frequency','') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
   <label>回報狀態<select name="abnormal"><option value="">全部紀錄</option><option value="1" {% if filters.get('abnormal','') == '1' %}selected{% endif %}>有異常回報</option><option value="0" {% if filters.get('abnormal','') == '0' %}selected{% endif %}>一般紀錄</option></select></label>
@@ -38,14 +39,14 @@
   <div class="records-filter-actions"><button class="button button-primary" type="submit">查詢紀錄</button><a class="text-link" href="{{ url_for('records') }}">重設</a></div>
 </form></div></section>
 <section id="record-results" class="panel spaced" tabindex="-1" aria-labelledby="record-results-title"><div class="section-heading"><div><h2 id="record-results-title">完成紀錄</h2><p>每日兩次依上午、下午分別記錄。日期範圍最多 367 天。</p></div><span class="count-label">{{ records|length }} 筆</span></div>
-{% if records %}<div class="table-scroll"><table class="records-table"><thead><tr><th scope="col">打卡時間</th><th scope="col">巡檢點</th><th scope="col">分類／樓層</th><th scope="col">巡檢人員</th><th scope="col">頻率／時段</th><th scope="col">回報內容</th><th scope="col">詳情</th></tr></thead><tbody>{% for record in records %}<tr>
+{% if records %}<div class="table-scroll"><table class="records-table"><thead><tr><th scope="col">打卡時間</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">巡檢人員</th><th scope="col">頻率／時段</th><th scope="col">回報內容</th><th scope="col">詳情</th></tr></thead><tbody>{% for record in records %}<tr>
 <td data-label="打卡時間" class="tabular">{{ record.created_at|localtime }}</td>
-<td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ record.point_code or record.point.code }}</span><strong>{{ record.point_name or record.point.name }}</strong></div></td>
-<td data-label="分類／樓層"><div>{{ category_label(record.category) }}<small class="cell-hint">{{ floor_label(record.point_floor if record.point_floor is not none else record.point.floor) }}</small></div></td>
+<td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ point_code(record) }}</span><strong>{{ point_name(record) }}</strong></div></td>
+<td data-label="{{ '分類／樓層' if is_patrol_admin else '樓層' }}"><div>{% if is_patrol_admin %}{{ category_label(record.category) }}<small class="cell-hint">{{ record_floor(record) }}</small>{% else %}{{ record_floor(record) }}{% endif %}</div></td>
 <td data-label="巡檢人員"><strong>{{ record.user_name or record.user.display_name }}</strong></td>
 <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(record.frequency) }}</span>{% if record.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(record.slot) }}</small>{% endif %}</div></td>
 <td data-label="回報內容"><div class="record-report-cell">{{ issue_status(record) }}{% if record.note %}<span class="note-summary">{{ record.note[:60] }}{{ '…' if record.note|length > 60 else '' }}</span>{% endif %}{% if record.photos %}<small class="photo-count">{{ icon('camera') }}{{ record.photos|length }} 張照片</small>{% endif %}</div></td>
 <td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('record_detail', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看詳情 {{ icon('arrow') }}</a></td>
-</tr>{% endfor %}</tbody></table></div>{% else %}{{ empty('這段時間尚無符合紀錄','試著調整分類、日期或回報狀態，完成打卡後會顯示在這裡。') }}{% endif %}
+</tr>{% endfor %}</tbody></table></div>{% else %}{{ empty('這段時間尚無符合紀錄','試著調整日期、樓層或回報狀態。完成打卡後，紀錄會顯示在這裡。') }}{% endif %}
 </section>
 {% endblock %}

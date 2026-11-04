@@ -18,10 +18,10 @@ def test_dashboard_record_link_keeps_period_and_floor(application, seeded, view,
     client = application.test_client()
     login(client)
     with rendered_contexts(application) as contexts:
-        assert client.get(f'/dashboard?view={view}&date=2026-10-28&floor={point.floor}&category=uncategorized').status_code == 200
+        assert client.get(f'/dashboard?view={view}&date=2026-10-28&floor={point.floor}&category={point.category}').status_code == 200
     target = contexts[-1][1]['records_query_url']
     params = parse_qs(urlsplit(target).query)
-    assert params == dict(date_from=[start], date_to=[end], floor=[str(point.floor)], category=['uncategorized'], frequency=[frequency])
+    assert params == dict(date_from=[start], date_to=[end], floor=[str(point.floor)], category=['safety'], frequency=[frequency])
     with rendered_contexts(application) as contexts:
         response = client.get(target)
     assert response.status_code == 200
@@ -50,7 +50,7 @@ def test_scan_return_and_saved_receipt_open_matching_progress(application, seede
     target = contexts[-1][1]['progress_url']
     params = parse_qs(urlsplit(target).query)
     assert params['view'] == [view] and params['floor'] == [str(original_floor)]
-    assert params['category'] == ['uncategorized']
+    assert params['category'] == ['safety']
     assert params['date'] == ['2026-10-26' if kind == 'weekly' else '2026-10-28']
     with rendered_contexts(application) as contexts:
         assert client.get(target).status_code == 200

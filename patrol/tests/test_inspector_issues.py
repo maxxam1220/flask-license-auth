@@ -113,7 +113,7 @@ def test_reporter_can_resolve_own_existing_or_legacy_issue_once(application, see
     row = cases[case_key]
     client = staff_client(application)
     before_note = row.note
-    source = "/issues?status=open&category=uncategorized&floor=1"
+    source = "/issues?status=open&category=safety&floor=1"
     response = resolve(client, row, return_to=source)
     assert response.status_code == 302
     assert parse_qs(urlsplit(response.location).query)["return_to"] == [source]
@@ -205,7 +205,7 @@ def test_own_list_pagination_filters_and_safe_return_never_count_other_owners(ap
         make_case(seeded["colleague"], seeded["daily"], day, note="NOT-MY-REPORT")
     db.session.commit()
     client = staff_client(application)
-    source = "/issues?status=open&floor=1&category=uncategorized&page=2"
+    source = "/issues?status=open&floor=1&category=safety&page=2"
     with rendered_contexts(application) as contexts:
         response = client.get(source)
     assert response.status_code == 200

@@ -16,6 +16,7 @@ def local(day="2026-11-03", hour=12, minute=0, second=0):
 
 def schedule(day, frequency="daily", active=True, id=1, **snapshots):
     return SimpleNamespace(effective_date=date.fromisoformat(day), frequency=frequency, active=active, id=id,
+                           retired_at=snapshots.get("retired_at"),
                            category=snapshots.get("category", "safety"), floor=snapshots.get("floor", 1),
                            point_code=snapshots.get("point_code", "1F-OLD"), point_name=snapshots.get("point_name", "歷史名稱"))
 
@@ -145,6 +146,33 @@ def test_new_afternoon_point_does_not_fabricate_missed_morning(created_at):
     current = point("daily2", schedule_start=date(2026, 11, 3), created_at=created_at)
     rows = missed([current], now=local("2026-11-04", 0))
     assert [row["slot"] for row in rows] == ["pm"]
+
+
+@pytest.mark.parametrize("deleted,expected", [(local(hour=11, minute=59, second=59), []), (local(), ["am"]),
+                                             (local(hour=15), ["am"])])
+def test_retirement_counts_only_deadlines_already_reached_and_survives_inactive_restore(deleted, expected):
+    deletion = schedule("2026-11-03", "daily2", active=False, id=2,
+                        retired_at=deleted.astimezone(timezone.utc).replace(tzinfo=None))
+    restored = point("daily2", active=False, deleted_at=None, schedules=[schedule("2026-01-01", "daily2"), deletion])
+    rows = missed([restored], end="2026-11-06", now=local("2026-11-07", 0))
+    assert [row["slot"] for row in rows] == expected
+    assert all(row["due_date"] == date(2026, 11, 3) for row in rows)
+    assert missed([restored], [(1, "daily2", "2026-11-03", "am")], end="2026-11-06", now=local("2026-11-07", 0)) == []
+
+
+def test_retiring_previously_disabled_point_does_not_create_a_missed_morning():
+    current = point("daily2", active=False, schedules=[schedule("2026-01-01", "daily2"),
+        schedule("2026-11-02", "daily2", active=False, id=2),
+        schedule("2026-11-03", "daily2", active=False, id=3, retired_at=local(hour=15))])
+    assert missed([current], now=local("2026-11-04", 0)) == []
+
+
+@pytest.mark.parametrize("first_hour,expected", [(11, []), (15, ["am"])])
+def test_repeated_same_day_retirement_keeps_first_cutoff(first_hour, expected):
+    current = point("daily2", active=False, schedules=[schedule("2026-01-01", "daily2"),
+        schedule("2026-11-03", "daily2", active=False, id=2, retired_at=local(hour=first_hour)),
+        schedule("2026-11-03", "daily2", active=False, id=3, retired_at=local(hour=18))])
+    assert [row["slot"] for row in missed([current], now=local("2026-11-04", 0))] == expected
 
 
 def test_creation_exactly_on_deadline_excludes_prior_daily_and_weekly_obligations():

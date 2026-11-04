@@ -1,0 +1,10 @@
+{# Report snapshots can outlive a point's category. Never use another team's current labels as a fallback. #}
+{% macro point_code(row) -%}
+{{ row.point_code or (row.point.code if is_patrol_admin or row.point.category == viewer_category else '#' ~ row.point_id) }}
+{%- endmacro %}
+{% macro point_name(row) -%}
+{{ row.point_name or (row.point.name if is_patrol_admin or row.point.category == viewer_category else '歷史巡檢點') }}
+{%- endmacro %}
+{% macro record_floor(row) -%}
+{{ floor_label(row.point_floor) if row.point_floor is not none else floor_label(row.point.floor) if is_patrol_admin or row.point.category == viewer_category else '未記錄' }}
+{%- endmacro %}

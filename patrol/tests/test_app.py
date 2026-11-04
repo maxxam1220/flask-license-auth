@@ -48,8 +48,7 @@ def application(monkeypatch):
         db.drop_all()
 
 
-@pytest.fixture
-def seeded(application):
+def make_test_users():
     users = {}
     for username, display_name, role in (
         ("inspector", "Inspector Alpha", "inspector"),
@@ -60,17 +59,33 @@ def seeded(application):
             username=username,
             display_name=display_name,
             role=role,
+            patrol_category="safety" if role == "inspector" else None,
             active=True,
             must_change_password=False,
         )
         user.set_password(PASSWORD)
         db.session.add(user)
         users[username] = user
+    return users
+
+
+@pytest.fixture
+def actors_only(application):
+    """For tests that supply their own complete point catalog."""
+    users = make_test_users()
+    db.session.commit()
+    return users
+
+
+@pytest.fixture
+def seeded(application):
+    users = make_test_users()
     daily = Point(
         code="1F-A01",
         name="Daily Test Point",
         floor=1,
         frequency="daily",
+        category="safety",
         active=True,
         qr_token="daily-test-token-0123456789abcdef",
         schedule_start=date(2026, 1, 1),
@@ -81,6 +96,7 @@ def seeded(application):
         name="Weekly Test Point",
         floor=5,
         frequency="weekly",
+        category="safety",
         active=True,
         qr_token="weekly-test-token-0123456789abcdef",
         schedule_start=date(2026, 1, 1),
@@ -88,7 +104,7 @@ def seeded(application):
     )
     for point in (daily, weekly):
         point.schedules.append(PointSchedule(
-            effective_date=point.schedule_start, frequency=point.frequency, active=True
+            effective_date=point.schedule_start, frequency=point.frequency, category=point.category, active=True
         ))
     db.session.add_all([daily, weekly])
     db.session.commit()
@@ -131,6 +147,7 @@ def record(user, point, instant=FIXED_NOW):
         created_at=instant.replace(tzinfo=None),
         period_key=period_key,
         frequency=point.frequency,
+        category=point.category,
         point_code=point.code,
         point_name=point.name,
         point_floor=point.floor,

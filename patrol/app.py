@@ -26,6 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from images import PhotoValidationError, process_uploads
+from patrol_access import can_access_category, can_read_inspection, patrol_scope
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -116,6 +117,10 @@ def normalise_return_to(value, user):
                 item = str(int(item))
             if key == "user_id" and (not user or user.role != "admin"):
                 continue
+            if key == "category" and user and user.role != "admin":
+                item = patrol_scope(user)
+                if not item:
+                    continue
             values[key] = item
         if parsed.path == "/records":
             today = local_dt(now_utc()).date()
@@ -204,7 +209,13 @@ def create_app(config=None):
 
     @app.context_processor
     def common_context():
-        return {"current_user": g.get("user"), "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
+        user = g.get("user")
+        def role_label(account):
+            if account and account.role == "admin":
+                return "系統管理員"
+            return {"safety": "職安巡檢員", "general": "總務巡檢員"}.get(patrol_scope(account), "尚未指派")
+        return {"current_user": user, "role_label": role_label, "is_patrol_admin": bool(user and user.role == "admin"),
+                "viewer_category": patrol_scope(user) or None, "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
                 "floor_label": floor_label, "category_label": category_label,
                 "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
@@ -273,6 +284,7 @@ def create_app(config=None):
             return url_for("record_detail", record_id=args["inspection_id"], return_to=source[:1600])
         destinations = {"request_device": "devices", "revoke_own_device": "devices", "change_password": "change_password",
                         "create_point": "points", "update_point": "points", "rotate_point_qr": "points",
+                        "delete_point": "points", "restore_point": "points",
                         "create_user": "users", "update_user": "users", "reset_password": "users",
                         "approve_device": "admin_devices", "reject_device": "admin_devices", "revoke_device": "admin_devices"}
         endpoint = destinations.get(request.endpoint)
@@ -358,7 +370,8 @@ def create_app(config=None):
             value = session.get("after_binding", "")
         match = re.fullmatch(r"/c/([A-Za-z0-9_-]{1,100})", value or "")
         point = db.session.scalar(select(Point).where(Point.qr_token == match.group(1))) if match else None
-        if point and point.active and point.schedule_start <= local_dt(now_utc()).date():
+        if (point and point.deleted_at is None and can_access_category(g.user, point.category)
+                and point.active and point.schedule_start <= local_dt(now_utc()).date()):
             target = url_for("checkin", token=point.qr_token)
             session["after_binding"] = target
             return target
@@ -383,7 +396,36 @@ def create_app(config=None):
             abort(400, description="樓層選項不正確。")
         if category and category not in dict(CATEGORY_OPTIONS):
             abort(400, description="分類選項不正確。")
-        return floor, category
+        scope = patrol_scope(g.user)
+        return floor, category if scope is None else scope
+
+    def private_records(query, category):
+        """Always intersect report ownership and its immutable category snapshot."""
+        scope = patrol_scope(g.user)
+        if scope is None:
+            return query.where(Inspection.category == category) if category else query
+        if not scope:
+            return query.where(db.false())
+        return query.where(Inspection.user_id == g.user.id, Inspection.category == scope)
+
+    def historical_points(scope):
+        # A recategorized point can still have obligations and snapshots in
+        # its original category. Filtering only Point.category would lose them.
+        query = select(Point).options(selectinload(Point.schedules)).order_by(*point_order())
+        if scope == "":
+            return []
+        if scope is not None:
+            query = query.where(db.or_(Point.category == scope, Point.schedules.any(PointSchedule.category == scope),
+                              select(Inspection.id).where(Inspection.point_id == Point.id, Inspection.category == scope).exists()))
+        points = db.session.scalars(query).all()
+        if scope is None:
+            return points
+        # Old schedule rows can lack a name/code snapshot. After a team
+        # transfer, that fallback must not display the new team's labels.
+        return [p if p.category == scope else SimpleNamespace(
+            id=p.id, code=f"#{p.id}", name="歷史巡檢點", floor=p.floor, category=p.category,
+            frequency=p.frequency, active=p.active, created_at=p.created_at, schedule_start=p.schedule_start,
+            schedules=p.schedules) for p in points]
 
     def point_order():
         return db.case({value: index for index, (value, _) in enumerate(FLOOR_OPTIONS)}, value=Point.floor), Point.code
@@ -472,11 +514,15 @@ def create_app(config=None):
         monday = selected - timedelta(days=selected.weekday())
         period_day = monday if view == "weekly" else selected
         reference_day = min(monday + timedelta(days=6), today) if view == "weekly" else selected
-        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        scope = patrol_scope(g.user)
+        points = historical_points(scope)
         floor_filter, category_filter = scope_filters()
-        issue_counts = open_issue_counts()
+        issue_counts = open_issue_counts(category=scope)
         frequencies = ("weekly",) if view == "weekly" else ("daily", "daily2")
-        completions = db.session.scalars(select(Inspection).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies))).all()
+        completion_query = select(Inspection).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies))
+        if scope is not None:
+            completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
+        completions = db.session.scalars(completion_query).all()
         found = {}
         for record in completions:
             found.setdefault(record.point_id, []).append(record)
@@ -550,12 +596,9 @@ def create_app(config=None):
         total = sum(slot["due"] for card in cards for slot in card["slots"])
         done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
         recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc()).limit(6)
-        if g.user.role != "admin":
-            recent_query = recent_query.where(Inspection.user_id == g.user.id)
+        recent_query = private_records(recent_query, category_filter)
         if floor_filter:
             recent_query = recent_query.where(Inspection.point_floor == int(floor_filter))
-        if category_filter:
-            recent_query = recent_query.where(Inspection.category == category_filter)
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                open_issue_counts=issue_counts, device_state=device_status(), recent=db.session.scalars(recent_query).all(),
@@ -570,7 +613,10 @@ def create_app(config=None):
     def get_point(token, lock=False):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", token):
             abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
-        query = select(Point).where(Point.qr_token == token)
+        query = select(Point).where(Point.qr_token == token, Point.deleted_at.is_(None))
+        scope = patrol_scope(g.user)
+        if scope is not None:
+            query = query.where(Point.category == scope if scope else db.false())
         if lock:
             query = query.with_for_update().execution_options(populate_existing=True)
         point = db.session.scalar(query)
@@ -589,7 +635,11 @@ def create_app(config=None):
         key, start, end = period_for(point, instant)
         slot = slot_for(point, instant)
         existing = inspection_in_slot(point, key, slot)
-        if existing and g.user.role != "admin" and existing.user_id != g.user.id:
+        if existing and not can_access_category(g.user, existing.category):
+            # The obligation is shared even after a point changes teams. Only
+            # reveal that it is satisfied, never the old team's actor or time.
+            existing = {"created_at": None, "user_name": "本期已有紀錄"}
+        elif existing and not can_read_inspection(g.user, existing):
             # Never give another inspector's notes, attachments or identity to the template.
             existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency == "weekly" else key
@@ -598,7 +648,7 @@ def create_app(config=None):
                                                     date=key, floor=point.floor, category=point.category),
                                current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
                                note=request.form.get("note", ""), is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"),
-                               point_open_issue_count=open_issue_counts([point.id]).get(point.id, 0), form_error=error), status
+                               point_open_issue_count=open_issue_counts([point.id], category=patrol_scope(g.user)).get(point.id, 0), form_error=error), status
 
     @app.get("/c/<token>")
     @login_required
@@ -621,7 +671,7 @@ def create_app(config=None):
         submitted_slot, submitted_period = request.form.get("slot"), request.form.get("period_key")
         def form_error(message, status=400):
             db.session.rollback()
-            return checkin_form(point, token, message, status)
+            return checkin_form(get_point(token), token, message, status)
         if request.form.get("frequency") != point.frequency:
             return form_error("點位巡檢頻率已更新，或此表單已過期。請確認最新設定後重新送出；照片需重新選擇。", 409)
         if ((point.frequency == "daily2" and (not submitted_slot or not submitted_period))
@@ -631,7 +681,7 @@ def create_app(config=None):
         record = inspection_in_slot(point, key, slot)
         if record:
             flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
-            return redirect(url_for("checkin_success", record_id=record.id)) if g.user.role == "admin" or record.user_id == g.user.id else redirect(url_for("checkin", token=token))
+            return redirect(url_for("checkin_success", record_id=record.id)) if can_read_inspection(g.user, record) else redirect(url_for("checkin", token=token))
         note = request.form.get("note", "").strip()
         if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
             return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
@@ -665,7 +715,7 @@ def create_app(config=None):
             if not record:
                 raise
             flash("這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
-        if g.user.role != "admin" and record.user_id != g.user.id:
+        if not can_read_inspection(g.user, record):
             return redirect(url_for("checkin", token=token))
         session.pop("after_binding", None)
         return redirect(url_for("checkin_success", record_id=record.id))
@@ -674,22 +724,28 @@ def create_app(config=None):
     @login_required
     def checkin_success(record_id):
         record = db.get_or_404(Inspection, record_id)
-        if g.user.role != "admin" and record.user_id != g.user.id:
-            abort(403)
+        require_inspection_access(record)
         return render_template("checkin_success.html", record=record,
                                progress_url=url_for("dashboard", view="weekly" if record.frequency == "weekly" else "daily",
                                                     date=record.period_key, floor=record.point_floor, category=record.category),
-                               point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0))
+                               point_open_issue_count=open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0))
+
+    def require_inspection_access(record):
+        if not can_access_category(g.user, record.category):
+            abort(404)
+        if not can_read_inspection(g.user, record):
+            abort(403)
 
     @app.get("/records/<int:record_id>")
     @login_required
     def record_detail(record_id):
         record = db.get_or_404(Inspection, record_id)
-        if g.user.role != "admin" and record.user_id != g.user.id:
-            abort(403)
         return render_record_detail(record)
 
     def render_record_detail(record, error=None, status=200):
+        # Called after a rolled-back transition too; recheck before rendering
+        # either a successful detail page or its private validation-error form.
+        require_inspection_access(record)
         source = request.form.get("return_to") if request.method == "POST" else request.args.get("return_to")
         back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
@@ -697,7 +753,7 @@ def create_app(config=None):
                                can_manage_issue=g.user.role == "admin" or (g.user.role == "inspector" and record.user_id == g.user.id),
                                can_reopen_issue=g.user.role == "admin",
                                back_url=back_url, back_label="返回異常追蹤" if urlsplit(back_url).path == "/issues" else "返回巡檢紀錄",
-                               point_open_issue_count=open_issue_counts([record.point_id]).get(record.point_id, 0)), status
+                               point_open_issue_count=open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0)), status
 
     def apply_issue_action(inspection_id, target_status):
         actor = lock_current_user()
@@ -737,19 +793,31 @@ def create_app(config=None):
             abort(400, description="案件狀態選項不正確。")
         page = parse_id(request.args.get("page", "1"))
         point_id = request.args.get("point_id", "")
-        selected_point = db.get_or_404(Point, parse_id(point_id)) if point_id else None
+        selected_point = None
+        if point_id:
+            selected_id = parse_id(point_id)
+            point = db.get_or_404(Point, selected_id)
+            if can_access_category(g.user, point.category):
+                selected_point = point
+            else:
+                # A former point owner can filter their own historical case,
+                # but must not learn the new category's current point name/code.
+                scope = patrol_scope(g.user)
+                snapshot_query = private_records(select(Inspection.point_code, Inspection.point_name), scope).where(
+                    Inspection.point_id == selected_id, Inspection.is_abnormal.is_(True))
+                snapshot = db.session.execute(snapshot_query.order_by(Inspection.created_at.desc(), Inspection.id.desc()).limit(1)).first()
+                if not snapshot:
+                    abort(404)
+                selected_point = SimpleNamespace(id=selected_id, code=snapshot.point_code, name=snapshot.point_name)
         query = (select(Inspection).outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
                  .where(db.or_(InspectionIssue.inspection_id.is_not(None), Inspection.is_abnormal.is_(True))))
-        if g.user.role != "admin":
-            query = query.where(Inspection.user_id == g.user.id)
+        query = private_records(query, category)
         if state == "open":
             query = query.where(open_issue_condition())
         elif state == "resolved":
             query = query.where(InspectionIssue.status == state)
         if floor:
             query = query.where(Inspection.point_floor == int(floor))
-        if category:
-            query = query.where(Inspection.category == category)
         if selected_point:
             query = query.where(Inspection.point_id == selected_point.id)
         total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
@@ -766,7 +834,8 @@ def create_app(config=None):
             pages = max(1, (total + per_page - 1) // per_page)
             if page > pages:
                 return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
-        open_total = sum(open_issue_counts(user_id=g.user.id if g.user.role != "admin" else None).values())
+        open_total = sum(open_issue_counts(user_id=g.user.id if g.user.role != "admin" else None,
+                                         category=patrol_scope(g.user)).values())
         return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
                                selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
 
@@ -774,8 +843,7 @@ def create_app(config=None):
     @login_required
     def photo_file(photo_id):
         photo = db.get_or_404(InspectionPhoto, photo_id)
-        if g.user.role != "admin" and photo.inspection.user_id != g.user.id:
-            abort(403)
+        require_inspection_access(photo.inspection)
         response = make_response(photo.data)
         response.headers["Content-Type"] = photo.mime_type
         response.headers["Content-Disposition"] = f'inline; filename="inspection-{photo.id}.jpg"'
@@ -891,8 +959,7 @@ def create_app(config=None):
         user_id = request.args.get("user_id", "")
         if floor:
             query = query.where(Inspection.point_floor == int(floor))
-        if category:
-            query = query.where(Inspection.category == category)
+        query = private_records(query, category)
         abnormal = request.args.get("abnormal", "")
         if abnormal not in ("", "0", "1"):
             abort(400, description="異常篩選選項不正確。")
@@ -906,7 +973,6 @@ def create_app(config=None):
         elif frequency:
             query = query.where(Inspection.frequency == frequency)
         if g.user.role != "admin":
-            query = query.where(Inspection.user_id == g.user.id)
             user_id = str(g.user.id)
         elif user_id:
             query = query.where(Inspection.user_id == parse_id(user_id))
@@ -963,10 +1029,14 @@ def create_app(config=None):
         if frequency not in ("", "daily", "daily2", "weekly", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         # Read historical schedules, not the point's current classification.
-        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        scope = patrol_scope(g.user)
+        points = historical_points(scope)
         first_period = begin - timedelta(days=begin.weekday())
-        completions = db.session.execute(select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot)
-            .where(Inspection.period_key >= first_period.isoformat(), Inspection.period_key <= end.isoformat())).all()
+        completion_query = select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot).where(
+            Inspection.period_key >= first_period.isoformat(), Inspection.period_key <= end.isoformat())
+        if scope is not None:
+            completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
+        completions = db.session.execute(completion_query).all()
         rows = calculate_missed(points, completions, begin, end, instant,
                                 category=category, floor=int(floor) if floor else None, frequency=frequency)
         filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
@@ -1018,12 +1088,19 @@ def create_app(config=None):
     @admin_required
     def points():
         floor, category = scope_filters()
+        selected_list = request.args.get("list", "current")
+        if selected_list not in ("current", "deleted"):
+            abort(400, description="點位清單不正確。")
         query = select(Point)
         if floor:
             query = query.where(Point.floor == int(floor))
         if category:
             query = query.where(Point.category == category)
+        deleted = query.where(Point.deleted_at.is_not(None))
+        deleted_count = db.session.scalar(select(db.func.count()).select_from(deleted.with_only_columns(Point.id).subquery()))
+        query = deleted if selected_list == "deleted" else query.where(Point.deleted_at.is_(None))
         return render_template("points.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category,
+                               selected_list=selected_list, deleted_count=deleted_count,
                                open_issue_counts=open_issue_counts())
 
     def point_values(point=None):
@@ -1031,30 +1108,44 @@ def create_app(config=None):
         name = request.form.get("name", "").strip()
         floor = request.form.get("floor", "")
         frequency = request.form.get("frequency", "daily")
-        category = request.form.get("category", point.category if point else "uncategorized")
+        category = request.form.get("category", point.category if point else "")
         if floor not in {str(value) for value, _ in FLOOR_OPTIONS} or not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code) or not code.startswith(floor_label(int(floor)) + "-"):
             abort(400, description="點位編號請使用如 1F-A01、B1-A01 或 1M-A01 的格式，並與樓層一致。")
         if not valid_label(name) or frequency not in ("daily", "weekly", "daily2"):
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")
-        if category not in dict(CATEGORY_OPTIONS):
-            abort(400, description="請選擇正確的巡檢分類。")
+        if category not in ("safety", "general") and not (point and point.category == category == "uncategorized"):
+            abort(400, description="請指定點位屬於職安或總務。")
         return {"code": code, "name": name, "floor": int(floor), "frequency": frequency, "category": category}
 
+    def point_list_url(deleted=False):
+        floor, category = scope_filters()
+        return url_for("points", floor=floor or None, category=category or None, list="deleted" if deleted else None)
+
+    def managed_point(point_id, *, deleted=False):
+        condition = Point.deleted_at.is_not(None) if deleted else Point.deleted_at.is_(None)
+        point = db.session.scalar(select(Point).where(Point.id == point_id, condition)
+                                  .with_for_update().execution_options(populate_existing=True))
+        if not point:
+            abort(404, description="點位不存在或清單狀態已變更，請重新整理。")
+        return point
+
     def save_point(point, action):
+        destination = point_list_url()
         audit(action, point.code)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            abort(400, description="點位編號已存在，請使用不同的編號。")
+            abort(400, description="點位編號已被使用（含已刪除點位）。請使用不同編號，或至已刪除清單還原。")
         flash("點位設定已儲存。", "success")
-        return redirect(url_for("points"))
+        return redirect(destination)
 
     @app.post("/admin/points/create")
     @admin_required
     def create_point():
         lock_current_admin()
-        point = Point(**point_values(), active=True, schedule_start=local_dt(now_utc()).date())
+        instant = now_utc()
+        point = Point(**point_values(), active=True, schedule_start=local_dt(instant).date(), created_at=naive_utc(instant))
         db.session.add(point)
         point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=point.frequency, category=point.category, active=True,
                                              floor=point.floor, point_code=point.code, point_name=point.name))
@@ -1064,9 +1155,7 @@ def create_app(config=None):
     @admin_required
     def update_point(point_id):
         lock_current_admin()
-        point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
-        if not point:
-            abort(404)
+        point = managed_point(point_id)
         values = point_values(point)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
         # Freeze unknown snapshots before editing the current point. Older workers
@@ -1090,19 +1179,49 @@ def create_app(config=None):
     @admin_required
     def rotate_point_qr(point_id):
         lock_current_admin()
-        point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
-        if not point:
-            abort(404)
+        point = managed_point(point_id)
+        destination = point_list_url()
         point.qr_token = secrets.token_urlsafe(24)
         audit("qr_rotated", point.code)
         db.session.commit()
         flash("QR Code 已更新，舊碼已失效。請重新列印並更換現場標籤。", "success")
-        return redirect(url_for("points"))
+        return redirect(destination)
+
+    @app.post("/admin/points/<int:point_id>/delete")
+    @admin_required
+    def delete_point(point_id):
+        lock_current_admin()
+        point = managed_point(point_id)
+        destination = point_list_url()
+        instant = now_utc()
+        point.deleted_at = naive_utc(instant)
+        point.active = False
+        point.qr_token = secrets.token_urlsafe(24)
+        point.schedules.append(PointSchedule(effective_date=local_dt(instant).date(), frequency=point.frequency, retired_at=naive_utc(instant),
+            category=point.category, active=False, floor=point.floor, point_code=point.code, point_name=point.name))
+        audit("point_deleted", point.code)
+        db.session.commit()
+        flash("點位已移至已刪除，舊 QR Code 已失效；歷史紀錄仍保留。", "success")
+        return redirect(destination)
+
+    @app.post("/admin/points/<int:point_id>/restore")
+    @admin_required
+    def restore_point(point_id):
+        lock_current_admin()
+        point = managed_point(point_id, deleted=True)
+        destination = point_list_url(deleted=True)
+        point.deleted_at, point.active = None, False
+        audit("point_restored", point.code)
+        db.session.commit()
+        flash("點位已還原為停用。請至現有點位啟用，再列印新的 QR Code。", "success")
+        return redirect(destination)
 
     @app.get("/admin/points/<int:point_id>/qr.svg")
     @admin_required
     def point_qr(point_id):
         point = db.get_or_404(Point, point_id)
+        if point.deleted_at is not None:
+            abort(404)
         address = app.config["PUBLIC_BASE_URL"] + url_for("checkin", token=point.qr_token)
         img = qrcode.make(address, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
         output = io.BytesIO()
@@ -1114,7 +1233,7 @@ def create_app(config=None):
     @app.get("/admin/points/print")
     @admin_required
     def print_qr():
-        query = select(Point).where(Point.active.is_(True))
+        query = select(Point).where(Point.active.is_(True), Point.deleted_at.is_(None))
         floor, category = scope_filters()
         if floor:
             query = query.where(Point.floor == int(floor))
@@ -1133,6 +1252,14 @@ def create_app(config=None):
     def users():
         return render_template("users.html", users=db.session.scalars(select(User).order_by(User.id)).all())
 
+    def submitted_role():
+        choice = request.form.get("role", "")
+        if choice == "admin":
+            return "admin", None
+        if choice in ("safety", "general"):
+            return "inspector", choice
+        abort(400, description="請指定系統管理員、職安巡檢員或總務巡檢員。")
+
     @app.post("/admin/users/create")
     @admin_required
     def create_user():
@@ -1140,13 +1267,13 @@ def create_app(config=None):
         username = request.form.get("username", "").strip().lower()
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
-        role = request.form.get("role", "inspector")
-        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not 12 <= len(password) <= 256 or role not in ("admin", "inspector"):
+        role, category = submitted_role()
+        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not 12 <= len(password) <= 256:
             abort(400, description="請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與至少 12 字元的密碼。")
-        user = User(username=username, display_name=name, role=role, must_change_password=True)
+        user = User(username=username, display_name=name, role=role, patrol_category=category, must_change_password=True)
         user.set_password(password)
         db.session.add(user)
-        audit("user_created", username)
+        audit("user_created", username, category or role)
         try:
             db.session.commit()
         except IntegrityError:
@@ -1162,18 +1289,19 @@ def create_app(config=None):
         if not user:
             abort(404)
         name = request.form.get("display_name", "").strip()
-        role = request.form.get("role", "inspector")
+        role, category = submitted_role()
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
-        if not valid_label(name) or role not in ("admin", "inspector"):
+        if not valid_label(name):
             abort(400)
         if user.id == g.user.id and (role != "admin" or not active):
             abort(400, description="不能停用自己或移除自己的管理員權限。")
-        if user.role != role or user.active != active:
+        previous = user.patrol_category or user.role
+        if user.role != role or user.patrol_category != category or user.active != active:
             user.auth_version += 1
-        user.display_name, user.role, user.active = name, role, active
+        user.display_name, user.role, user.patrol_category, user.active = name, role, category, active
         if not active:
             db.session.execute(db.update(DeviceBinding).where(DeviceBinding.user_id == user.id, DeviceBinding.status.in_(["approved", "pending"])).values(status="revoked"))
-        audit("user_updated", user.username)
+        audit("user_updated", user.username, f"{previous} -> {category or role}")
         db.session.commit()
         flash("帳號設定已更新。", "success")
         return redirect(url_for("users"))
@@ -1270,7 +1398,7 @@ def create_app(config=None):
         for username, name, role in [("admin", "巡檢管理員", "admin"), ("inspector", "示範巡檢員", "inspector")]:
             password = secrets.token_urlsafe(15)
             passwords[username] = password
-            user = User(username=username, display_name=name, role=role)
+            user = User(username=username, display_name=name, role=role, patrol_category="safety" if role == "inspector" else None)
             user.set_password(password)
             db.session.add(user)
         db.session.flush()
@@ -1280,8 +1408,8 @@ def create_app(config=None):
         for floor in range(1, 6):
             for number, name in enumerate(names[floor], 1):
                 frequency = "weekly" if number == 3 else "daily"
-                point = Point(code=f"{floor}F-A{number:02}", name=name, floor=floor, frequency=frequency, schedule_start=today - timedelta(days=30))
-                point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=frequency, active=True,
+                point = Point(code=f"{floor}F-A{number:02}", name=name, floor=floor, frequency=frequency, category="safety", schedule_start=today - timedelta(days=30))
+                point.schedules.append(PointSchedule(effective_date=point.schedule_start, frequency=frequency, active=True, category=point.category,
                                                      floor=point.floor, point_code=point.code, point_name=point.name))
                 db.session.add(point)
                 db.session.flush()
@@ -1290,7 +1418,7 @@ def create_app(config=None):
                     if instant > now_utc():
                         instant = now_utc() - timedelta(minutes=floor)
                     key, _, _ = period_for(point, instant)
-                    db.session.add(Inspection(user_id=inspector.id, point_id=point.id, created_at=naive_utc(instant), period_key=key, frequency=frequency, point_code=point.code, point_name=point.name, point_floor=floor, user_name=inspector.display_name))
+                    db.session.add(Inspection(user_id=inspector.id, point_id=point.id, created_at=naive_utc(instant), period_key=key, frequency=frequency, category=point.category, point_code=point.code, point_name=point.name, point_floor=floor, user_name=inspector.display_name))
         db.session.commit()
         access_file = instance / "preview-access.txt"
         access_file.write_text("LOCAL DEMO ONLY / 本機示範帳號\n" + app.config["PUBLIC_BASE_URL"] + "\n\n" + "\n".join(f"{u}: {p}" for u, p in passwords.items()), encoding="utf-8")

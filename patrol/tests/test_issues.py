@@ -50,7 +50,7 @@ def test_abnormal_checkin_opens_issue_atomically_and_normal_next_day_keeps_it(ap
     assert db.session.query(InspectionIssue).count() == 1
     assert open_issue_counts() == {point.id: 1}
     with rendered_contexts(application) as contexts:
-        client.get("/dashboard?category=safety&date=2026-11-04")
+        client.get(f"/dashboard?category=safety&date=2026-11-04&floor={point.floor}")
     context = contexts[-1][1]
     assert context["totals"] == {"total": 2, "done": 1, "pending": 1}
     assert context["cards"][0]["open_issue_count"] == 1
@@ -124,7 +124,7 @@ def test_staff_only_reads_own_issue_history_and_keeps_other_reporters_private(ap
     assert "OWNER-PRIVATE-NOTE" not in response.get_data(as_text=True)
     assert "ADMIN-HISTORY-DETAIL" not in response.get_data(as_text=True)
     with rendered_contexts(application) as contexts:
-        response = other.get("/dashboard?category=safety")
+        response = other.get(f"/dashboard?category=safety&floor={point.floor}")
     assert "OWNER-PRIVATE-NOTE" not in response.get_data(as_text=True)
     assert "ADMIN-HISTORY-DETAIL" not in response.get_data(as_text=True)
     assert contexts[-1][1]["cards"][0]["open_issue_count"] == 0
@@ -273,11 +273,11 @@ def test_paginated_issues_include_every_record_and_real_open_total_without_n_plu
     assert len(second["records"]) == 5
     assert not {row.id for row in context["records"]} & {row.id for row in second["records"]}
     # A final row may disappear after resolution; return to the last valid page.
-    response = admin.get(f"/issues?status=open&category=uncategorized&floor=1&point_id={point_id}&page=3")
+    response = admin.get(f"/issues?status=open&category=safety&floor=1&point_id={point_id}&page=3")
     assert response.status_code == 302
     target = urlsplit(response.location)
     assert target.path == "/issues"
-    assert parse_qs(target.query) == {"status": ["open"], "category": ["uncategorized"], "floor": ["1"], "point_id": [str(point_id)], "page": ["2"]}
+    assert parse_qs(target.query) == {"status": ["open"], "category": ["safety"], "floor": ["1"], "point_id": [str(point_id)], "page": ["2"]}
     assert admin.get("/issues?status=closed").status_code == 400
 
 

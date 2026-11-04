@@ -131,7 +131,7 @@ def test_daily2_next_day_requires_two_new_slots(application, seeded, monkeypatch
     clock(monkeypatch, 10, day=4)
     assert submit(client, point, "am", "2026-11-04").status_code == 302
     with rendered_contexts(application) as contexts:
-        client.get("/dashboard?category=safety")
+        client.get(f"/dashboard?category=safety&floor={point.floor}")
     assert contexts[-1][1]["totals"] == {"total": 2, "done": 1, "pending": 1}
 
 

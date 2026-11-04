@@ -57,7 +57,7 @@ def test_invalid_return_target_falls_back_to_record_list(application, seeded, so
     with rendered_contexts(application) as contexts:
         response = client.get(f"/records/{row.id}", query_string={"return_to": source})
     assert response.status_code == 200
-    assert contexts[-1][1]["back_url"] == "/records?category=uncategorized"
+    assert contexts[-1][1]["back_url"] == "/records?category=safety"
 
 
 def test_staff_return_to_allows_own_issues_and_removes_other_user_filter(application, seeded):
@@ -98,7 +98,7 @@ def test_last_issue_on_second_page_resolves_then_return_clamps_to_last_page(appl
     db.session.commit()
     client = application.test_client()
     login(client, "manager")
-    source = "/issues?status=open&category=uncategorized&floor=1&page=2"
+    source = "/issues?status=open&category=safety&floor=1&page=2"
     response = client.post(f"/admin/issues/{rows[0].id}/resolve", data={"expected_event_id": "0", "note": "最後一件處理完成", "return_to": source})
     assert response.status_code == 302
     with rendered_contexts(application) as contexts:
@@ -107,7 +107,7 @@ def test_last_issue_on_second_page_resolves_then_return_clamps_to_last_page(appl
     assert response.status_code == 302
     filters = source_query(response.location)
     assert filters["page"] == ["1"] and filters["status"] == ["open"] and filters["floor"] == ["1"]
-    assert filters["category"] == ["uncategorized"]
+    assert filters["category"] == ["safety"]
     with rendered_contexts(application) as contexts:
         assert client.get(response.location).status_code == 200
     assert contexts[-1][1]["pagination"]["total"] == 50
@@ -223,7 +223,7 @@ def test_old_monday_form_cannot_silently_record_changed_weekly_frequency(applica
     admin = application.test_client()
     login(admin, "manager")
     assert admin.post(f"/admin/points/{point.id}/update", data={"code": point.code, "name": point.name, "floor": "1",
-        "frequency": "weekly", "category": "uncategorized", "active": "on"}).status_code == 302
+        "frequency": "weekly", "category": point.category, "active": "on"}).status_code == 302
     fields = {"slot": "any", "period_key": "2026-11-02", "note": "保留現場備註"}
     if posted_frequency is not None:
         fields["frequency"] = posted_frequency

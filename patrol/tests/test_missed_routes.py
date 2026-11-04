@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from test_app import application, seeded, app_module, db, login, rendered_contexts  # noqa: F401
+from test_app import application, actors_only as seeded, app_module, db, login, rendered_contexts  # noqa: F401
 from test_features import feature_point
 from models import AuditLog, Inspection, InspectionPhoto
 

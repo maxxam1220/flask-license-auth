@@ -12,7 +12,7 @@ from sqlalchemy.schema import CreateColumn, CreateTable
 
 import migrations
 from migrations import LATEST_VERSION, SchemaMigrationError, upgrade_schema
-from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, db
+from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, User, db
 
 
 def legacy_metadata():
@@ -187,6 +187,25 @@ def version_three(engine, version_two):
 def snapshot(connection, metadata):
     return {table.name: connection.execute(select(table).order_by(*table.primary_key.columns)).all()
             for table in metadata.sorted_tables}
+
+
+@pytest.fixture
+def version_four(engine, version_three):
+    """Frozen pre-v5 account/point layout with real prior inspection history."""
+    schedules = version_three.tables["patrol_point_schedules"]
+    with engine.begin() as connection:
+        for name, column_type in (("floor", Integer()), ("point_code", String(30)), ("point_name", String(100))):
+            column = Column(name, column_type, nullable=True)
+            schedules.append_column(column)
+            connection.exec_driver_sql("ALTER TABLE patrol_point_schedules ADD COLUMN "
+                                       + str(CreateColumn(column).compile(dialect=connection.dialect)))
+        connection.execute(schedules.update().values(floor=14, point_code="4M-A01", point_name="Original point"))
+        connection.execute(version_three.tables["patrol_schema_versions"].insert().values(version=4))
+        connection.execute(version_three.tables["patrol_users"].insert(), [dict(
+            id=user_id, username=f"worker{user_id}", display_name=f"Fixture reporter {user_id}", password_hash="fixture-hash",
+            role="inspector", active=True, must_change_password=False, auth_version=3, created_at=datetime(2026, 11, 3),
+        ) for user_id in (18, 19)])
+    return version_three
 
 
 def test_fresh_database_and_idempotent_upgrade(engine):
@@ -417,6 +436,9 @@ def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, ve
     changing_statements = [statement for statement in statements
                            if statement.lstrip().startswith(("ALTER TABLE", "DROP TABLE", "UPDATE PATROL_"))]
     assert all(statement.lstrip().startswith(("ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN FLOOR",
+                                             "ALTER TABLE PATROL_USERS ADD COLUMN PATROL_CATEGORY",
+                                             "ALTER TABLE PATROL_POINTS ADD COLUMN DELETED_AT",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN RETIRED_AT",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_CODE",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_NAME",
                                              "UPDATE PATROL_POINT_SCHEDULES SET FLOOR=",
@@ -555,14 +577,14 @@ def test_existing_v3_rejects_missing_event_action_constraint(engine):
 def test_v3_location_history_upgrade_preserves_records_photos_issues_and_events(engine, version_three):
     with engine.connect() as connection:
         before = snapshot(connection, version_three)
-    assert upgrade_schema(engine) == 4
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         after = snapshot(connection, version_three)
         for table_name in before:
             if table_name != "patrol_schema_versions":
                 assert after[table_name] == before[table_name]
         assert after["patrol_schema_versions"][:2] == before["patrol_schema_versions"]
-        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3, 4]
+        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3, LATEST_VERSION]
         assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules").one() == (14, "4M-A01", "Original point")
         assert connection.exec_driver_sql("SELECT point_floor,point_code FROM patrol_inspections WHERE id=51").one() == (1, "1F-A01")
         assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
@@ -573,7 +595,7 @@ def test_v3_location_history_upgrade_preserves_records_photos_issues_and_events(
         # fields are omitted and the application handles the documented fallback.
         connection.execute(PointSchedule.__table__.insert().values(
             id=93, point_id=23, effective_date=date(2026, 11, 5), frequency="daily", active=True))
-    assert upgrade_schema(engine) == 4
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules WHERE id=31").one() == (14, "4M-A01", "Original point")
         assert connection.exec_driver_sql("SELECT floor,point_code,point_name FROM patrol_point_schedules WHERE id=93").one() == (None, None, None)
@@ -606,3 +628,105 @@ def test_v3_location_upgrade_failure_rolls_back_columns_backfill_and_version(eng
         assert snapshot(connection, version_three) == before_rows
         assert connection.exec_driver_sql("SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name").all() == before_schema
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
+
+
+def test_v4_upgrade_keeps_old_accounts_unassigned_and_all_archive_history_intact(engine, version_four):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_four)
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.connect() as connection:
+        after = snapshot(connection, version_four)
+        assert all(after[name] == values for name, values in before.items() if name != "patrol_schema_versions")
+        assert after["patrol_schema_versions"][:-1] == before["patrol_schema_versions"]
+        assert [row[0] for row in after["patrol_schema_versions"]] == [2, 3, 4, LATEST_VERSION]
+        assert connection.execute(select(User.id, User.patrol_category).order_by(User.id)).all() == [(17, None), (18, None), (19, None)]
+        assert connection.execute(select(Point.id, Point.deleted_at)).all() == [(23, None)]
+        assert connection.execute(select(PointSchedule.id, PointSchedule.retired_at)).all() == [(31, None)]
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+    archived_at = datetime(2026, 11, 4, 8, 12, 34)
+    with engine.begin() as connection:
+        connection.execute(User.__table__.update().where(User.id == 18).values(patrol_category="general"))
+        connection.execute(User.__table__.update().where(User.id == 19).values(patrol_category="safety"))
+        connection.execute(Point.__table__.update().where(Point.id == 23).values(deleted_at=archived_at))
+        # An older worker creating a row during deployment can omit both v5 fields.
+        connection.execute(version_four.tables["patrol_users"].insert().values(
+            id=20, username="rolling-worker", display_name="Older worker", password_hash="fixture-hash", role="inspector",
+            active=True, must_change_password=False, auth_version=1, created_at=datetime(2026, 11, 4)))
+        connection.execute(version_four.tables["patrol_points"].insert().values(
+            id=24, code="1F-QR02", name="Older QR", floor=1, frequency="daily", active=True,
+            qr_token="old-worker-qr", created_at=datetime(2026, 11, 4), schedule_start=date(2026, 11, 4)))
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.connect() as connection:
+        assert connection.execute(select(User.id, User.patrol_category).order_by(User.id)).all() == [
+            (17, None), (18, "general"), (19, "safety"), (20, None)]
+        assert connection.execute(select(Point.id, Point.deleted_at).order_by(Point.id)).all() == [(23, archived_at), (24, None)]
+        preserved = snapshot(connection, version_four)
+        for table in ("patrol_point_schedules", "patrol_device_bindings", "patrol_inspections", "patrol_inspection_photos",
+                      "patrol_inspection_issues", "patrol_issue_events", "patrol_audit_logs"):
+            assert preserved[table] == before[table]
+
+
+@pytest.mark.parametrize("invalid", ["", "uncategorized", "all"])
+def test_v5_never_accepts_ambiguous_or_unrestricted_inspector_scope(engine, version_four, invalid):
+    upgrade_schema(engine)
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(User.__table__.update().where(User.id == 18).values(patrol_category=invalid))
+    with engine.connect() as connection:
+        assert connection.execute(select(User.patrol_category).where(User.id == 18)).scalar_one() is None
+
+
+def test_v4_upgrade_rollback_preserves_version_rows_and_unrelated_database(engine, version_four, monkeypatch):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_four)
+    def stop_after_alters(connection):
+        assert "patrol_category" in {col["name"] for col in inspect(connection).get_columns("patrol_users")}
+        assert "deleted_at" in {col["name"] for col in inspect(connection).get_columns("patrol_points")}
+        assert "retired_at" in {col["name"] for col in inspect(connection).get_columns("patrol_point_schedules")}
+        raise RuntimeError("Injected v5 migration failure")
+    monkeypatch.setattr(migrations, "_validate_current", stop_after_alters)
+    with pytest.raises(RuntimeError, match="Injected v5"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert "patrol_category" not in {col["name"] for col in inspect(connection).get_columns("patrol_users")}
+        assert "deleted_at" not in {col["name"] for col in inspect(connection).get_columns("patrol_points")}
+        assert "retired_at" not in {col["name"] for col in inspect(connection).get_columns("patrol_point_schedules")}
+        assert snapshot(connection, version_four) == before
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+
+
+def test_v4_partial_install_without_category_constraint_refuses_upgrade(engine, version_four):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE patrol_users ADD COLUMN patrol_category VARCHAR(20)")
+    with pytest.raises(SchemaMigrationError, match="category validation is missing"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 4
+        assert "deleted_at" not in {col["name"] for col in inspect(connection).get_columns("patrol_points")}
+
+
+def test_v5_schedule_keeps_retirement_instant_after_restore_and_legacy_writes(engine, version_four):
+    upgrade_schema(engine)
+    instant = datetime(2026, 11, 4, 7, 30)
+    with engine.begin() as connection:
+        connection.execute(Point.__table__.update().where(Point.id == 23).values(active=False, deleted_at=instant))
+        connection.execute(PointSchedule.__table__.insert().values(id=32, point_id=23, active=False, retired_at=instant,
+                           effective_date=date(2026, 11, 4), frequency="daily2", category="safety"))
+        connection.execute(Point.__table__.update().where(Point.id == 23).values(deleted_at=None))
+        connection.execute(version_four.tables["patrol_point_schedules"].insert().values(id=33, point_id=23, active=False,
+                           effective_date=date(2026, 11, 5), frequency="daily", category="safety"))
+    upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.execute(select(Point.active, Point.deleted_at).where(Point.id == 23)).one() == (False, None)
+        assert connection.execute(select(PointSchedule.id, PointSchedule.retired_at).order_by(PointSchedule.id)).all() == [
+            (31, None), (32, instant), (33, None)]
+
+
+def test_v4_preexisting_category_default_cannot_grant_access_to_legacy_accounts(engine, version_four):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE patrol_users ADD COLUMN patrol_category VARCHAR(20) DEFAULT 'safety' "
+                                   "CONSTRAINT patrol_user_category_allowed CHECK (patrol_category IN ('safety','general'))")
+    with pytest.raises(SchemaMigrationError, match="without a default"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 4
+        assert "deleted_at" not in {col["name"] for col in inspect(connection).get_columns("patrol_points")}

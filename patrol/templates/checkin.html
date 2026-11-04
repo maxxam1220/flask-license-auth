@@ -5,7 +5,7 @@
 <div class="checkin-wrap checkin-wrap-wide">
   <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>
   <div class="checkin-card">
-    <div class="checkin-topline"><span>{{ icon('qr') }}{{ category_label(point.category) }}</span><span>{{ floor_label(point.floor) }}</span></div>
+    <div class="checkin-topline"><span>{{ icon('qr') }}{{ category_label(point.category) if is_patrol_admin else '現場打卡' }}</span><span>{{ floor_label(point.floor) }}</span></div>
     <div class="checkin-point-icon">{{ icon('pin') }}</div>
     <span class="eyebrow">{{ '此時段已有巡檢紀錄' if existing and point.frequency == 'daily2' else '此點已完成巡檢' if existing else '確認巡檢位置' }}</span>
     <h1>{{ point.code }}</h1>
@@ -27,7 +27,7 @@
     </div>
     {% if form_error %}<div class="flash flash-error upload-form-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<div><strong>{{ form_error }}</strong><p>備註已保留；如有附照片，請重新選擇後再送出。</p></div></div>{% endif %}
     {% if existing %}
-      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本週' }}已完成，不必重複打卡</strong><p>{{ existing.user_name or existing.user.display_name }} · {{ existing.created_at|localtime }}</p></div></div>
+      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本週' }}已完成，不必重複打卡</strong><p>{{ existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
       <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽 {{ icon('arrow') }}</a>
     {% elif not point.active %}
       <div class="flash flash-warning">此點位已停用，無法打卡。</div>

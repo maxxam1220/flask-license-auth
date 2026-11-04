@@ -67,7 +67,7 @@ def seed_clients(application, separate_points=False):
         clients = []
         for number in range(2):
             user = User(username=f"concurrent{number}", display_name=f"Tester {number}", password_hash="unused-test-hash",
-                        role="inspector", active=True, must_change_password=False, auth_version=1)
+                        role="inspector", patrol_category="safety", active=True, must_change_password=False, auth_version=1)
             db.session.add(user)
             db.session.flush()
             secret = f"approved-local-test-browser-{number}"
@@ -126,7 +126,7 @@ def test_postgres_concurrent_resolve_reopen_is_idempotent_and_rejects_old_form(p
         record_id = record.id
         if legacy:
             db.session.delete(record.issue)
-        db.session.execute(db.update(User).values(role="admin"))
+        db.session.execute(db.update(User).values(role="admin", patrol_category=None))
         db.session.commit()
     def both(action, version):
         barrier = threading.Barrier(2)
@@ -163,6 +163,7 @@ def test_postgres_resolve_and_new_normal_checkin_same_point_do_not_deadlock(post
     with postgres_app.app_context():
         user = db.session.scalar(db.select(User).where(User.username == "concurrent0"))
         user.role = "admin"
+        user.patrol_category = None
         point = db.session.scalar(db.select(Point))
         record = Inspection(user_id=user.id, point_id=point.id, period_key="2026-11-03", frequency="daily2", slot="am",
                             category="safety", point_code=point.code, point_name=point.name, point_floor=point.floor,

@@ -1,27 +1,53 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, csrf, frequency, empty, open_issue_badge %}
 {% set title='巡檢點管理' %}
+{% set show_deleted = selected_list == 'deleted' %}
+{% macro category_choices(selected, allow_legacy=false) %}
+<fieldset class="point-category-field"><legend>巡檢分類</legend><div class="point-category-choices">
+{% for value,label in category_options if value in ['safety','general'] or (allow_legacy and value == 'uncategorized') %}
+<label class="category-choice"><input type="radio" name="category" value="{{ value }}" required {% if selected == value %}checked{% endif %}>{{ label }}</label>
+{% endfor %}</div>{% if selected not in ['safety','general'] and not allow_legacy %}<small>請選擇職安或總務。</small>{% endif %}</fieldset>
+{% endmacro %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢時段與專屬 QR Code。</p></div><a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a></div>
-<section class="panel filter-panel"><form method="get" class="filter-form"><label>巡檢分類<select name="category"><option value="">全部分類</option>{% for value,label in category_options %}<option value="{{ value }}" {% if selected_category == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label>樓層<select name="floor"><option value="">全部樓層</option>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><button class="button button-primary">套用篩選</button><a class="text-link" href="{{ url_for('points') }}">重設</a></form></section>
-<details class="panel disclosure create-disclosure spaced"><summary><span>{{ icon('plus') }}新增巡檢點</span>{{ icon('down') }}</summary>
-<form method="post" action="{{ url_for('create_point') }}" class="edit-form" data-point-form>{{ csrf() }}
+<div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢時段與專屬 QR Code。</p></div>{% if not show_deleted %}<a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a>{% endif %}</div>
+<nav class="category-tabs" aria-label="點位清單">
+  <a class="{{ 'selected' if not show_deleted }}" aria-current="{{ 'page' if not show_deleted else 'false' }}" href="{{ url_for('points', category=selected_category, floor=selected_floor) }}">現有點位</a>
+  <a class="{{ 'selected' if show_deleted }}" aria-current="{{ 'page' if show_deleted else 'false' }}" href="{{ url_for('points', list='deleted', category=selected_category, floor=selected_floor) }}">已刪除（{{ deleted_count }}）</a>
+</nav>
+{% if show_deleted %}<div class="archive-guide">{{ icon('info') }}<p>已刪除點位保留編號、巡檢紀錄與異常案件。還原後會回到現有清單並維持停用；重新啟用後，請列印新 QR 標籤。</p></div>{% endif %}
+<section class="panel filter-panel point-filter-toolbar">
+  <div class="point-scope-filter"><span id="point-scope-label">巡檢分類</span><nav aria-labelledby="point-scope-label">
+    {% for value,label in [('', '全部')] + category_options|list %}<a class="point-scope-link" aria-current="{{ 'page' if (selected_category or '') == value else 'false' }}" href="{{ url_for('points', list='deleted' if show_deleted else none, floor=selected_floor or none, category=value or none) }}">{{ label }}</a>{% endfor %}
+  </nav></div>
+  <form method="get" class="filter-form">{% if show_deleted %}<input type="hidden" name="list" value="deleted">{% endif %}{% if selected_category %}<input type="hidden" name="category" value="{{ selected_category }}">{% endif %}
+    <label>樓層<select name="floor"><option value="">全部樓層</option>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <button class="button button-primary">套用篩選</button><a class="text-link" href="{{ url_for('points', list='deleted' if show_deleted else none) }}">重設</a>
+  </form>
+</section>
+{% if not show_deleted %}<details class="panel disclosure create-disclosure spaced"><summary><span>{{ icon('plus') }}新增巡檢點</span>{{ icon('down') }}</summary>
+<form method="post" action="{{ url_for('create_point', floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form>{{ csrf() }}
   <div class="form-grid point-fields">
-    <label>巡檢分類<select name="category" required>{% for value,label in category_options %}<option value="{{ value }}" {% if (selected_category or 'uncategorized') == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    {{ category_choices(selected_category) }}
     <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
     <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+-[A-Za-z0-9]{2,20}" title="樓層代碼加上連字號，後段使用 2 至 20 個英文字母或數字" autocapitalize="characters" spellcheck="false"><small>編號需對應樓層，每個點位編號不可重複。</small></label>
     <label>地點名稱<input name="name" required maxlength="100" placeholder="例如：機房入口"></label>
     <label>巡檢頻率<select name="frequency"><option value="daily">每日一次</option><option value="daily2">每日兩次（上午／下午）</option><option value="weekly">每週一次</option></select><small>每日兩次以中午 12:00 分界。</small></label>
   </div>
   <input type="hidden" name="active" value="on"><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立點位</button></div>
-</form></details>
-<div class="section-heading outside"><h2>{{ category_label(selected_category) if selected_category else '全部' }}巡檢點</h2><span class="count-label">{{ points|length }} 個點位</span></div>
+</form></details>{% endif %}
+<div class="section-heading outside"><h2>{{ '已刪除點位' if show_deleted else category_label(selected_category) ~ '巡檢點' if selected_category else '全部巡檢點' }}</h2><span class="count-label">{{ points|length }} 個點位</span></div>
 <div class="management-list">{% for point in points %}<article class="panel point-management">
-  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active else 'badge-revoked' }}">{{ '啟用中' if point.active else '已停用' }}</span>{% if point.active %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
-  <details class="disclosure compact-disclosure"><summary><span>編輯點位</span>{{ icon('down') }}</summary>
-  <form method="post" action="{{ url_for('update_point', point_id=point.id) }}" class="edit-form" data-point-form>{{ csrf() }}
+  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span><span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
+  {% if show_deleted %}
+  <div class="archive-row"><span class="muted">刪除時間：{{ point.deleted_at|localtime }}</span><div class="archive-actions">
+    <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all') }}">查看歷史案件</a>
+    <form method="post" action="{{ url_for('restore_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="還原 {{ point.code }}「{{ point.name }}」後，點位會回到現有清單並維持停用。舊 QR 不會恢復；請重新啟用並列印新標籤。" data-confirm-title="還原巡檢點" data-confirm-label="確認還原">{{ csrf() }}<button class="button button-primary button-small">還原點位</button></form>
+  </div></div>
+  {% else %}
+  <details class="disclosure compact-disclosure"><summary><span>編輯或刪除點位</span>{{ icon('down') }}</summary>
+  <form method="post" action="{{ url_for('update_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form>{{ csrf() }}
     <div class="form-grid point-fields">
-      <label>巡檢分類<select name="category" required>{% for value,label in category_options %}<option value="{{ value }}" {% if point.category == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      {{ category_choices(point.category, point.category == 'uncategorized') }}
       <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if point.floor == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+-[A-Za-z0-9]{2,20}" title="樓層代碼加上連字號，後段使用 2 至 20 個英文字母或數字" autocapitalize="characters" spellcheck="false"></label>
       <label>地點名稱<input name="name" required maxlength="100" value="{{ point.name }}"></label>
@@ -29,7 +55,8 @@
     </div>
     <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if point.active %}checked{% endif %}>啟用此巡檢點</label><button class="button button-primary button-small">儲存變更</button></div>
   </form>
-  <div class="danger-zone"><div><strong>更換 QR Code</strong><small>舊標籤連結會立即失效，需重新列印並更換現場標籤。</small></div><form action="{{ url_for('rotate_point_qr', point_id=point.id) }}" method="post" data-confirm="{{ point.code }} 的舊 QR Code 將立即失效，現場標籤需要重新列印及更換。" data-confirm-title="更換點位 QR Code" data-confirm-label="確認更換" data-confirm-danger="true">{{ csrf() }}<button class="button button-danger button-small">更換 QR Code</button></form></div>
-  </details>
-</article>{% else %}{{ empty('這個篩選條件沒有點位','可調整分類或樓層，或點選「新增巡檢點」建立位置。','pin') }}{% endfor %}</div>
+  <div class="danger-zone"><div><strong>更換 QR Code</strong><small>舊標籤連結會立即失效，需重新列印並更換現場標籤。</small></div><form action="{{ url_for('rotate_point_qr', point_id=point.id, floor=selected_floor, category=selected_category) }}" method="post" data-confirm="{{ point.code }} 的舊 QR Code 將立即失效，現場標籤需要重新列印及更換。" data-confirm-title="更換點位 QR Code" data-confirm-label="確認更換" data-confirm-danger="true">{{ csrf() }}<button class="button button-danger button-small">更換 QR Code</button></form></div>
+  <div class="danger-zone"><div><strong>刪除點位</strong><small>會移至已刪除清單，舊 QR 失效；編號、紀錄及異常案件保留。</small></div><form method="post" action="{{ url_for('delete_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="刪除 {{ point.code }}「{{ point.name }}」後，舊 QR 立即失效。編號、歷史巡檢與異常案件會保留；日後可由已刪除清單還原。" data-confirm-title="刪除巡檢點" data-confirm-label="確認刪除" data-confirm-danger="true">{{ csrf() }}<button class="button button-danger button-small">刪除點位</button></form></div>
+  </details>{% endif %}
+</article>{% else %}{{ empty('沒有符合的已刪除點位' if show_deleted else '這個篩選條件沒有點位','可調整分類或樓層查看其他已刪除點位。' if show_deleted else '可調整分類或樓層，或點選「新增巡檢點」建立位置。','pin') }}{% endfor %}</div>
 {% endblock %}

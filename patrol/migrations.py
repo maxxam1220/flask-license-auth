@@ -11,10 +11,10 @@ import re
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, exists, inspect, literal, select, text
 from sqlalchemy.schema import CreateColumn, CreateTable
 
-from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, SchemaVersion, db
+from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, SchemaVersion, User, db
 
 
-LATEST_VERSION = 4
+LATEST_VERSION = 5
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -102,6 +102,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v2_to_v3(connection)
         if current < 4:
             _upgrade_v3_to_v4(connection)
+        if current < 5:
+            _upgrade_v4_to_v5(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -170,6 +172,17 @@ def _upgrade_v3_to_v4(connection):
     for name, point_name in fields:
         current_value = select(points.c[point_name]).where(points.c.id == schedules.c.point_id).scalar_subquery()
         connection.execute(schedules.update().where(schedules.c[name].is_(None)).values({name: current_value}))
+
+
+def _upgrade_v4_to_v5(connection):
+    """Add optional account scope and archive time without altering existing rows.
+
+    A previous worker can still insert rows without these fields. Explicit
+    administrative assignment is required before an inspector gains a scope.
+    """
+    _add_missing_columns(connection, User.__tablename__, [User.__table__.c.patrol_category])
+    _add_missing_columns(connection, Point.__tablename__, [Point.__table__.c.deleted_at])
+    _add_missing_columns(connection, PointSchedule.__tablename__, [PointSchedule.__table__.c.retired_at])
 
 
 def _compact(expression):
@@ -289,3 +302,14 @@ def _validate_current(connection):
     event_checks = {check["name"] for check in inspector.get_check_constraints("patrol_issue_events")}
     if "patrol_issue_event_action" not in event_checks:
         raise SchemaMigrationError("Issue event action validation is missing.")
+    for table_name, name, expected_type in ((User.__tablename__, "patrol_category", db.String),
+                                            (Point.__tablename__, "deleted_at", db.DateTime),
+                                            (PointSchedule.__tablename__, "retired_at", db.DateTime)):
+        columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+        column = columns.get(name)
+        if (not column or not column["nullable"] or column["default"] is not None
+                or not isinstance(column["type"], expected_type)):
+            raise SchemaMigrationError(f"Expected nullable {table_name}.{name} without a default.")
+    user_checks = {check["name"] for check in inspector.get_check_constraints(User.__tablename__)}
+    if "patrol_user_category_allowed" not in user_checks:
+        raise SchemaMigrationError("Account patrol category validation is missing.")

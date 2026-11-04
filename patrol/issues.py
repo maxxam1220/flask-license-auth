@@ -4,6 +4,7 @@ import re
 from sqlalchemy import and_, or_, select
 
 from models import Inspection, InspectionIssue, IssueEvent, Point, db
+from patrol_access import can_access_category, can_read_inspection, patrol_scope
 
 
 class IssueActionError(ValueError):
@@ -22,7 +23,7 @@ def issue_state(record):
     return record.issue.status if record.issue else ("open" if record.is_abnormal else "")
 
 
-def open_issue_counts(point_ids=None, user_id=None):
+def open_issue_counts(point_ids=None, user_id=None, category=None):
     """Return counts only; never expose another inspector's record or note."""
     query = (select(Inspection.point_id, db.func.count(Inspection.id))
              .outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
@@ -33,6 +34,10 @@ def open_issue_counts(point_ids=None, user_id=None):
         query = query.where(Inspection.point_id.in_(point_ids))
     if user_id is not None:
         query = query.where(Inspection.user_id == user_id)
+    if category is not None:
+        if not category:
+            return {}
+        query = query.where(Inspection.category == category)
     return dict(db.session.execute(query).all())
 
 
@@ -55,12 +60,14 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
     if target_status not in ("open", "resolved"):
         raise ValueError("Unsupported issue state")
     if (not actor.active or actor.must_change_password or actor.role not in ("admin", "inspector")
-            or (actor.role == "inspector" and target_status != "resolved")):
+            or (actor.role == "inspector" and (target_status != "resolved" or not patrol_scope(actor)))):
         raise IssueActionError("你沒有處理此異常案件的權限。", 403)
-    owner = db.session.execute(select(Inspection.point_id, Inspection.user_id).where(Inspection.id == inspection_id)).one_or_none()
+    owner = db.session.execute(select(Inspection.point_id, Inspection.user_id, Inspection.category).where(Inspection.id == inspection_id)).one_or_none()
     if owner is None:
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    point_id, owner_id = owner
+    point_id, owner_id, category = owner
+    if not can_access_category(actor, category):
+        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
     if actor.role != "admin" and owner_id != actor.id:
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
     # Do not use the QR lookup: a disabled point still needs issue resolution.
@@ -69,7 +76,9 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
                                .execution_options(populate_existing=True))
     if record is None:
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    if actor.role != "admin" and record.user_id != actor.id:
+    if not can_access_category(actor, record.category):
+        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
+    if not can_read_inspection(actor, record):
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
     # Authorize using the locked inspection before parsing form details or
     # materializing a legacy issue. An unauthorized POST must never reveal the

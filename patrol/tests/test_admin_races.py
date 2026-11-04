@@ -59,7 +59,7 @@ def test_user_and_device_mutations_recheck_locked_actor(application, seeded, mut
     assert db.session.query(AuditLog).count() == 0
 
 
-@pytest.mark.parametrize("fields", [{"role": "inspector", "active": "on"}, {"role": "admin"}])
+@pytest.mark.parametrize("fields", [{"role": "safety", "active": "on"}, {"role": "admin"}])
 def test_admin_cannot_remove_own_admin_access(application, seeded, fields):
     actor_id = seeded["manager"].id
     client = application.test_client()
@@ -116,7 +116,7 @@ def simultaneously_after_authorization(actions):
 def test_postgres_opposing_admin_demotions_preserve_one_admin_without_deadlock(postgres_app):
     clients, ids = pg_admin_clients(postgres_app)
     actions = [lambda index=index: clients[index].post(f"/admin/users/{ids[1-index]}/update", data={
-        "display_name": f"Admin {1-index}", "role": "inspector", "active": "on"}) for index in range(2)]
+        "display_name": f"Admin {1-index}", "role": "safety", "active": "on"}) for index in range(2)]
     assert sorted(simultaneously_after_authorization(actions)) == [302, 403]
     with postgres_app.app_context():
         assert db.session.query(User).filter_by(role="admin", active=True).count() == 1

@@ -84,7 +84,9 @@ def test_missed_chips_and_pagination_preserve_filters_and_target_results(applica
     assert response.status_code == 200
     source = response.get_data(as_text=True)
     values = [unescape(value) for value in re.findall(r'<span class="query-chip-value">(.*?)</span>', source, re.S)]
-    assert values == ['職安', '1M', '每日巡檢（含兩次）']
+    # The assigned category is an access boundary, not an adjustable filter.
+    assert values == ['1M', '每日巡檢（含兩次）']
+    assert '<select name="category"' not in source
     fields = re.search(r'<div id="missed-query-fields"[^>]*>', source).group(0)
     assert 'hidden' not in fields
     next_link = next(link for link in Anchors(source).links if link.get('rel') == 'next')
@@ -93,3 +95,86 @@ def test_missed_chips_and_pagination_preserve_filters_and_target_results(applica
     assert parse_qs(destination.query) == {key: [value] for key, value in (filters | {'page': '2'}).items()}
     previous = next(link for link in Anchors(client.get(next_link['href']).get_data(as_text=True)).links if link.get('rel') == 'prev')
     assert urlsplit(previous['href']).fragment == 'missed-results'
+
+
+@pytest.mark.parametrize('role, label', [('safety', '職安巡檢員'), ('general', '總務巡檢員')])
+def test_inspector_pages_show_role_without_repeating_category_controls(application, seeded, role, label):
+    seeded['inspector'].patrol_category = role
+    db.session.commit()
+    client = application.test_client()
+    login(client)
+    for path in ('/dashboard', '/records', '/missed', '/issues'):
+        response = client.get(path)
+        assert response.status_code == 200
+        source = response.get_data(as_text=True)
+        assert label in source
+        assert '全部分類' not in source
+        assert 'aria-label="巡檢分類"' not in source and 'name="category"' not in source
+        assert '<span class="query-chip-label">分類</span>' not in source
+
+
+def test_admin_role_selects_require_explicit_assignment_and_keep_self_locked(application, seeded):
+    seeded['inspector'].patrol_category = None
+    db.session.commit()
+    client = application.test_client()
+    login(client, 'manager')
+    response = client.get('/admin/users')
+    assert response.status_code == 200
+    source = response.get_data(as_text=True)
+    selects = re.findall(r'<select name="role"([^>]*)>(.*?)</select>', source, re.S)
+    assert selects and all('required' in attrs for attrs, _ in selects)
+    assert all(set(re.findall(r'<option value="([^"]+)"', options)) == {'safety', 'general', 'admin'} for _, options in selects)
+    assert 'value="" selected disabled>請選擇角色' in source
+    assert 'value="" selected disabled>尚未指派，請選擇角色' in source
+    assert any('disabled' in attrs and 'value="admin" selected' in options for attrs, options in selects)
+    assert '<input type="hidden" name="role" value="admin">' in source
+
+
+def test_legacy_empty_point_snapshots_do_not_reveal_new_teams_point_name(application, seeded):
+    point = seeded['daily']
+    row = record(seeded['inspector'], point)
+    row.point_name = row.point_code = ''
+    row.is_abnormal = True
+    point.name, point.code, point.category = '另一組的現場機房', '1F-SECRET', 'general'
+    db.session.commit()
+    client = application.test_client()
+    login(client)
+    for path in ('/records', '/issues', f'/records/{row.id}'):
+        response = client.get(path)
+        assert response.status_code == 200
+        content = response.get_data(as_text=True)
+        assert '歷史巡檢點' in content and ('#' + str(point.id)) in content
+        assert point.name not in content and point.code not in content
+
+
+def test_points_management_archive_preserves_context_and_has_no_qr_or_edit_actions(application, seeded):
+    client = application.test_client()
+    login(client, 'manager')
+    point = seeded['daily']
+    filters = {'category': 'safety', 'floor': '1'}
+    current = client.get('/admin/points', query_string=filters).get_data(as_text=True)
+    create = re.search(r'<form method="post" action="[^"]*?/create[^"]*"(.*?)</form>', current, re.S).group(1)
+    choices = re.findall(r'<input type="radio" name="category"([^>]+)>', create)
+    assert len(choices) == 2 and all('required' in choice for choice in choices)
+    assert any('value="safety"' in choice and 'checked' in choice for choice in choices)
+    assert not any('uncategorized' in choice for choice in choices)
+    actions = [unescape(a) for a in re.findall(r'<form [^>]*action="([^"]+)"', current)]
+    delete_action = next(a for a in actions if urlsplit(a).path.endswith(f'/{point.id}/delete'))
+    assert parse_qs(urlsplit(delete_action).query) == {k: [v] for k, v in filters.items()}
+    assert 'data-confirm-title="刪除巡檢點"' in current
+    response = client.post(delete_action)
+    assert response.status_code == 302
+    assert parse_qs(urlsplit(response.location).query) == {k:[v] for k,v in filters.items()}
+
+    deleted = client.get('/admin/points', query_string={**filters, 'list':'deleted'}).get_data(as_text=True)
+    assert '已刪除（1）' in deleted and 'data-confirm-title="還原巡檢點"' in deleted
+    assert '查看歷史案件' in deleted
+    assert '新增巡檢點' not in deleted and '編輯或刪除點位' not in deleted
+    assert '列印 QR 標籤' not in deleted and '開啟確認頁' not in deleted and '/rotate-qr' not in deleted
+    restore = unescape(re.search(r'<form method="post" action="([^"]*?/restore[^"]*)"', deleted).group(1))
+    assert parse_qs(urlsplit(restore).query) == {k:[v] for k,v in filters.items()}
+    restored = client.post(restore)
+    assert restored.status_code == 302
+    assert parse_qs(urlsplit(restored.location).query) == {k:[v] for k,v in (filters | {'list':'deleted'}).items()}
+    current = client.get('/admin/points', query_string=filters).get_data(as_text=True)
+    assert '已停用' in current and '開啟確認頁' not in current

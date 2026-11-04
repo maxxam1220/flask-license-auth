@@ -31,6 +31,9 @@ class User(db.Model):
     display_name = db.Column(db.String(100), nullable=False)
     password_hash = db.Column(db.String(512), nullable=False)
     role = db.Column(db.String(20), nullable=False, default="inspector")
+    # NULL means unassigned; no patrol scope is inferred from names or roles.
+    patrol_category = db.Column(db.String(20), db.CheckConstraint(
+        "patrol_category IN ('safety', 'general')", name="patrol_user_category_allowed"), nullable=True)
     active = db.Column(db.Boolean, nullable=False, default=True)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     auth_version = db.Column(db.Integer, nullable=False, default=1)
@@ -52,6 +55,7 @@ class Point(db.Model):
     frequency = db.Column(db.String(10), nullable=False, default="daily")
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
     active = db.Column(db.Boolean, nullable=False, default=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
     qr_token = db.Column(db.String(100), nullable=False, unique=True, default=lambda: secrets.token_urlsafe(24))
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     schedule_start = db.Column(db.Date, nullable=False, default=lambda: datetime.now(timezone.utc).date())
@@ -71,6 +75,7 @@ class PointSchedule(db.Model):
     point_code = db.Column(db.String(30))
     point_name = db.Column(db.String(100))
     active = db.Column(db.Boolean, nullable=False)
+    retired_at = db.Column(db.DateTime, nullable=True)
 
 
 class DeviceBinding(db.Model):

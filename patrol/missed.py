@@ -6,9 +6,9 @@ the following midnight, or the following Monday. At the deadline a missing
 slot becomes overdue. A week is therefore counted once across adjacent ranges.
 
 Callers must preload point.schedules and supply completions for every user,
-starting at the Monday containing date_from through date_to. Schedule changes
-have date-only precision and apply to the whole effective date, as in the
-dashboard. No change time or employee assignment is inferred here.
+starting at the Monday containing date_from through date_to. Ordinary schedule
+changes apply to the whole effective date. A deletion records its precise
+instant so obligations already overdue that day can still be reported.
 """
 from bisect import bisect_right
 from collections.abc import Mapping
@@ -120,6 +120,15 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         due_day = first_due_day
         while due_day <= last_due_day:
             index = bisect_right(effective_dates, due_day) - 1
+            cutoff = instant
+            # Restore leaves a point inactive. If it is deleted again on the
+            # same day, retain the first deletion's cutoff and prior schedule.
+            while index > 0 and effective_dates[index] == due_day:
+                retired_at = _value(schedules[index], "retired_at")
+                if retired_at is None:
+                    break
+                cutoff = min(cutoff, _utc(retired_at))
+                index -= 1
             schedule = schedules[index] if index >= 0 else None
             snapshot = _snapshot(point, schedule)
             period_frequency = snapshot["frequency"]
@@ -140,7 +149,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
                 period_key = period_start.isoformat()
                 for slot, local_deadline in slots:
                     deadline = local_deadline.astimezone(timezone.utc)
-                    if deadline > instant or (created_at is not None and deadline <= created_at):
+                    if deadline > cutoff or (created_at is not None and deadline <= created_at):
                         continue
                     if (point_id, period_frequency, period_key, slot) in completed:
                         continue
