@@ -443,7 +443,15 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stat-detail-link { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; color: var(--teal); font-size: 13px; font-weight: 650; }
 .stat-detail-link .icon { width: 14px; height: 14px; }
 .stat-detail-link:hover, .point-own-issues-link:hover { text-decoration: underline; }
-.dashboard-missed-help { margin: -8px 0 20px; color: var(--muted); font-size: 13px; }
+.dashboard-missed-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -8px 0 14px; color: var(--muted); font-size: 13px; }
+.dashboard-missed-help p { margin: 0; }
+.dashboard-missed-help .stat-detail-link { flex-shrink: 0; }
+.patrol-point-tools { display: grid; justify-items: end; flex-shrink: 0; }
+.patrol-point-tools .text-link { min-height: 44px; font-size: 13px; }
+#patrol-points, #floor-progress, #issue-results { scroll-margin-block-start: 12px; }
+#patrol-points:focus-visible, #floor-progress:focus-visible, #issue-results:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+.stats-grid .stat-label { color: var(--muted); font-size: 13px; }
+.stats-grid .stat-value small { color: var(--muted); font-size: 13px; }
 .point-own-issues-link { display: flex; align-items: center; gap: 6px; min-height: 44px; margin-top: 4px; color: var(--teal); font-size: 13px; font-weight: 600; line-height: 1.6; }
 .point-own-issues-link .icon { width: 14px; height: 14px; }
 .missed-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; }
@@ -470,6 +478,7 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 #missed-results { scroll-margin-top: 18px; }
 #missed-results:focus-visible { outline: 3px solid #7fbdb0; outline-offset: 4px; }
 @media (max-width: 720px) {
+  .issue-page-heading p { max-width: none; }
   .missed-stats { gap: 12px; }
   .missed-stats .stat-card { padding: 18px; }
   .missed-stats .stat-label { min-height: 1.5em; }
@@ -478,9 +487,6 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .missed-point-summary > summary strong { font-size: 15px; }
   .empty-actions .button { min-height: 44px; font-size: 13px; }
 }
-@media (max-width: 390px) {
-  .stat-detail-link .icon { display: none; }
-}
 
 /* Five direct mobile destinations retain comfortable touch targets at 320 px. */
 @media (max-width: 720px) {
@@ -488,7 +494,6 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .stats-grid .stat-label { line-height: 1.4; min-height: 2.8em; }
   .stats-grid .stat-value { margin-top: 5px; line-height: 1.2; }
   .stats-grid .stat-value small { line-height: 1.35; margin-top: 2px; }
-  .stats-grid .stat-detail-link { display: flex; min-height: 44px; }
   .mobile-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); padding-inline: 6px; }
   .mobile-nav > a { min-width: 44px; min-height: 52px; padding: 5px 3px; gap: 3px; border-radius: 7px; font-size: 12px; line-height: 1.4; }
   .mobile-nav > a > span { white-space: nowrap; }

@@ -79,6 +79,33 @@ def test_only_the_seven_authorized_irregular_points_allow_executor_visits(applic
     assert db.session.query(Inspection).filter_by(executor_visit=False).count() == 1
 
 
+def test_reusing_a_registered_code_cannot_move_visit_access_to_another_point(application, synthetic_register):
+    executor, _, _, admin, *_ = team(application)
+    registered = synthetic_register[0]
+    original_url = register_point(registered)
+    other_url = register_point({**registered, "code": "1F-OTHER"})
+    db.session.commit()
+    def edit_path(url):
+        point_id = db.session.scalar(db.select(Point.id).where(Point.qr_token == url.rsplit("/", 1)[1]))
+        return f"/admin/points/{point_id}/update"
+    form = {**registered, "active": "on"}
+    assert admin.post(edit_path(original_url), data={**form, "code": "1F-RENAMED"}).status_code == 302
+    assert executor.get(original_url).status_code == 404
+    assert admin.post(edit_path(other_url), data=form).status_code == 409
+    assert admin.post("/admin/points/create", data=form).status_code == 409
+    assert executor.get(other_url).status_code == 404
+    # An assignment already made by an older release is rejected on the QR route too.
+    other = db.session.scalar(db.select(Point).where(Point.qr_token == other_url.rsplit("/", 1)[1]))
+    other.code = registered["code"]
+    db.session.commit()
+    assert executor.get(other_url).status_code == 404
+    assert executor.post(other_url + "/confirm").status_code == 404
+    other.code = "1F-OTHER"
+    db.session.commit()
+    assert admin.post(edit_path(original_url), data=form).status_code == 302
+    assert payload(executor, original_url)["stage"] == "visit"
+
+
 @pytest.mark.parametrize("change", [
     {"category": "safety", "workflow_mode": "standard"}, {"frequency": "daily"}, {"code": "Xq-RENAMED"},
     {"code": "xq-t000"}, {"active": False},

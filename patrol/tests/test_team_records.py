@@ -75,6 +75,7 @@ def test_general_reads_both_stages_and_saved_names_without_exposing_other_catego
     csv_data = csv_rows(client.get(reports_url.replace("/records?", "/records/export?")))
     assert len(csv_data) == 3 and csv_data[1][10] == r.incident.note and csv_data[1][11] == "1"
     assert csv_data[2][0] == f"人員 {r.author.id}"
+    assert csv_data[2][2:4] == [f"#{r.pair.id}", "歷史巡檢點"]
     for private in (r.author.display_name, r.pair.code, r.pair.name, r.other.note, r.safety.display_name):
         assert private not in html and private not in str(csv_data)
     first_url = f"/records?{DATES}&stage=execution&user_id={r.worker.id}"

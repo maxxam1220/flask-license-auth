@@ -1,6 +1,6 @@
 """Factory patrol: QR confirmation, approved browsers and durable records."""
 from datetime import date, datetime, time, timedelta, timezone
-from functools import wraps
+from functools import lru_cache, wraps
 import base64
 import csv
 import hashlib
@@ -12,18 +12,19 @@ import os
 from pathlib import Path
 import re
 import secrets
+from tempfile import SpooledTemporaryFile
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import click
-from flask import Flask, abort, before_render_template, flash, g, make_response, redirect, render_template, request, session, url_for
+from flask import Flask, abort, before_render_template, flash, g, make_response, redirect, render_template, request, send_file, session, url_for
 import qrcode
 import qrcode.image.svg
 from itsdangerous import BadData, URLSafeSerializer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -265,6 +266,18 @@ def create_app(config=None):
             return f"人員 {record.user_id}"
         return record.user.display_name
 
+    @app.template_global()
+    def report_point_location(record):
+        code, name, floor = record.point_code, record.point_name, record.point_floor
+        if not code or not name or floor is None:
+            current = record.point
+            if current and can_access_category(g.user, current.category):
+                code = code or current.code
+                name = name or current.name
+                floor = current.floor if floor is None else floor
+        return SimpleNamespace(code=code or f"#{record.point_id}", name=name or "歷史巡檢點",
+                               floor=floor_label(floor) if floor is not None else "未記錄")
+
     @app.context_processor
     def common_context():
         user = g.get("user")
@@ -454,10 +467,21 @@ def create_app(config=None):
             return fallback
         return value
 
+    def registered_visit_owners():
+        # One lookup per request, including a dashboard listing all seven points.
+        cache_key = "patrol.registered_visit_owners"
+        if cache_key not in request.environ:
+            first = select(db.func.min(PointSchedule.id)).where(PointSchedule.category == "general",
+                PointSchedule.point_code.in_(app.config["EXECUTOR_VISIT_CODES"])).group_by(PointSchedule.point_code)
+            rows = db.session.execute(select(PointSchedule.point_code, PointSchedule.point_id).where(PointSchedule.id.in_(first)))
+            request.environ[cache_key] = dict(rows.all())
+        return request.environ[cache_key]
+
     def executor_can_scan(point):
         return point.category == "general" and (point.workflow_mode == "two_stage" or
                 (point.workflow_mode == "spot" and point.frequency == "irregular" and
-                 point.code in app.config["EXECUTOR_VISIT_CODES"]))
+                 point.code in app.config["EXECUTOR_VISIT_CODES"] and
+                 registered_visit_owners().get(point.code, point.id) == point.id))
 
     def binding_destination():
         """Keep a scanned point through approval, without trusting a return URL."""
@@ -686,7 +710,7 @@ def create_app(config=None):
             frequency, active, category = settings["frequency"], settings["active"], settings["category"]
             scheduled_floor, scheduled_code, scheduled_name = settings["floor"], settings["code"], settings["name"]
             mode, legacy_unscheduled = settings["workflow_mode"], settings["legacy_unscheduled"]
-            direct_visit = (mode == "spot" and frequency == "irregular" and not legacy_unscheduled
+            direct_visit = (executor and mode == "spot" and frequency == "irregular" and not legacy_unscheduled
                             and point.code == scheduled_code and point.workflow_mode == "spot" and executor_can_scan(point))
             if ((frequency == "irregular" or legacy_unscheduled) and (schedule or not point.schedules) and active
                     and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
@@ -804,8 +828,12 @@ def create_app(config=None):
         return point
 
     def inspection_in_slot(point, key, slot):
-        return db.session.scalar(select(Inspection).where(Inspection.point_id == point.id, Inspection.frequency == point.frequency,
-            Inspection.period_key == key, Inspection.slot == slot, Inspection.workflow_mode != "spot"))
+        # A scheduled completion survives a transfer to the shared standard
+        # workflow. Use the same first qualifying receipt as the dashboard.
+        return db.session.scalar(select(Inspection).where(
+            Inspection.point_id == point.id, Inspection.frequency == point.frequency,
+            Inspection.period_key == key, Inspection.slot == slot, Inspection.legacy_unscheduled.is_(False),
+            Inspection.executor_visit.is_(False)).order_by(Inspection.created_at, Inspection.id).limit(1))
 
     def prior_inspection(point, key, slot, day):
         if point.workflow_mode in ("spot", "two_stage"):
@@ -969,10 +997,27 @@ def create_app(config=None):
         record = prior_inspection(point, key, slot, day) if stage != "execute" else None
         if record:
             return existing_checkin_response(record, token, note, abnormal, uploads)
+        if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
+            return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
+        try:
+            photos = process_uploads(uploads) if stage == "inspect" else []
+        except PhotoValidationError as error:
+            return form_error(str(error))
+        if photos:
+            if db.engine.dialect.name == "postgresql":
+                db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
+            used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
+            if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
+                return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡管理員，或移除照片後重新確認送出。", 409)
+        final_instant = now_utc()
+        if (period_for(point, final_instant)[0] != key or slot_for(point, final_instant) != slot or
+                (mode in ("spot", "two_stage") and local_dt(final_instant).date() != day)):
+            message = "處理期間巡檢日期或時段已變更，請重新確認後送出。"
+            return form_error(message + ("照片需重新選擇。" if photos else ""), 409)
         if stage == "execute":
-            first = new_execution(point, g.user, binding, key, slot, instant)
+            first = new_execution(point, g.user, binding, key, slot, final_instant)
             db.session.add(first)
-            binding.last_seen_at = naive_utc(instant)
+            binding.last_seen_at = naive_utc(final_instant)
             audit("execution", point.code)
             try:
                 db.session.commit()
@@ -985,22 +1030,6 @@ def create_app(config=None):
                     return form_error("本時段已有執行紀錄。", 409)
             session.pop("after_binding", None)
             return redirect(url_for("execution_success", execution_id=first.id))
-        if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
-            return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
-        try:
-            photos = process_uploads(uploads)
-        except PhotoValidationError as error:
-            return form_error(str(error))
-        if photos:
-            if db.engine.dialect.name == "postgresql":
-                db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
-            used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
-            if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
-                return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡管理員，或移除照片後重新確認送出。", 409)
-        final_instant = now_utc()
-        if (period_for(point, final_instant)[0] != key or slot_for(point, final_instant) != slot or
-                (mode in ("spot", "two_stage") and local_dt(final_instant).date() != day)):
-            return form_error("處理期間巡檢日期或時段已變更，請重新確認後送出。照片需重新選擇。", 409)
         record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(final_instant),
                             period_key=key, frequency=point.frequency, slot=slot, category=point.category,
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
@@ -1296,7 +1325,12 @@ def create_app(config=None):
         if stage == "execution" and g.user.role not in ("admin", "executor") and not can_view_general_team(g.user):
             abort(403)
         model = PatrolExecution if stage == "execution" else Inspection
-        query = select(model).where(model.created_at >= start_time, model.created_at < end_time)
+        # Missing legacy snapshots can need the related point and author while
+        # rendering or exporting. Fetch only the fallback fields in this query.
+        query = select(model).options(
+            joinedload(model.point).load_only(Point.code, Point.name, Point.floor, Point.category),
+            joinedload(model.user).load_only(User.display_name),
+        ).where(model.created_at >= start_time, model.created_at < end_time)
         floor, category = scope_filters()
         user_id = request.args.get("user_id", "")
         if floor:
@@ -1370,25 +1404,22 @@ def create_app(config=None):
                                reviewed_execution_ids={row.id for row, reviewed in rows if reviewed} if stage == "execution" else set(),
                                stage=stage, users=users, filters=filters, **storage)
 
-    @app.get("/records/export")
-    @login_required
-    def export_records():
-        query, filters = record_query()
-        output = io.StringIO(newline="")
-        writer = csv.writer(output)
+    def write_record_csv(writer, query, filters):
         def cell(value):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
         if filters["stage"] == "execution":
             writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "巡檢狀態"])
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
-                writer.writerow([cell(row.user_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                point = report_point_location(row)
+                writer.writerow([cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
                                  category_label(row.category), slot_label(row.slot), "已巡檢" if reviewed else "待巡檢"])
         elif g.user.role == "executor":
             writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"])
             for row in db.session.scalars(query.execution_options(yield_per=500)):
-                writer.writerow([cell(row.user_name), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                point = report_point_location(row)
+                writer.writerow([cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
                                  format_localtime(row.created_at)])
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
@@ -1396,7 +1427,8 @@ def create_app(config=None):
             writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []))
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
-                fields = [cell(reporter_name(row)), floor_label(row.point_floor), cell(row.point_code), cell(row.point_name),
+                point = report_point_location(row)
+                fields = [cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
                           format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
                           category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos),
                           {"open": "未結案", "resolved": "已結案", "": ""}[issue_state(row)],
@@ -1414,10 +1446,27 @@ def create_app(config=None):
                                    cell(row.execution.user_name) if row.execution else "",
                                    format_localtime(row.execution.created_at) if row.execution else ""])
                 writer.writerow(fields)
-        response = make_response("\ufeff" + output.getvalue())
-        response.headers["Content-Type"] = "text/csv; charset=utf-8"
-        response.headers["Content-Disposition"] = f'attachment; filename="patrol-{filters["date_from"]}-{filters["date_to"]}.csv"'
-        return response
+
+    @app.get("/records/export")
+    @login_required
+    def export_records():
+        query, filters = record_query()
+        # Keep small exports in memory. Finish reading the database before
+        # serving a larger file to a slow client. Its response owns the file.
+        data = SpooledTemporaryFile(max_size=512 * 1024, mode="w+b")
+        try:
+            output = io.TextIOWrapper(data, encoding="utf-8-sig", newline="")
+            write_record_csv(csv.writer(output), query, filters)
+            output.detach()  # flush the encoder and pass ownership to send_file
+            length = data.tell()
+            data.seek(0)
+            name = f"patrol-{filters['date_from']}-{filters['date_to']}.csv"
+            response = send_file(data, mimetype="text/csv", as_attachment=True, download_name=name, conditional=False)
+            response.content_length = length
+            return response
+        except BaseException:
+            data.close()
+            raise
 
     def missed_report():
         from missed import calculate_missed
@@ -1531,6 +1580,11 @@ def create_app(config=None):
         if known_entry:
             if category != "general" or int(floor) != known_entry[1]:
                 abort(400, description="清冊中的點位編號須使用原來的總務分類與樓層。")
+            if code in app.config["EXECUTOR_VISIT_CODES"] and (point is None or point.code != code):
+                # These codes grant executor access. Only the original point can
+                # recover a reserved code after an administrator renames it.
+                if point is None or point.id != registered_visit_owners().get(code):
+                    abort(409, description="此編號保留給原有的不定期簽到點。其他點位請使用新的編號。")
         elif point and category == point.category == "general" and raw_code == point.code and int(floor) == point.floor:
             code = point.code
         elif (not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code)
@@ -1699,12 +1753,18 @@ def create_app(config=None):
         flash("點位已還原為停用。請至現有點位啟用，再列印新的 QR Code。", "success")
         return redirect(destination)
 
-    def qr_image(point, factory=None):
-        address = app.config["PUBLIC_BASE_URL"] + url_for("checkin", token=point.qr_token)
+    @lru_cache(maxsize=256)
+    def encode_qr(address, factory):
+        # Cache only the graphic. Authorization, active status and the printed
+        # name/category are checked again for each request.
         img = qrcode.make(address, image_factory=factory, box_size=10, border=4, error_correction=qrcode.constants.ERROR_CORRECT_M)
         output = io.BytesIO()
         img.save(output)
         return output.getvalue()
+
+    def qr_image(point, factory=None):
+        address = app.config["PUBLIC_BASE_URL"] + url_for("checkin", token=point.qr_token)
+        return encode_qr(address, factory)
 
     @app.get("/admin/points/<int:point_id>/qr.svg")
     @admin_required

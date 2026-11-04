@@ -1,12 +1,14 @@
 """Role and timing regressions using test accounts only."""
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import re
 from threading import Barrier
 
+import pytest
+
 import app as patrol
 from models import DeviceBinding, Inspection, PatrolExecution, Point, PointSchedule, User, db
-from test_app import application, FIXED_NOW
+from test_app import application, FIXED_NOW, rendered_contexts
 from test_postgres_features import postgres_app
 
 
@@ -42,6 +44,79 @@ def payload(c, url):
     data = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', r.text))
     assert "stage" in data, r.status_code
     return data
+
+
+@pytest.mark.parametrize("legacy_optional", [False, True])
+def test_transferred_shared_slot_recognises_scheduled_spot_but_not_optional_history(application, monkeypatch, legacy_optional):
+    now = FIXED_NOW
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    _, general, safety, admin, _, url, _ = team(application)
+    post = url + "/confirm"
+    fields = payload(general, url)
+    receipt = general.post(post, data=fields | {"note": "Former department private note"})
+    assert receipt.status_code == 302
+    original = db.session.scalar(db.select(Inspection))
+    original.legacy_unscheduled = legacy_optional
+    point = db.session.get(Point, original.point_id)
+    worker = db.session.scalar(db.select(User).where(User.username == "peer"))
+    worker.patrol_category = "safety"
+    db.session.commit()
+    assert admin.post(f"/admin/points/{point.id}/update", data={
+        "code": point.code, "name": "New safety point", "floor": 1, "frequency": "daily2",
+        "category": "safety", "active": "on",
+    }).status_code == 302
+    with rendered_contexts(application) as templates:
+        page = safety.get(url)
+    context = templates[-1][1]
+    assert context["can_confirm"] is legacy_optional
+    assert safety.get(receipt.location).status_code == 404
+    assert "Former department private note" not in page.text
+    if legacy_optional:
+        assert context["existing"] is None
+        assert safety.post(post, data=payload(safety, url)).status_code == 302
+        assert db.session.query(Inspection).count() == 2
+    else:
+        assert context["existing"] == {"created_at": None, "user_name": "本期已有紀錄"}
+        current = {"frequency": point.frequency, "period_key": fields["period_key"], "slot": fields["slot"]}
+        assert safety.post(post, data=current).location == url
+        assert db.session.query(Inspection).count() == 1
+    now += timedelta(days=1)
+    new_receipt = safety.post(post, data=payload(safety, url))
+    assert new_receipt.status_code == 302 and new_receipt.location != receipt.location
+    saved = db.session.scalar(db.select(Inspection).order_by(Inspection.id.desc()))
+    assert saved.period_key == now.date().isoformat() and saved.category == "safety"
+
+
+@pytest.mark.parametrize("frequency,boundary,expected_key,expected_slot", [
+    ("daily2", FIXED_NOW, "2026-11-03", "pm"),
+    ("weekly", datetime(2026, 11, 8, 16, tzinfo=timezone.utc), "2026-11-09", "any"),
+    ("monthly", datetime(2026, 11, 30, 16, tzinfo=timezone.utc), "2026-12-01", "any"),
+])
+def test_first_stage_crossing_boundary_reconfirms_current_period(application, monkeypatch, frequency, boundary,
+                                                                expected_key, expected_slot):
+    now = boundary - timedelta(milliseconds=10)
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    executor, _, _, _, url, _, _ = team(application)
+    point = db.session.scalar(db.select(Point).where(Point.qr_token == url[3:]))
+    point.frequency = frequency
+    db.session.commit()
+    original = payload(executor, url)
+    lookup = patrol.execution_in_slot
+    def delayed_lookup(*args):
+        nonlocal now
+        result = lookup(*args)
+        now = boundary
+        return result
+    monkeypatch.setattr(patrol, "execution_in_slot", delayed_lookup)
+    with rendered_contexts(application) as templates:
+        response = executor.post(url + "/confirm", data=original)
+    assert response.status_code == 409
+    assert db.session.query(PatrolExecution).count() == 0
+    context = templates[-1][1]
+    assert (context["current_period_key"], context["current_slot"]) == (expected_key, expected_slot)
+    assert executor.post(url + "/confirm", data=payload(executor, url)).status_code == 302
+    saved = db.session.scalar(db.select(PatrolExecution))
+    assert (saved.period_key, saved.slot, saved.created_at) == (expected_key, expected_slot, boundary.replace(tzinfo=None))
 
 
 def test_roles_order_receipt_and_time_slot(application, monkeypatch):
