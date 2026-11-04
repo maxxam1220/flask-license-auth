@@ -20,6 +20,10 @@ def can_view_general_team(user):
     return bool(user and user.role == "inspector" and patrol_scope(user) == "general")
 
 
+def can_view_execution_records(user):
+    return bool(user and (user.role in ("admin", "executor") or can_view_general_team(user)))
+
+
 def can_read_inspection(user, record):
     if not can_access_category(user, record.category):
         return False

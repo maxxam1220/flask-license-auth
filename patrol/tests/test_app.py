@@ -629,12 +629,14 @@ def test_weekly_completion_stays_visible_after_point_disabled(
     assert any(card["point"].id == point.id and card["status"] == "done" for card in cards)
 
 
-@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t=", "\r="])
+@pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t=", "\r=", "＝", "＋", "－", "＠", "　＝"])
 def test_csv_escapes_formula_values(application, seeded, prefix):
     seeded["inspector"].display_name = prefix + "TestPerson"
     seeded["daily"].name = prefix + "TestPoint"
     db.session.commit()
-    record(seeded["inspector"], seeded["daily"])
+    row = record(seeded["inspector"], seeded["daily"])
+    row.note = prefix + "1+1"
+    db.session.commit()
     client = application.test_client()
     login(client)
     response = client.get("/records/export")
@@ -643,6 +645,8 @@ def test_csv_escapes_formula_values(application, seeded, prefix):
     assert len(rows) == 2
     assert rows[1][0] == "'" + prefix + "TestPerson"
     assert rows[1][3] == "'" + prefix + "TestPoint"
+    assert rows[1][10] == "'" + row.note
+    assert row.note == prefix + "1+1"
 
 
 def test_record_snapshots_survive_employee_and_point_changes(application, seeded):

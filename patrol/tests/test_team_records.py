@@ -16,6 +16,21 @@ from test_workflow_reports import context, csv_rows, open_as, point, values, wor
 DATES = "date_from=2026-11-01&date_to=2026-11-03"
 
 
+def test_receipts_do_not_offer_unusable_return_filters(application, reports):
+    r = reports
+    for viewer, path, source in (
+        (r.worker, f"/checkins/{r.direct.id}", "/issues?status=open"),
+        (r.worker, f"/checkins/{r.direct.id}", "/records?abnormal=1"),
+        (r.reader, f"/executions/{r.first.id}/success", "/records?stage=execution&abnormal=0"),
+        (r.safety, f"/records/{r.other.id}", "/records?stage=execution"),
+    ):
+        client = open_as(application, viewer)
+        with rendered_contexts(application) as contexts:
+            assert client.get(path, query_string={"return_to": source}).status_code == 200
+        back = contexts[-1][1]["back_url"]
+        assert client.get(back).status_code == 200
+
+
 @pytest.fixture
 def reports(seeded, workflow):
     worker, reader, _, pair, _ = workflow

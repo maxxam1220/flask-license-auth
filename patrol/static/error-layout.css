@@ -1,0 +1,28 @@
+.error-state {
+  width: min(100%, 36rem);
+  margin: clamp(1rem, 7vh, 5rem) auto;
+  padding: clamp(1.25rem, 4vw, 2.5rem);
+  background: #fff;
+  border: 1px solid #dce5df;
+  border-radius: 1rem;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.guest-body .error-state { width: min(calc(100% - 2rem), 36rem); }
+
+.error-state .error-number {
+  display: inline-block;
+  margin: 0 0 .8rem;
+  padding: .2rem .65rem;
+  border-radius: .4rem;
+  background: #edf3ed;
+  color: #476252;
+  font-size: .875rem;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.error-state h1 { font-size: clamp(1.4rem, 3vw, 1.8rem); }
+.error-state p { margin: .7rem 0 1.5rem; color: #475c55; font-size: 1rem; }
+.error-state .button { max-width: 100%; min-height: 44px; white-space: normal; }

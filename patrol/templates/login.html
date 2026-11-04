@@ -38,7 +38,7 @@
           {{ csrf() }}
           <input type="hidden" name="next" value="{{ next|default('') }}">
           <label>員工帳號
-            <input name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="請輸入帳號" value="{{ request.form.get('username','') }}" enterkeyhint="next">
+            <input type="text" name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="請輸入帳號" value="{{ request.form.get('username','')[:80] }}" enterkeyhint="next">
           </label>
           <label>密碼
             <input type="password" name="password" required autocomplete="current-password" placeholder="請輸入密碼" enterkeyhint="go">

@@ -25,6 +25,20 @@ def report_context(application, client, query=""):
     return response, contexts[-1][1]
 
 
+def test_missed_csv_protects_full_width_formula_in_historical_location(application, seeded):
+    point = historical_point()
+    schedule = point.schedules[0]
+    schedule.point_name = "＝1+1"
+    db.session.commit()
+    client = application.test_client()
+    login(client)
+    response = client.get('/missed/export?date_from=2026-11-02&date_to=2026-11-02')
+    assert response.status_code == 200
+    _, *rows = csv.reader(io.StringIO(response.data.decode("utf-8-sig")))
+    assert len(rows) == 2 and all(row[5] == "'＝1+1" for row in rows)
+    assert schedule.point_name == "＝1+1"
+
+
 def test_report_counts_only_expired_slots_and_any_employee_completion(application, seeded):
     point = historical_point()
     row = Inspection(point_id=point.id, user_id=seeded['colleague'].id, user_name='PRIVATE COLLEAGUE',

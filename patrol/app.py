@@ -34,7 +34,7 @@ from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from missed import period_bounds
 from images import PhotoValidationError, process_uploads
-from patrol_access import can_access_category, can_read_inspection, can_view_general_team, patrol_scope
+from patrol_access import can_access_category, can_read_inspection, can_view_execution_records, can_view_general_team, patrol_scope
 from ready_patrol import ready_patrol_points
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
@@ -124,7 +124,8 @@ def normalise_return_to(value, user):
         parsed = urlsplit(value)
         if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in ("/records", "/issues"):
             return None
-        if parsed.path == "/issues" and not user:
+        executor = bool(user and user.role == "executor")
+        if parsed.path == "/issues" and (not user or executor):
             return None
         pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=9)
         if len({key for key, _ in pairs}) != len(pairs):
@@ -166,6 +167,10 @@ def normalise_return_to(value, user):
                     continue
             values[key] = item
         if parsed.path == "/records":
+            stage = values.get("stage", "execution" if executor else "inspection")
+            if (stage == "execution" and not can_view_execution_records(user)
+                    or values.get("abnormal") and (stage == "execution" or executor)):
+                return None
             today = local_dt(now_utc()).date()
             begin = date.fromisoformat(values.get("date_from", (today - timedelta(days=6)).isoformat()))
             end = date.fromisoformat(values.get("date_to", today.isoformat()))
@@ -337,6 +342,9 @@ def create_app(config=None):
         # safe GET confirmation page before checking the now-missing CSRF secret;
         # the sign-in form itself retains its normal CSRF protection.
         if not g.user and request.method == "POST":
+            if request.endpoint == "logout":
+                # A second open tab may still show the previous logout button.
+                return redirect(url_for("login"))
             destination = protected_post_destination()
             if destination:
                 return redirect(url_for("login", next=safe_next(destination)))
@@ -344,6 +352,9 @@ def create_app(config=None):
             expected = session.get("csrf_token", "")
             received = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
             if not expected or not received or not received.isascii() or not hmac.compare_digest(expected, received):
+                if request.endpoint == "login" and request.method == "POST" and not g.user:
+                    flash("登入表單已過期，請重新輸入密碼後再登入。", "error")
+                    return render_template("login.html", next=safe_next(request.form.get("next") or request.args.get("next"))), 400
                 abort(400, description="表單已過期，請重新載入頁面後再試。")
         if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz"):
             if (request.method == "GET" and request.endpoint not in (None, "login")
@@ -619,13 +630,18 @@ def create_app(config=None):
                 flash("帳號或密碼不正確，或帳號已停用。", "error")
             else:
                 next_url = safe_next(request.form.get("next") or request.args.get("next"))
+                # Use the version that matched the password. Revoking the old
+                # login can commit and expire ORM attributes while another
+                # request concurrently resets the destination user's password.
+                user_id, version, change_required = user.id, user.auth_version, user.must_change_password
+                revoke_current_login()
                 session.clear()
-                session["user_id"] = user.id
-                session["auth_version"] = user.auth_version
+                session["user_id"] = user_id
+                session["auth_version"] = version
                 session["sid"] = secrets.token_urlsafe(32)
                 session.permanent = True
                 session["csrf_token"] = secrets.token_urlsafe(32)
-                if user.must_change_password:
+                if change_required:
                     if urlsplit(next_url).path == url_for("change_password"):
                         # This GET already contains the safe post-change return
                         # target. Do not nest it as the next destination again.
@@ -635,8 +651,7 @@ def create_app(config=None):
                 return redirect(next_url)
         return render_template("login.html", next=safe_next(request.form.get("next") or request.args.get("next")))
 
-    @app.post("/logout")
-    def logout():
+    def revoke_current_login():
         if g.user:
             # Serialize the revocation against writes authorized by this login.
             # A late response can refresh a signed cookie after logout, so the
@@ -651,6 +666,10 @@ def create_app(config=None):
                 db.session.execute(revoke, {"token_hash": g.patrol_session_hash, "user_id": actor.id,
                                             "auth_version": actor.auth_version, "revoked_at": naive_utc()})
                 db.session.commit()
+
+    @app.post("/logout")
+    def logout():
+        revoke_current_login()
         session.clear()
         return redirect(url_for("login"))
 
@@ -1461,7 +1480,7 @@ def create_app(config=None):
         stage = request.args.get("stage", "execution" if executor else "inspection")
         if stage not in ("inspection", "execution"):
             abort(400, description="紀錄階段不正確。")
-        if stage == "execution" and g.user.role not in ("admin", "executor") and not can_view_general_team(g.user):
+        if stage == "execution" and not can_view_execution_records(g.user):
             abort(403)
         model = PatrolExecution if stage == "execution" else Inspection
         # Missing legacy snapshots can need the related point and author while
@@ -1576,24 +1595,26 @@ def create_app(config=None):
                                page_filters=page_filters,
                                stage=stage, users=users, filters=filters, **storage)
 
+    def csv_text(value):
+        # Excel also recognizes full-width formula prefixes in Chinese CSVs.
+        value = str(value)
+        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "＝", "＋", "－", "＠")) else value
+
     def write_record_csv(writer, query, filters):
-        def cell(value):
-            value = str(value)
-            return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
         if filters["stage"] == "execution":
             instant = now_utc()
             writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "巡檢狀態"])
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
-                writer.writerow([cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
+                writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
                                  category_label(row.category), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]])
         elif g.user.role == "executor":
             writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"])
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
-                writer.writerow([cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
+                writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                                  format_localtime(row.created_at)])
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
@@ -1602,12 +1623,12 @@ def create_app(config=None):
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
-                fields = [cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
+                fields = [csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                           format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                          category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", cell(row.note), len(row.photos),
+                          category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", csv_text(row.note), len(row.photos),
                           {"open": "未結案", "resolved": "已結案", "": ""}[issue_state(row)],
-                          cell(row.issue.resolved_by_name) if row.issue else "", format_localtime(row.issue.resolved_at) if row.issue and row.issue.resolved_at else "",
-                          cell(row.issue.resolution_note) if row.issue else ""]
+                          csv_text(row.issue.resolved_by_name) if row.issue else "", format_localtime(row.issue.resolved_at) if row.issue and row.issue.resolved_at else "",
+                          csv_text(row.issue.resolution_note) if row.issue else ""]
                 if has_workflows:
                     if row.executor_visit:
                         # Direct visits record attendance only. Empty report fields
@@ -1617,7 +1638,7 @@ def create_app(config=None):
                     else:
                         mode_label = "抽查" if row.legacy_unscheduled else {"standard": "一般巡檢", "spot": "單段巡檢", "two_stage": "執行後巡檢"}[row.workflow_mode]
                     fields.extend([mode_label,
-                                   cell(row.execution.user_name) if row.execution else "",
+                                   csv_text(row.execution.user_name) if row.execution else "",
                                    format_localtime(row.execution.created_at) if row.execution else ""])
                 writer.writerow(fields)
 
@@ -1709,12 +1730,9 @@ def create_app(config=None):
         has_stages = any(row["workflow_mode"] == "two_stage" for row in rows)
         writer.writerow(["應完成日期", "巡檢期間", "分類", "樓層", "點位編號", "點位名稱", "巡檢頻率", "時段", "到期時間（台北）", "漏打次數"]
                         + (["缺少階段"] if has_stages else []))
-        def cell(value):
-            value = str(value)
-            return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
         for row in rows:
             writer.writerow([row["due_date"].isoformat(), row["period_label"], category_label(row["category"]),
-                floor_label(row["floor"]), cell(row["code"]), cell(row["name"]), frequency_label(row["frequency"]),
+                floor_label(row["floor"]), csv_text(row["code"]), csv_text(row["name"]), frequency_label(row["frequency"]),
                 slot_label(row["slot"]), format_localtime(row["deadline"]), 1] + ([row["missing_stage_label"]] if has_stages else []))
         response = make_response("\ufeff" + output.getvalue())
         response.headers["Content-Type"] = "text/csv; charset=utf-8"
@@ -2062,20 +2080,28 @@ def create_app(config=None):
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
+    @app.errorhandler(405)
     @app.errorhandler(409)
     @app.errorhandler(413)
     @app.errorhandler(429)
     def show_error(error):
+        # Bare HTTP exceptions carry English framework text; the template
+        # supplies a localized fallback while preserving our route messages.
+        message = None if error.description == type(error).description else error.description
         if request.endpoint == "confirm_checkin" and g.get("user") and error.code in (400, 413):
             # The multipart parser may already have rejected the body. Recover
             # by GET from the matched route; never parse or replay the old form.
-            message = error.description if error.code == 400 else (
-                "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。")
+            if error.code == 413:
+                message = "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。"
             label = "Retry · 返回此點重新確認" if g.user.role == "executor" else "返回此點重新確認"
             return render_template("error.html", code=error.code, message=message,
                                    recovery_url=url_for("checkin", token=request.view_args["token"]),
                                    recovery_label=label), error.code
-        return render_template("error.html", code=error.code, message=error.description), error.code
+        # Preserve the protocol headers (particularly Allow for 405) while
+        # displaying the same recovery links as our other error pages.
+        response = error.get_response()
+        response.set_data(render_template("error.html", code=error.code, message=message))
+        return response
 
     @app.cli.command("init-db")
     def init_db():

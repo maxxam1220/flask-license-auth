@@ -79,6 +79,50 @@ def test_legacy_password_change_preserves_login_identifier_while_rotating_csrf(a
     assert client.get("/dashboard").location.startswith("/login")
 
 
+@pytest.mark.parametrize("target", ["manager", "inspector"])
+def test_successful_signin_replaces_only_the_active_login(application, seeded, target):
+    application.config["CSRF_ENABLED"] = True
+    browser, separate, previous = [application.test_client() for _ in range(3)]
+    manager = seeded["manager"]
+    old_csrf = sign_in(browser, manager, legacy=True)
+    sign_in(separate, manager)
+    binding = approve_browser(browser, manager)
+    old_cookie = browser.get_cookie("patrol_session").value
+    previous.set_cookie("patrol_session", old_cookie)
+    browser.post("/login", data={"csrf_token": old_csrf, "username": target, "password": "mistyped"})
+    assert browser.get("/admin/users").status_code == previous.get("/admin/users").status_code == 200
+    assert db.session.query(RevokedSession).count() == 0
+    new_csrf = sign_in(browser, seeded[target])
+    assert old_csrf != new_csrf and previous.get("/admin/users").location.startswith("/login")
+    previous.set_cookie("patrol_session", old_cookie)
+    action = previous.post("/admin/users/create", data={"username": "should-not-exist", "display_name": "Old form",
+        "csrf_token": old_csrf, "password": PASSWORD, "role": "safety"})
+    assert action.location.startswith("/login")
+    assert db.session.scalar(db.select(User.id).where(User.username == "should-not-exist")) is None
+    assert browser.post("/logout", data={"csrf_token": old_csrf}).status_code == 400
+    with browser.session_transaction() as session:
+        assert session["user_id"] == seeded[target].id
+    assert browser.post("/logout", data={"csrf_token": new_csrf}).location == "/login"
+    assert browser.post("/logout", data={"csrf_token": new_csrf}).location == "/login"
+    assert separate.get("/admin/users").status_code == 200
+    assert binding.status == "approved" and browser.get_cookie("patrol_device") is not None
+
+
+def test_expired_anonymous_login_form_keeps_scanned_point_for_manual_retry(application, seeded):
+    application.config["CSRF_ENABLED"] = True
+    browser = application.test_client()
+    next_page = "/c/" + seeded["daily"].qr_token
+    submitted = {"csrf_token": "expired-form", "username": "inspector", "password": PASSWORD, "next": next_page}
+    response = browser.post("/login", data=submitted)
+    html = response.get_data(as_text=True)
+    assert response.status_code == 400 and 'autocomplete="current-password"' in html and PASSWORD not in html
+    assert f'name="next" value="{next_page}"' in html
+    with browser.session_transaction() as session:
+        assert "user_id" not in session
+        fresh_csrf = session["csrf_token"]
+    assert browser.post("/login", data={**submitted, "csrf_token": fresh_csrf}).location == next_page
+
+
 def pg_browsers(application, *, legacy=False):
     application.config["CSRF_ENABLED"] = True
     first, second = application.test_client(), application.test_client()
@@ -90,6 +134,41 @@ def pg_browsers(application, *, legacy=False):
         csrf = sign_in(first, user, legacy)
     second.set_cookie("patrol_session", first.get_cookie("patrol_session").value)
     return first, second, csrf
+
+
+def test_switching_account_cannot_use_password_reset_during_handoff(postgres_app):
+    browser, _, csrf = pg_browsers(postgres_app)
+    with postgres_app.app_context():
+        worker = User(username="session-worker", display_name="Test", role="inspector", patrol_category="safety",
+                      active=True, must_change_password=False)
+        worker.set_password(PASSWORD)
+        db.session.add(worker)
+        db.session.commit()
+        worker_id = worker.id
+    ready, release = threading.Event(), threading.Event()
+
+    def wait_for_reset(state):
+        if has_request_context() and request.path == "/login" and state.is_select and getattr(state.statement, "_for_update_arg", None) is not None:
+            ready.set()
+            assert release.wait(10)
+
+    event.listen(Session, "do_orm_execute", wait_for_reset)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            switching = pool.submit(browser.post, "/login", data={"csrf_token": csrf, "username": "session-worker", "password": PASSWORD})
+            try:
+                assert ready.wait(10)
+                with postgres_app.app_context():
+                    worker = db.session.get(User, worker_id)
+                    worker.set_password("Test-Reset-While-Switching-123")
+                    worker.auth_version += 1
+                    db.session.commit()
+            finally:
+                release.set()
+            assert switching.result(timeout=10).status_code == 302
+    finally:
+        event.remove(Session, "do_orm_execute", wait_for_reset)
+    assert browser.get("/dashboard").location.startswith("/login")
 
 
 def test_postgres_late_response_cookie_cannot_restore_admin_session(postgres_app):

@@ -4,8 +4,25 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from models import AuditLog, DeviceBinding, Inspection
+from models import AuditLog, DeviceBinding, Inspection, RevokedSession
 from test_app import PASSWORD, application, approve_browser, db, login, rendered_contexts, seeded  # noqa: F401
+
+
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_opening_post_only_addresses_explains_how_to_recover_without_submitting(application, seeded, signed_in):
+    client = application.test_client()
+    if signed_in:
+        login(client)
+        approve_browser(client, seeded["inspector"])
+    for path in ("/logout", "/c/" + seeded["daily"].qr_token + "/confirm"):
+        response = client.get(path)
+        assert response.status_code == 405
+        assert set(response.allow) == {"POST", "OPTIONS"}
+        assert "這個網址無法直接操作" in response.text
+        assert ('href="/dashboard"' if signed_in else 'href="/login"') in response.text
+        with client.session_transaction() as current:
+            assert current.get("user_id") == (seeded["inspector"].id if signed_in else None)
+    assert db.session.query(RevokedSession).count() == db.session.query(Inspection).count() == 0
 
 
 @pytest.mark.parametrize("failure,status", [("expired_form", 400), ("oversized_upload", 413)])
