@@ -766,15 +766,16 @@ def create_app(config=None):
                                                   record if team_view and record.category == scope else None)
                     executed = executed_at.get((point.id, group_frequency, slot)) if group_mode == "two_stage" else None
                     stage_status = None
+                    expired = status == "pending" and local_now >= slot_deadline
                     if group_mode == "two_stage":
                         if record:
                             stage_status = "done"
-                        elif local_now >= slot_deadline:
+                        elif expired:
                             stage_status = "expired_unreviewed" if executed else "expired_unexecuted"
                         else:
                             stage_status = "awaiting_inspection" if executed else "awaiting_execution"
                     slots.append({"key": slot, "label": slot_label(slot), "status": status, "record": visible,
-                                  "due": bool(due or record), "stage_status": stage_status, "executed_at": executed})
+                                  "due": bool(due or record), "expired": expired, "stage_status": stage_status, "executed_at": executed})
                 if not slots:
                     continue
                 snapshot = max(records_by_slot.values(), key=lambda item: item.created_at, default=None)
@@ -799,7 +800,7 @@ def create_app(config=None):
                     visible_records = [slot["record"] for slot in slots if slot["record"]]
                     latest = max(visible_records, key=lambda item: item.created_at, default=None)
                     cards.append({"point": displayed_point, "status": status, "latest": latest, "period_label": period_label, "slots": slots,
-                                  "open_issue_count": issue_counts.get(point.id, 0)})
+                                  "missed_count": sum(s["expired"] for s in slots), "open_issue_count": issue_counts.get(point.id, 0)})
         total = sum(slot["due"] for card in cards for slot in card["slots"])
         done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
         recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc(), Inspection.id.desc()).limit(6)
@@ -816,6 +817,7 @@ def create_app(config=None):
             recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
+                               missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, device_state=device_status(), irregular_points=irregular_points, spot_points=irregular_points,
                                recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
                                missed_query_url=url_for("missed", date_from=period_day.isoformat(),
@@ -893,6 +895,14 @@ def create_app(config=None):
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None
         stage, allowed, notice = checkin_stage(point, first)
         existing = prior_inspection(point, key, slot, day) if stage != "execute" else None
+        receipt_url = None
+        saved = first if stage == "execute" else existing
+        if saved and saved.user_id == g.user.id and (stage == "execute" or can_read_inspection(g.user, saved)):
+            saved_day = local_dt(saved.created_at).date().isoformat()
+            list_url = url_for("records", stage="execution" if stage == "execute" else "inspection",
+                               date_from=saved_day, date_to=saved_day)
+            receipt_url = (url_for("execution_success", execution_id=saved.id, return_to=list_url) if stage == "execute"
+                           else url_for("checkin_success", record_id=saved.id, return_to=list_url))
         if existing and not can_access_category(g.user, existing.category):
             # The obligation is shared even after a point changes teams. Only
             # reveal that it is satisfied, never the old team's actor or time.
@@ -905,7 +915,7 @@ def create_app(config=None):
                 existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
-                               stage=stage, can_confirm=allowed and not existing, stage_notice=notice,
+                               stage=stage, can_confirm=allowed and not existing, stage_notice=notice, receipt_url=receipt_url,
                                long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
                                first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
                                execution_time=first.created_at if first else None,
@@ -1388,7 +1398,9 @@ def create_app(config=None):
         if g.user.role != "admin" and not can_view_general_team(g.user):
             user_id = str(g.user.id)
         elif user_id:
-            query = query.where(model.user_id == parse_id(user_id))
+            selected_id = parse_id(user_id)
+            query = query.where(model.user_id == selected_id)
+            user_id = str(selected_id)
         if stage == "execution":
             # Only fetch completion status; the inspector's name and report are private.
             query = query.add_columns(select(Inspection.id).where(Inspection.execution_id == PatrolExecution.id).exists())
@@ -1422,6 +1434,18 @@ def create_app(config=None):
             users = [SimpleNamespace(id=user_id, display_name=name or f"人員 {user_id}")
                      for user_id, name in db.session.execute(select(ranked.c.user_id, ranked.c.user_name)
                          .where(ranked.c.position == 1).order_by(ranked.c.user_name, ranked.c.user_id))]
+        # The same person may only have records in the other stage. Keep their
+        # option selected so the next form submission cannot widen to the team.
+        if filters["user_id"] and (g.user.role == "admin" or can_view_general_team(g.user)):
+            selected_id = int(filters["user_id"])
+            if all(person.id != selected_id for person in users):
+                name = None
+                if can_view_general_team(g.user):
+                    other = Inspection if stage == "execution" else PatrolExecution
+                    name = db.session.scalar(select(other.user_name).where(
+                        other.category == "general", other.user_id == selected_id, other.user_name != ""
+                    ).order_by(other.created_at.desc(), other.id.desc()).limit(1))
+                users.append(SimpleNamespace(id=selected_id, display_name=name or f"人員 {selected_id}"))
         storage = {}
         if g.user.role == "admin":
             storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
@@ -1924,6 +1948,15 @@ def create_app(config=None):
     @app.errorhandler(413)
     @app.errorhandler(429)
     def show_error(error):
+        if request.endpoint == "confirm_checkin" and g.get("user") and error.code in (400, 413):
+            # The multipart parser may already have rejected the body. Recover
+            # by GET from the matched route; never parse or replay the old form.
+            message = error.description if error.code == 400 else (
+                "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。")
+            label = "Retry · 返回此點重新確認" if g.user.role == "executor" else "返回此點重新確認"
+            return render_template("error.html", code=error.code, message=message,
+                                   recovery_url=url_for("checkin", token=request.view_args["token"]),
+                                   recovery_label=label), error.code
         return render_template("error.html", code=error.code, message=error.description), error.code
 
     @app.cli.command("init-db")

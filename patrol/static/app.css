@@ -445,6 +445,9 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stat-detail-link:hover, .point-own-issues-link:hover { text-decoration: underline; }
 .dashboard-missed-help { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -8px 0 14px; color: var(--muted); font-size: 13px; }
 .dashboard-missed-help p { margin: 0; }
+.badge-missed, .slot-missed { background: #fff1e9; color: #87330e; }
+.slot-card.slot-missed { border-color: #eac3aa; }
+.slot-card.slot-missed > div > span { color: #87330e; }
 .dashboard-missed-help .stat-detail-link { flex-shrink: 0; }
 .patrol-point-tools { display: grid; justify-items: end; flex-shrink: 0; }
 .patrol-point-tools .text-link { min-height: 44px; font-size: 13px; }
@@ -546,7 +549,7 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 [data-qr-start][hidden], [data-qr-retry][hidden], .scanner-dialog:not([open]) { display: none; }
 .scan-trigger-next { width: 100%; min-height: 48px; margin-top: 18px; font-size: 15px; }
 .scanner-draft-actions { display: grid; gap: 8px; margin-top: 14px; }
-.scanner-draft-actions[hidden] { display: none; }
+.scanner-draft-actions[hidden], .scanner-draft-actions [hidden] { display: none; }
 .scanner-draft-actions .button { min-height: 44px; white-space: normal; }
 .scanner-dialog:has([data-qr-draft-actions]:not([hidden])) :is(.scanner-preview, #patrol-scanner-help, .scanner-fallback) { display: none; }
 .scanner-dialog:has([data-qr-draft-actions]:not([hidden])) .scanner-body { display: block; }

@@ -213,10 +213,17 @@
             if (hasDraft()) {
               stopCamera();
               if (draftActions && keep && discard) {
-                pendingPath = path;
+                // Validation errors render the same check-in at its POST URL.
+                const samePoint = location.pathname === path || location.pathname === path + '/confirm';
+                discard.hidden = samePoint;
                 draftActions.hidden = false;
-                message('已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。',
-                  'Leave this page and discard your changes?');
+                if (samePoint) {
+                  message('這是正在填寫的同一個點位，請返回表單繼續打卡。', 'This point is already open. Keep editing to finish your check-in.');
+                } else {
+                  pendingPath = path;
+                  message('已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。',
+                    'Leave this page and discard your changes?');
+                }
                 keep.focus();
               } else {
                 message('目前頁面有尚未送出的內容。請關閉掃描視窗，處理完畢後再掃描。',

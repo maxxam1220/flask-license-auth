@@ -46,6 +46,34 @@ def payload(c, url):
     return data
 
 
+def test_rescan_can_reopen_own_receipts_without_exposing_another_executors_receipt(application, monkeypatch):
+    now = FIXED_NOW
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    executor, inspector, colleague, other_executor, url, _, _ = team(application)
+    worker = db.session.scalar(db.select(User).where(User.username == "admin"))
+    worker.role, worker.patrol_category = "executor", "general"
+    point = db.session.scalar(db.select(Point).where(Point.qr_token == url[3:]))
+    point.frequency = point.schedules[0].frequency = "weekly"
+    db.session.commit()
+
+    execution = executor.post(url + "/confirm", data=payload(executor, url))
+    now += timedelta(days=1)
+    scan = executor.get(url)
+    assert execution.location + "?" in scan.text
+    assert execution.location not in other_executor.get(url).text
+    assert execution.location not in inspector.get(url).text
+    href = re.search(r'href="(' + re.escape(execution.location) + r'\?[^"]+)"', scan.text).group(1)
+    receipt = executor.get(href)
+    assert receipt.status_code == 200 and "執行簽到收據" in receipt.text and "Checked in" not in receipt.text
+    review = inspector.post(url + "/confirm", data=payload(inspector, url))
+    assert review.location + "?" in inspector.get(url).text
+    assert review.location not in colleague.get(url).text
+    assert "inspection-form" in colleague.get(url).text
+    now += timedelta(days=7)
+    assert execution.location not in executor.get(url).text
+    assert db.session.query(PatrolExecution).count() == db.session.query(Inspection).count() == 1
+
+
 @pytest.mark.parametrize("legacy_optional", [False, True])
 def test_transferred_shared_slot_recognises_scheduled_spot_but_not_optional_history(application, monkeypatch, legacy_optional):
     now = FIXED_NOW

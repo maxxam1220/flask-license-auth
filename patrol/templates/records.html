@@ -14,7 +14,12 @@
 {% set stages = [('execution','第一階段簽到'),('inspection','我的直接簽到')] if current_user.role == 'executor' else [('inspection','巡檢與直接簽到'),('execution','第一階段簽到')] if can_view_general_team else [('inspection','巡檢紀錄'),('execution','執行紀錄')] %}
 <nav class="category-tabs record-stage-tabs" aria-label="紀錄階段">
   {% for value,label in stages %}
-  <a href="{{ url_for('records', stage=value, date_from=filters.get('date_from'), date_to=filters.get('date_to'), floor=filters.get('floor') or none, frequency=(filters.get('frequency') or none) if can_filter_people else none, category=(filters.get('category') or none) if is_patrol_admin else none, user_id=(filters.get('user_id') or none) if is_patrol_admin else none) }}" class="{{ 'selected' if value == (stage or 'inspection') }}" aria-current="{{ 'page' if value == (stage or 'inspection') else 'false' }}">{{ label }}</a>
+  <a href="{{ url_for('records', stage=value, date_from=filters.get('date_from'), date_to=filters.get('date_to'),
+                     floor=filters.get('floor') or none, frequency=(filters.get('frequency') or none) if can_filter_people or value == stage else none,
+                     category=(filters.get('category') or none) if is_patrol_admin else none,
+                     user_id=(filters.get('user_id') or none) if can_filter_people else none,
+                     abnormal=(filters.get('abnormal') or none) if value == 'inspection' else none) }}"
+     class="{{ 'selected' if value == (stage or 'inspection') }}" aria-current="{{ 'page' if value == (stage or 'inspection') else 'false' }}">{{ label }}</a>
   {% endfor %}
 </nav>
 {% endif %}

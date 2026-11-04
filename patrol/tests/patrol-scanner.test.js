@@ -70,7 +70,7 @@ function simulate(options = {}) {
     }
   });
   const window = element({
-    document, URL, location: { origin, assign(value) { destinations.push(value); } },
+    document, URL, location: { origin, pathname: options.pathname || '/dashboard', assign(value) { destinations.push(value); } },
     navigator: { mediaDevices: options.unsupported ? undefined : {
       getUserMedia(configuration) {
         constraints.push(configuration);
@@ -205,6 +205,29 @@ test('backgrounding while a draft decision is pending prevents a late discard fr
   s.click(s.discard);
   assert.equal(s.dialog.open, false);
   assert.deepEqual(s.destinations, []);
+});
+
+test('rescanning the current report preserves notes and photos, including after a rejected POST', async () => {
+  for (const pathname of ['/c/current', '/c/current/confirm']) {
+    let scanned = '/c/current';
+    const forms = [post(field('note', '等待確認'), { type: 'file', name: 'photos', files: [{}] })];
+    const s = simulate({ pathname, forms, detect: () => [qr(scanned)] });
+    s.click(s.start);
+    await nextTurn();
+    assert.equal(s.track.stopped, true);
+    assert.equal(s.draft.hidden, false);
+    assert.equal(s.discard.hidden, true);
+    assert.match(s.status.textContent, /同一個點位/);
+    s.click(s.discard);
+    assert.deepEqual(s.destinations, []);
+    s.click(s.keep);
+    scanned = '/c/different';
+    s.click(s.start);
+    await nextTurn();
+    assert.equal(s.discard.hidden, false);
+    s.click(s.discard);
+    assert.deepEqual(s.destinations, [scanned]);
+  }
 });
 
 test('does not start a camera during an in-flight form submission', async () => {

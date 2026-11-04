@@ -114,17 +114,16 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
         if index < 0 <= last:
             continue
         schedule = schedules[index] if index >= 0 else None
-        if for_missed:
-            # An ordinary disable applies the whole day. A retirement instead
-            # preserves obligations that expired before the point was retired,
-            # also after a subsequent inactive rename/restore on the same day.
-            while index > 0 and dates[index] == day and not _value(schedules[index], "active", True):
-                retired = _value(schedules[index], "retired_at")
-                if retired is not None:
-                    if deadline > _utc(retired):
-                        break
-                    schedule = schedules[index - 1]
-                index -= 1
+        # Retirement preserves already-expired slots on both the report and the
+        # dashboard, even after an inactive rename/restore later the same day.
+        # An ordinary disable with no retirement still applies to the whole day.
+        while index > 0 and dates[index] == day and not _value(schedules[index], "active", True):
+            retired = _value(schedules[index], "retired_at")
+            if retired is not None:
+                if deadline > _utc(retired):
+                    break
+                schedule = schedules[index - 1]
+            index -= 1
         snapshot = schedule_snapshot(point, schedule)
         frequency = snapshot["frequency"]
         if not snapshot["active"] or snapshot["legacy_unscheduled"] or frequency not in FREQUENCIES or frequency == "irregular":

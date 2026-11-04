@@ -238,17 +238,22 @@
       const feedback = container.querySelector('[data-photo-feedback]');
       const previewList = container.querySelector('[data-photo-previews]');
       if (!input || !feedback || !previewList) return;
-      const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+      const supportedTypes = new Set(['image/jpeg', 'image/jpg', 'image/pjpeg', 'image/png', 'image/x-png', 'image/webp', 'image/heic', 'image/heif']);
       const maxSize = 8 * 1024 * 1024;
       let previewUrls = [];
       let canRemove = typeof DataTransfer === 'function';
+
+      function supportsPhoto(file) {
+        const type = file.type.toLowerCase();
+        return supportedTypes.has(type) || ((!type || type === 'application/octet-stream') && /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name));
+      }
 
       function validatePhotos(files) {
         let message = '';
         if (files.length > 3) message = `目前選了 ${files.length} 張照片，最多只能附 3 張，請移除多餘照片或重新選擇。`;
         else if (files.some(file => file.size === 0)) message = '有照片是空白檔案，請移除並重新選擇。';
         else if (files.some(file => file.size > maxSize)) message = '有照片超過 8 MB，請移除或更換較小的照片。';
-        else if (files.some(file => !supportedTypes.has(file.type.toLowerCase()) && !((!file.type || file.type === 'application/octet-stream') && /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)))) message = '請選擇 JPG、PNG、WebP 或 HEIC 照片。';
+        else if (files.some(file => !supportsPhoto(file))) message = '請選擇 JPG、PNG、WebP 或 HEIC 照片。';
         input.setCustomValidity(message);
         input.setAttribute('aria-invalid', message ? 'true' : 'false');
         feedback.textContent = message || (files.length ? `已選 ${files.length} 張，確認打卡時才會上傳。` : '');
@@ -273,7 +278,7 @@
           // Preview only recognised image formats; the server validates actual file contents.
           if (file.size > maxSize) placeholder.textContent = '超過 8 MB，請更換照片';
           else if (file.size === 0) placeholder.textContent = '空白檔案，請重新選擇';
-          else if (supportedTypes.has(file.type.toLowerCase()) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)) {
+          else if (supportsPhoto(file)) {
             const image = document.createElement('img');
             const url = URL.createObjectURL(file);
             previewUrls.push(url);

@@ -335,7 +335,7 @@ def test_dashboard_creation_cutoff_preserves_schedule_start_not_due(application,
 @pytest.mark.parametrize('created_hour,complete_pm,expected_progress,expected_badge', [
     (7, False, '已完成 0 / 1 次', '待巡檢'),
     (7, True, '已完成 1 / 1 次', '已完成'),
-    (3, False, '已完成 0 / 2 次', '待巡檢'),
+    (3, False, '已完成 0 / 2 次', '漏打 1 次'),
 ])
 def test_daily2_dashboard_footer_uses_eligible_slots(application, seeded, monkeypatch,
                                                     created_hour, complete_pm, expected_progress, expected_badge):
@@ -360,5 +360,5 @@ def test_daily2_dashboard_footer_uses_eligible_slots(application, seeded, monkey
     cards = re.findall(r'<article class="point-card[^\"]*">(.*?)</article>', response.get_data(as_text=True), re.S)
     assert len(cards) == 1
     assert f'<small>{expected_progress}</small>' in cards[0]
-    badge_class = 'badge-done' if complete_pm else 'badge-todo'
+    badge_class = 'badge-done' if complete_pm else 'badge-missed' if created_hour == 3 else 'badge-todo'
     assert f'<span class="badge {badge_class}">{expected_badge}</span>' in cards[0]

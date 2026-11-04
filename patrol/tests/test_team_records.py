@@ -9,6 +9,7 @@ from app import normalise_return_to
 from issues import open_issue_for
 from models import DeviceBinding, Inspection, InspectionPhoto, IssueEvent, PatrolExecution, User, db
 from test_app import application, rendered_contexts, seeded  # noqa: F401
+from test_frontend_navigation import Anchors
 from test_workflow_reports import context, csv_rows, open_as, point, values, workflow  # noqa: F401
 
 
@@ -92,6 +93,32 @@ def test_general_reads_both_stages_and_saved_names_without_exposing_other_catego
     visit = client.get(f"/records/{r.direct.id}", query_string={"return_to": reports_url})
     assert visit.status_code == 302 and parse_qs(urlsplit(visit.location).query)["return_to"] == [reports_url]
     assert context(application, client, visit.location)["stage"] == "visit"
+
+
+def test_team_stage_tabs_preserve_person_filters_in_results_form_and_export(application, reports):
+    r = reports
+    client = open_as(application, r.reader)
+    listing = client.get(f"/records?{DATES}&floor=1&user_id={r.author.id}&abnormal=1")
+    links = Anchors(listing.text).links
+    def stage_link(links, stage):
+        return next(link["href"] for link in links if link.get("aria-current") in ("page", "false")
+                    and parse_qs(urlsplit(link["href"]).query).get("stage") == [stage])
+
+    same = stage_link(links, "inspection")
+    assert parse_qs(urlsplit(same).query)["abnormal"] == ["1"]
+    assert [row.id for row in context(application, client, same)["records"]] == [r.incident.id]
+    target = stage_link(links, "execution")
+    assert parse_qs(urlsplit(target).query) == dict(date_from=["2026-11-01"], date_to=["2026-11-03"],
+                                                    floor=["1"], stage=["execution"], user_id=[str(r.author.id)])
+    assert context(application, client, target)["executions"] == []
+    execution_page = client.get(target)
+    assert f'<option value="{r.author.id}" selected>{r.incident.user_name}</option>' in execution_page.text
+    assert r.author.display_name not in execution_page.text
+    export = next(link["href"] for link in Anchors(execution_page.text).links
+                  if urlsplit(link["href"]).path == "/records/export")
+    assert len(csv_rows(client.get(export))) == 1
+    back = stage_link(Anchors(execution_page.text).links, "inspection")
+    assert {row.id for row in context(application, client, back)["records"]} == {r.incident.id, r.historical.id}
 
 
 def test_colleague_can_read_incident_and_photo_but_cannot_change_issue(application, reports):

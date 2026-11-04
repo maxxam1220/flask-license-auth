@@ -29,6 +29,8 @@
       <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
       {% if not simple_signin %}<a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>{% endif %}
     </div>
+    {% elif receipt_url %}
+    <div class="checkin-quick-action"><a class="button button-secondary button-full button-large" href="{{ receipt_url }}">{{ icon('list') }}{% if simple_signin %}<span lang="en">View receipt</span> 查看收據{% else %}查看我的巡檢收據{% endif %}</a></div>
     {% endif %}
     {% if not can_confirm and not existing and point.active and stage_notice and not (long_period and execute and execution_time) %}
     <div class="workflow-guide stage-notice" role="status"><strong>{% if execute and execution_time %}<span lang="en">Step 1 complete</span> · 已有執行簽到{% else %}{{ '目前無法送出' ~ ('簽到' if simple_signin else '巡檢') }}{% endif %}</strong><p>{{ stage_notice }}</p>
@@ -81,7 +83,7 @@
             <label id="inspection-photo-label" for="inspection-photos">巡檢照片 <span class="optional-label">選填</span></label>
             <label class="photo-picker-box" for="inspection-photos">
               <span class="photo-picker-caption">{{ icon('camera') }}<span><strong>選擇現場照片</strong><small>可從相簿選擇，或使用手機提供的拍照選項。</small></span></span>
-              <input id="inspection-photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" multiple aria-labelledby="inspection-photo-label" aria-describedby="photo-guidance photo-feedback" data-photo-input>
+              <input id="inspection-photos" name="photos" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif" multiple aria-labelledby="inspection-photo-label" aria-describedby="photo-guidance photo-feedback" data-photo-input>
             </label>
             <p id="photo-guidance" class="photo-guidance">最多 3 張，每張不超過 8 MB。支援 JPG、PNG、WebP、HEIC。重新選取會取代目前選擇。</p>
             <p id="photo-feedback" class="photo-feedback" role="status" aria-live="polite" data-photo-feedback></p>

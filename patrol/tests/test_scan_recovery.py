@@ -1,10 +1,39 @@
 """Recovery when a mobile patrol form outlives its login or displayed data."""
+from io import BytesIO
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 from models import AuditLog, DeviceBinding, Inspection
 from test_app import PASSWORD, application, approve_browser, db, login, rendered_contexts, seeded  # noqa: F401
+
+
+@pytest.mark.parametrize("failure,status", [("expired_form", 400), ("oversized_upload", 413)])
+def test_rejected_confirm_can_retry_at_same_point_without_scanning_again(application, seeded, failure, status):
+    client = application.test_client()
+    login(client)
+    approve_browser(client, seeded["inspector"])
+    path = "/c/" + seeded["daily"].qr_token
+    with rendered_contexts(application) as contexts:
+        assert client.get(path).status_code == 200
+    saved = contexts[-1][1]
+    with client.session_transaction() as session:
+        csrf_token = session["csrf_token"]
+    fields = {"csrf_token": csrf_token, "frequency": "daily", "period_key": saved["current_period_key"],
+              "slot": saved["current_slot"], "point_revision": saved["point_revision"]}
+    application.config["CSRF_ENABLED"] = True
+    application.config["MAX_CONTENT_LENGTH"] = 2048
+    invalid = {"csrf_token": "expired"} if failure == "expired_form" else {"photos": (BytesIO(b"x" * 3000), "large.jpg")}
+    rejected = client.post(path + "/confirm", data=fields | invalid)
+    assert rejected.status_code == status and f'href="{path}"' in rejected.text
+    assert "返回此點重新確認" in rejected.text
+    if failure == "oversized_upload":
+        assert "照片" in rejected.text and "8 MB" in rejected.text
+    assert 'id="inspection-form"' in client.get(path).text
+    assert db.session.query(Inspection).count() == 0
+    receipt = client.post(path + "/confirm", data=fields)
+    assert receipt.status_code == 302 and receipt.location.startswith("/checkins/")
+    assert db.session.query(Inspection).count() == 1
 
 
 @pytest.mark.parametrize("operation", ["request", "revoke"])
