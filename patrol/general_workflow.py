@@ -1,9 +1,43 @@
-"""First-stage storage. Callers lock and revalidate the actor, binding and point before writing."""
-from datetime import timezone
+"""Two-stage attendance and the status of its original execution period."""
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import select
 
 from models import Inspection, PatrolExecution, db
+from missed import TAIPEI, period_bounds
+
+
+EXECUTION_STATUS_LABELS = {"done": "已巡檢", "pending": "待巡檢", "expired": "已到期、未巡檢",
+                           "unknown": "未巡檢（期間未明）"}
+
+
+def execution_deadline(frequency, period_key, slot):
+    """Return the original Taipei slot's exclusive deadline, or None for an invalid snapshot."""
+    if frequency not in ("daily", "daily2", "weekly", "monthly", "irregular"):
+        return None
+    if slot not in (("am", "pm") if frequency == "daily2" else ("any",)):
+        return None
+    try:
+        day = date.fromisoformat(period_key)
+        start, end = period_bounds(day, frequency)
+        if start != day or day.isoformat() != period_key:
+            return None
+        if slot == "am":
+            return datetime.combine(day, time(12), TAIPEI)
+        return datetime.combine(end + timedelta(days=1), time.min, TAIPEI)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def execution_review_status(frequency, period_key, slot, reviewed, instant):
+    if reviewed:
+        return "done"
+    deadline = execution_deadline(frequency, period_key, slot)
+    if deadline is None:
+        return "unknown"
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return "expired" if instant >= deadline else "pending"
 
 
 def execution_in_slot(point, key, slot):

@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import io
 import json
-from calendar import monthrange
 import os
 from pathlib import Path
 import re
@@ -29,9 +28,11 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
-from general_workflow import execution_in_slot, new_execution, personal_inspection_in_slot
+from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execution_in_slot, execution_review_status,
+                              new_execution, personal_inspection_in_slot)
 from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
+from missed import period_bounds
 from images import PhotoValidationError, process_uploads
 from patrol_access import can_access_category, can_read_inspection, can_view_general_team, patrol_scope
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
@@ -79,15 +80,22 @@ def management_state(item):
 
 
 def period_for(point, instant):
-    local_day = local_dt(instant).date()
-    if point.frequency == "weekly":
-        local_day -= timedelta(days=local_day.weekday())
-    elif point.frequency == "monthly":
-        local_day = local_day.replace(day=1)
-    start = datetime.combine(local_day, time.min, TAIPEI)
-    days = {"weekly": 7, "monthly": monthrange(local_day.year, local_day.month)[1]}.get(point.frequency, 1)
-    end = start + timedelta(days=days)
-    return local_day.isoformat(), start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    first, last = period_bounds(local_dt(instant).date(), point.frequency)
+    start = datetime.combine(first, time.min, TAIPEI)
+    end = datetime.combine(last + timedelta(days=1), time.min, TAIPEI)
+    return first.isoformat(), start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def handoff_period(frequency, period_key):
+    """Describe the saved weekly/monthly first stage, including on historical receipts."""
+    if frequency not in ("weekly", "monthly"):
+        return None
+    deadline = execution_deadline(frequency, period_key, "any")
+    if deadline is None:
+        return None
+    first = date.fromisoformat(period_key)
+    last = deadline.date() - timedelta(days=1)
+    return {"start": first, "end": last}
 
 
 def slot_for(point, instant):
@@ -652,9 +660,10 @@ def create_app(config=None):
     @app.get("/dashboard")
     @login_required
     def dashboard():
-        from missed import VIEW_FREQUENCIES, period_bounds, schedule_snapshot, schedule_timeline, slot_plans
+        from missed import VIEW_FREQUENCIES, schedule_snapshot, schedule_timeline, slot_plans
         instant = now_utc()
-        today = local_dt(instant).date()
+        local_now = local_dt(instant)
+        today = local_now.date()
         selected = parse_date(request.args.get("date"), today)
         view = request.args.get("view", "daily")
         if view not in VIEW_FREQUENCIES:
@@ -758,7 +767,12 @@ def create_app(config=None):
                     executed = executed_at.get((point.id, group_frequency, slot)) if group_mode == "two_stage" else None
                     stage_status = None
                     if group_mode == "two_stage":
-                        stage_status = "done" if record else "awaiting_inspection" if executed else "awaiting_execution"
+                        if record:
+                            stage_status = "done"
+                        elif local_now >= slot_deadline:
+                            stage_status = "expired_unreviewed" if executed else "expired_unexecuted"
+                        else:
+                            stage_status = "awaiting_inspection" if executed else "awaiting_execution"
                     slots.append({"key": slot, "label": slot_label(slot), "status": status, "record": visible,
                                   "due": bool(due or record), "stage_status": stage_status, "executed_at": executed})
                 if not slots:
@@ -846,7 +860,8 @@ def create_app(config=None):
                 return "visit", executor_can_scan(point), ""
             return "inspect", g.user.role in ("inspector", "admin"), ""
         if g.user.role == "executor":
-            return "execute", first is None, "本時段已登記執行，請由總務巡檢員接續巡檢。" if first else ""
+            period = "本週期" if point.frequency in ("weekly", "monthly") else "本時段"
+            return "execute", first is None, f"{period}已登記執行，不需重複簽到。" if first else ""
         if g.user.role != "inspector" or patrol_scope(g.user) != "general":
             return "inspect", False, "管理員僅可管理此點，兩段打卡須由對應角色完成。"
         if not first:
@@ -891,6 +906,8 @@ def create_app(config=None):
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
                                stage=stage, can_confirm=allowed and not existing, stage_notice=notice,
+                               long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
+                               first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
                                execution_time=first.created_at if first else None,
                                personal_day=day.isoformat(),
                                spot_ticket=spot_ticket(point, key, slot, day) if point.workflow_mode == "spot" else "",
@@ -954,8 +971,6 @@ def create_app(config=None):
             return checkin_form(get_point(token), token, message, status)
         mode = point.workflow_mode
         confirmed_day = request.form.get("personal_day")
-        if mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly")) and confirmed_day != day.isoformat():
-            return form_error("打卡日期已變更，請重新確認今天的打卡。", 409)
         if request.form.get("workflow_mode", "standard") != mode:
             return form_error("打卡方式已變更，請依目前顯示的流程重新確認。", 409)
         if request.form.get("frequency") != point.frequency:
@@ -982,7 +997,14 @@ def create_app(config=None):
             if stage == "visit":
                 return form_error("直接簽到只記錄人員、點位與時間。")
             return form_error("執行登記不接受巡檢回報內容；備註、照片及異常請於巡檢階段填寫。")
-        if stage == "execute" and first and first.user_id == g.user.id:
+        own_execution = stage == "execute" and first is not None and first.user_id == g.user.id
+        requires_day = mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly"))
+        if requires_day and confirmed_day != day.isoformat():
+            # A delayed retry may read the actor's original shared execution
+            # receipt. A stale form must never create a new day's attendance.
+            if not own_execution or confirmed_day != local_dt(first.created_at).date().isoformat():
+                return form_error("打卡日期已變更，請重新確認今天的打卡。", 409)
+        if own_execution:
             return redirect(url_for("execution_success", execution_id=first.id))
         if not allowed:
             return form_error(notice, 409)
@@ -1027,7 +1049,7 @@ def create_app(config=None):
                 if not first:
                     raise
                 if first.user_id != g.user.id:
-                    return form_error("本時段已有執行紀錄。", 409)
+                    return form_error(checkin_stage(point, first)[2], 409)
             session.pop("after_binding", None)
             return redirect(url_for("execution_success", execution_id=first.id))
         record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(final_instant),
@@ -1067,7 +1089,11 @@ def create_app(config=None):
         if (g.user.role != "admin" and not can_view_general_team(g.user)
                 and (g.user.role != "executor" or record.user_id != g.user.id)):
             abort(403)
-        return render_template("checkin_success.html", record=record, stage="execute", finalized=execution_reviewed(record),
+        reviewed = execution_reviewed(record)
+        instant = now_utc()
+        return render_template("checkin_success.html", record=record, stage="execute", finalized=reviewed,
+                               review_status=execution_review_status(record.frequency, record.period_key, record.slot, reviewed, instant),
+                               long_period=handoff_period(record.frequency, record.period_key),
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="execution"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category))
@@ -1078,6 +1104,7 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         require_inspection_access(record)
         return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
+                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="inspection"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category),
@@ -1107,6 +1134,7 @@ def create_app(config=None):
         source = request.form.get("return_to") if request.method == "POST" else request.args.get("return_to")
         back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
+                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
                                issue_action_note=request.form.get("note", ""), issue_version=issue_version(record.issue),
                                can_manage_issue=g.user.role == "admin" or (g.user.role == "inspector" and record.user_id == g.user.id),
                                can_reopen_issue=g.user.role == "admin",
@@ -1399,9 +1427,15 @@ def create_app(config=None):
             storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
                        "photo_storage_limit": app.config["PHOTO_STORAGE_LIMIT_BYTES"]}
         rows = rows[:1000]
+        execution_states = {}
+        if stage == "execution":
+            instant = now_utc()
+            execution_states = {row.id: execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
+                                for row, reviewed in rows}
         return render_template("records.html", records=rows if stage == "inspection" else [],
                                executions=[row for row, _ in rows] if stage == "execution" else [],
                                reviewed_execution_ids={row.id for row, reviewed in rows if reviewed} if stage == "execution" else set(),
+                               execution_states=execution_states, execution_state_labels=EXECUTION_STATUS_LABELS,
                                stage=stage, users=users, filters=filters, **storage)
 
     def write_record_csv(writer, query, filters):
@@ -1409,12 +1443,14 @@ def create_app(config=None):
             value = str(value)
             return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else value
         if filters["stage"] == "execution":
+            instant = now_utc()
             writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "巡檢狀態"])
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
+                state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
                 writer.writerow([cell(reporter_name(row)), point.floor, cell(point.code), cell(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                                 category_label(row.category), slot_label(row.slot), "已巡檢" if reviewed else "待巡檢"])
+                                 category_label(row.category), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]])
         elif g.user.role == "executor":
             writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"])
             for row in db.session.scalars(query.execution_options(yield_per=500)):

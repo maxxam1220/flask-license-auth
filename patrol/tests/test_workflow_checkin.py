@@ -233,6 +233,33 @@ def test_weekly_shared_execution_but_personal_checkins_reset_daily(application, 
     assert 'id="inspection-form"' not in a.get(url).text
 
 
+def test_cross_year_handoff_receipts_keep_original_week_after_frequency_change(application, monkeypatch):
+    current = datetime(2026, 12, 31, 8, tzinfo=timezone.utc)
+    monkeypatch.setattr(patrol, "now_utc", lambda: current)
+    executor, inspector, second_inspector, _, url, _, _ = team(application)
+    point = db.session.scalar(db.select(Point).where(Point.workflow_mode == "two_stage"))
+    point.frequency = point.schedules[0].frequency = "weekly"
+    db.session.commit()
+    first = executor.post(url + "/confirm", data=payload(executor, url))
+    current += timedelta(days=1)
+    final = inspector.post(url + "/confirm", data=payload(inspector, url))
+    assert first.status_code == final.status_code == 302
+    with rendered_contexts(application) as seen:
+        assert second_inspector.get(url).status_code == 200
+    assert seen[-1][1]["first_reviewed"] and seen[-1][1]["can_confirm"]
+
+    current = datetime(2027, 1, 4, 0, tzinfo=patrol.TAIPEI)
+    point.frequency = "daily"
+    db.session.commit()
+    detail = f"/records/{db.session.scalar(db.select(Inspection.id))}"
+    for receipt in (first.location, final.location, detail):
+        with rendered_contexts(application) as seen:
+            assert inspector.get(receipt).status_code == 200
+        assert seen[-1][1]["long_period"] == {"start": date(2026, 12, 28),
+                                             "end": date(2027, 1, 3)}
+    assert "這兩筆打卡屬於同一週" in inspector.get(detail).text
+
+
 def test_monthly_and_irregular_direct_checks_without_execution(application, monkeypatch):
     now = FIXED_NOW.replace(day=29)
     monkeypatch.setattr(patrol, "now_utc", lambda: now)

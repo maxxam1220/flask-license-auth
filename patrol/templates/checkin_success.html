@@ -4,6 +4,7 @@
 {% from '_scanner.html' import scanner_button %}
 {% set executed = stage == 'execute' %}
 {% set visit = stage == 'visit' %}
+{% set phase_status = review_status|default('done' if finalized else 'pending') %}
 {% set own_record = record.user_id == current_user.id %}
 {% set reviewing = not own_record or (back_url and request.args.get('return_to')) %}
 {% set title = ('直接簽到收據' if visit else '執行簽到收據' if executed else '巡檢收據') if reviewing else ('直接簽到完成' if visit else '執行簽到完成' if executed else '打卡成功') %}
@@ -14,15 +15,17 @@
   <span class="success-emblem">{{ icon('check') }}</span>
   <span class="eyebrow">{{ '不定期 · 簽到紀錄已儲存' if visit else '第一階段 · 簽到紀錄已儲存' if executed else '巡檢紀錄已儲存' }}</span>
   <h1>{{ title }}</h1>
-  <p class="checkin-location">{% if reviewing %}{{ reporter_name(record) }} 於 {{ record.created_at|localtime }} {{ '完成直接簽到' if visit else '完成第一階段簽到' if executed else '完成巡檢' }}。{% elif visit %}已登記本次到場時間，可繼續掃描下一個點位。{% elif executed %}{{ '本時段已完成巡檢。' if finalized else '待巡檢，由總務巡檢員掃描同一點位完成第二階段。' }}{% elif record.execution %}本人巡檢已完成，這筆紀錄已連結同一時段的執行簽到。{% elif record.workflow_mode == 'spot' %}本人單段巡檢已儲存，其他人員仍可在此點打卡。{% elif record.is_abnormal %}本次異常回報與巡檢紀錄已儲存。{% else %}辛苦了，本次巡檢已完成。{% endif %}</p>
+  <p class="checkin-location">{% if reviewing %}{{ reporter_name(record) }} 於 {{ record.created_at|localtime }} {{ '完成直接簽到' if visit else '完成第一階段簽到' if executed else '完成巡檢' }}。{% elif visit %}已登記本次到場時間，可繼續掃描下一個點位。{% elif executed %}{% if phase_status == 'done' %}本期已完成第二階段巡檢。{% elif phase_status == 'expired' %}本期已到期，沒有第二階段巡檢紀錄。{% elif phase_status == 'unknown' %}已保留執行簽到，無法確認此筆紀錄的有效期間。{% elif long_period %}已完成第一階段。總務巡檢員可在 {{ long_period.end }} 當日結束前接續，無須同一天到場。{% else %}待巡檢，由總務巡檢員掃描同一點位完成第二階段。{% endif %}{% elif record.execution %}本人巡檢已完成，已連結{{ '本週期' if long_period else '同一時段' }}的執行簽到。{% elif record.workflow_mode == 'spot' %}本人單段巡檢已儲存，其他人員仍可在此點打卡。{% elif record.is_abnormal %}本次異常回報與巡檢紀錄已儲存。{% else %}辛苦了，本次巡檢已完成。{% endif %}</p>
   {% if can_scan and not reviewing %}{{ scanner_button('next', '繼續掃下一點') }}{% endif %}
   <div class="success-receipt">
     <span class="point-code">{{ point_code(record) }}</span><h2>{{ point_name(record) }}</h2>
     {% if is_patrol_admin %}<div><span>巡檢分類</span><strong>{{ category_label(record.category) }}</strong></div>{% endif %}
     <div><span>{{ '簽到人員' if visit else '執行人員' if executed else '巡檢人員' }}</span><strong>{{ reporter_name(record) }}</strong></div>
+    {% if long_period %}<div class="receipt-period"><span>{{ '週巡' if record.frequency == 'weekly' else '月巡' }}期間</span><strong><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></strong></div>{% endif %}
     {% if record.frequency == 'daily2' %}<div><span>巡檢時段</span><strong>{{ slot_label(record.slot) }}</strong></div>{% endif %}
     <div><span>{{ '執行時間' if executed else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
-    {% if executed %}<div><span>時段進度</span><strong>{{ '已巡檢' if finalized else '待巡檢' }}</strong></div>
+    {% if long_period and not executed and record.execution %}<div><span>執行簽到</span><strong>{{ record.execution.created_at|localtime }}</strong></div>{% endif %}
+    {% if executed %}<div><span>第二階段</span><strong>{{ '已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢（可跨日接續）' if long_period else '待巡檢' }}</strong></div>
     {% elif not visit %}<div><span>回報狀態</span>{{ issue_status(record) }}</div><div><span>現場照片</span><strong>{{ record.photos|length }} 張已儲存</strong></div>{% endif %}
   </div>
   {% if not visit and point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=record.point_id) if is_patrol_admin or can_view_general_team else '') }}<p>此點位的未結案異常仍持續追蹤。</p></div>{% endif %}

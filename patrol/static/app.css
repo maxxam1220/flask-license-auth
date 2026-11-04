@@ -615,6 +615,16 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stage-notice { background: #fcf3e2; border-color: #a46722; color: #694315; }
 .stage-notice .button { margin-top: 10px; }
 .checkin-quick-action .period-label { white-space: nowrap; }
+.period-handoff { margin: 14px 0 10px; padding: 10px 12px; border-radius: 7px; background: #eff5f3; font-size: 14px; text-align: start; color: #284d46; }
+.period-handoff > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 8px; }
+.period-handoff > div + div { margin-top: 4px; }
+.period-handoff dt { color: #4a635e; }
+.period-handoff dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; }
+.period-handoff time, .receipt-period time { white-space: nowrap; }
+@media (max-width: 720px) and (max-height: 680px) {
+  .cross-period-checkin > .checkin-point-icon { display: none; }
+  .period-handoff { padding: 8px 10px; font-size: 13px; }
+}
 .checkin-personal-rule { color: #435e64; font-size: 14px; line-height: 1.65; text-align: start; }
 .team-readonly-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px 14px; border-radius: 6px; background: #edf4f4; color: #344f55; font-size: 14px; line-height: 1.6; }
 .team-readonly-note .icon { flex: none; margin-top: 2px; }

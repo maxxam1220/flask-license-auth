@@ -58,7 +58,7 @@
 <td data-label="{{ '分類／樓層' if is_patrol_admin else '樓層' }}"><div>{% if is_patrol_admin %}{{ category_label(record.category) }}<small class="cell-hint">{{ record_floor(record) }}</small>{% else %}{{ record_floor(record) }}{% endif %}</div></td>
 <td data-label="{{ '簽到人員' if visits else '執行人員' if executing else '人員' if can_filter_people else '巡檢人員' }}"><strong>{{ reporter_name(record) }}</strong></td>
 <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(record.frequency) }}</span>{% if record.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(record.slot) }}</small>{% endif %}</div></td>
-{% if executing %}<td data-label="時段進度"><span class="badge {{ 'badge-done' if record.id in reviewed_execution_ids else 'badge-todo' }}">{{ '已巡檢' if record.id in reviewed_execution_ids else '已執行、待巡檢' }}</span></td>
+{% if executing %}{% set state=execution_states[record.id] %}<td data-label="時段進度"><span class="badge {{ 'badge-done' if state == 'done' else 'badge-todo' if state == 'pending' else 'badge-neutral' }}">{{ '已執行、待巡檢' if state == 'pending' else execution_state_labels[state] }}</span></td>
 <td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('execution_success', execution_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看簽到 {{ icon('arrow') }}</a></td>
 {% elif record.executor_visit %}<td data-label="{{ '登記方式' if visits else '回報內容' }}"><span class="badge badge-neutral">不定期 · 直接簽到</span></td>
 <td data-label="詳情"><a class="button button-secondary button-small" href="{{ url_for('checkin_success', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">查看簽到 {{ icon('arrow') }}</a></td>

@@ -1,9 +1,11 @@
 """Historical slot deadlines and scoped reads for the general-affairs workflows."""
 import csv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 
 import pytest
+from general_workflow import execution_deadline, execution_review_status
+from missed import TAIPEI
 from models import DeviceBinding, Inspection, InspectionPhoto, PatrolExecution, Point, PointSchedule, User, db
 from test_app import app_module, application, seeded, login, rendered_contexts  # noqa: F401
 
@@ -79,7 +81,7 @@ def test_legacy_spot_never_in_denominator_or_missed_and_two_stages_count_one_slo
     dash=context(application,client,"/dashboard?date=2026-11-02")
     assert dash["totals"]=={"done":0,"pending":2,"total":2}
     assert [p.id for p in dash["spot_points"]]==[spot.id]
-    assert [s["stage_status"] for s in dash["cards"][0]["slots"]]==["awaiting_inspection","awaiting_execution"]
+    assert [s["stage_status"] for s in dash["cards"][0]["slots"]]==["expired_unreviewed","expired_unexecuted"]
     missed=context(application,client,"/missed?"+RANGE)
     assert missed["totals"]=={"missed":2,"points":1}
     assert [(r["slot"], r["missing_stage_label"]) for r in missed["occurrences"]]==[("pm","未執行"),("am","已執行、未巡檢")]
@@ -305,3 +307,63 @@ def test_executor_optional_dashboard_uses_exact_authorized_codes_and_current_wor
     dash = context(application, client, "/dashboard")
     assert [p.id for p in dash["irregular_points"]] == [eligible.id]
     assert custom.code not in client.get("/dashboard").get_data(as_text=True)
+
+
+@pytest.mark.parametrize("frequency,period_key,slot,first_day,due_date,deadline", [
+    ("weekly", "2026-11-30", "any", "2026-11-30", "2026-12-06", "2026-12-07T00:00"),
+    ("monthly", "2026-12-01", "any", "2026-12-04", "2026-12-31", "2027-01-01T00:00"),
+    ("daily2", "2026-11-02", "am", "2026-11-02", "2026-11-02", "2026-11-02T12:00"),
+    ("daily", "2026-11-02", "any", "2026-11-02", "2026-11-02", "2026-11-03T00:00"),
+])
+def test_unreviewed_execution_at_deadline_matches_all_reports(application, workflow, monkeypatch, frequency, period_key,
+                                                           slot, first_day, due_date, deadline):
+    worker, reviewer, _, _, _ = workflow
+    item = point("QA-BOUNDARY", "two_stage", frequency=frequency)
+    first_time = datetime.fromisoformat(first_day + "T09:00").replace(tzinfo=TAIPEI).astimezone(timezone.utc).replace(tzinfo=None)
+    execution = PatrolExecution(**(values(worker, item, slot) | {"created_at": first_time, "period_key": period_key}))
+    db.session.add(execution)
+    db.session.commit()
+    end = datetime.fromisoformat(deadline).replace(tzinfo=TAIPEI).astimezone(timezone.utc)
+    assert execution_deadline(frequency, period_key, slot) == end
+    view = frequency if frequency in ("weekly", "monthly") else "daily"
+    client = open_as(application, reviewer)
+    by_visit = f"stage=execution&date_from={first_day}&date_to={first_day}&frequency={frequency}"
+    by_due = f"date_from={due_date}&date_to={due_date}&frequency={frequency}"
+    for instant, expired in ((end - timedelta(seconds=1), False), (end, True)):
+        monkeypatch.setattr(app_module, "now_utc", lambda: instant)
+        report = context(application, client, "/records?" + by_visit)
+        assert report["execution_states"][execution.id] == ("expired" if expired else "pending")
+        assert ("已到期、未巡檢" if expired else "已執行、待巡檢") in client.get("/records?" + by_visit).text
+        data = csv_rows(client.get("/records/export?" + by_visit))
+        row, = [r for r in data[1:] if r[2] == item.code]
+        assert (row[6], row[-1]) == (period_key, "已到期、未巡檢" if expired else "待巡檢")
+        dash = context(application, client, f"/dashboard?view={view}&date={due_date}")
+        card, = [c for c in dash["cards"] if c["point"].id == item.id]
+        entry, = [s for s in card["slots"] if s["key"] == slot]
+        assert entry["stage_status"] == ("expired_unreviewed" if expired else "awaiting_inspection")
+        missed = context(application, client, "/missed?" + by_due)["occurrences"]
+        assert [r["missing_stage_label"] for r in missed if r["point_id"] == item.id] == (["已執行、未巡檢"] if expired else [])
+        exported = csv_rows(client.get("/missed/export?" + by_due))
+        assert [r[-1] for r in exported[1:] if r[4] == item.code] == (["已執行、未巡檢"] if expired else [])
+    if frequency in ("weekly", "monthly"):
+        following = end.astimezone(TAIPEI).date()
+        current = context(application, client, f"/dashboard?view={view}&date={following}")
+        card, = [c for c in current["cards"] if c["point"].id == item.id]
+        assert card["slots"][0]["stage_status"] == "awaiting_execution" and card["slots"][0]["executed_at"] is None
+    review_time = (end - timedelta(seconds=1)).replace(tzinfo=None)
+    db.session.add(Inspection(**(values(reviewer,item,slot) | {"created_at": review_time, "period_key": period_key}),
+                              workflow_mode="two_stage", execution_id=execution.id))
+    db.session.commit()
+    assert context(application, client, "/records?" + by_visit)["execution_states"][execution.id] == "done"
+    assert not [r for r in context(application, client, "/missed?" + by_due)["occurrences"] if r["point_id"] == item.id]
+
+
+@pytest.mark.parametrize("frequency,key,slot", [
+    ("weekly","2026-11-03","any"), ("monthly","2026-11-04","any"), ("daily","2026-02-30","any"),
+    ("daily2","2026-11-02","any"), ("unexpected","2026-11-02","any"), ("monthly","9999-12-01","any"),
+])
+def test_invalid_execution_snapshot_has_no_guessed_deadline(frequency, key, slot):
+    assert execution_deadline(frequency, key, slot) is None
+    instant = datetime(2026,11,3,4)
+    assert execution_review_status(frequency, key, slot, False, instant) == "unknown"
+    assert execution_review_status(frequency, key, slot, True, instant) == "done"
