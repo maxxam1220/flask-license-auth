@@ -28,10 +28,12 @@ function simulate(options = {}) {
   const discard = button();
   const retry = element({ hidden: true });
   const status = element({ textContent: '' });
+  const englishStatus = options.executor ? element({ textContent: '' }) : null;
   const width = options.width || 1280;
   const video = element({ videoWidth: width, videoHeight: options.height || 720, readyState: 2,
     async play() {}, pause() {} });
-  const hooks = { start, close, retry, status, video, keep, discard, 'draft-actions': draft };
+  const hooks = { start, close, retry, status, video, keep, discard, 'draft-actions': draft,
+    'status-zh': status, 'status-en': englishStatus };
   const lookup = selector => hooks[selector.match(/^\[data-qr-([\w-]+)\]$/)[1]];
   const dialog = element({ open: false, querySelector: lookup, showModal() { this.open = true; },
     close() { this.open = false; this.dispatchEvent(new Event('close')); } });
@@ -96,7 +98,7 @@ function simulate(options = {}) {
     callback();
     await nextTurn();
   }
-  return { start, starts, draft, keep, discard, close, retry, status, dialog, video, track, stream, document, window, frames,
+  return { start, starts, draft, keep, discard, close, retry, status, englishStatus, dialog, video, track, stream, document, window, frames,
     requests, constraints, destinations, timers, click, step };
 }
 
@@ -277,16 +279,20 @@ for (const cause of ['visibilitychange', 'pagehide', 'close']) {
 }
 
 test('permission denial and disconnected cameras explain recovery, no camera API offers system camera', async () => {
-  const s = simulate({ acquire: async () => { throw Object.assign(new Error(), { name: 'NotAllowedError' }); } });
+  const s = simulate({ executor: true, acquire: async () => { throw Object.assign(new Error(), { name: 'NotAllowedError' }); } });
   s.click(s.start);
+  assert.match(s.englishStatus.textContent, /Allow/);
   await nextTurn();
   assert.equal(s.retry.hidden, false);
   assert.match(s.status.textContent, /權限/);
+  assert.match(s.englishStatus.textContent, /browser settings.*Retry/);
   assert.deepEqual(s.requests, []);
-  const t = simulate({ detect: () => [] });
+  const t = simulate({ executor: true, detect: () => [] });
   t.click(t.start);
   await nextTurn();
+  assert.match(t.englishStatus.textContent, /one QR code/);
   t.track.dispatchEvent(new Event('ended'));
+  assert.match(t.englishStatus.textContent, /Camera stopped.*Retry/);
   assert.equal(t.retry.hidden, false);
   assert.equal(t.timers.size, 0);
   assert.equal(t.video.srcObject, null);

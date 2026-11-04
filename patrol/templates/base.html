@@ -45,7 +45,7 @@
 </nav>{% endif %}
 <div id="page-feedback" class="sr-only" role="status" aria-live="polite"></div>
 {% if can_scan %}
-{{ scanner_dialog() }}
+{{ scanner_dialog(current_user.role == 'executor') }}
 <script defer src="{{ url_for('static', filename='patrol-scanner.js') }}"></script>
 {% endif %}
 <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">

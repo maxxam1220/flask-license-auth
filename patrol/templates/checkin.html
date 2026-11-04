@@ -26,12 +26,12 @@
     {% if can_confirm and not existing and point.active and device_state == 'approved' %}
     <div class="checkin-quick-action">
       {% if not long_period %}<p>{% if paired %}{{ "第一階段 · 執行" if execute else "第二階段 · 巡檢" }} · {% endif %}{{ current_slot_label if point.frequency == 'daily2' else frequency(point.frequency) }} · <span class="period-label">{{ period_label }}</span></p>{% endif %}
-      <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ '正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{{ submit_label }}</button>
+      <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
       {% if not simple_signin %}<a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>{% endif %}
     </div>
     {% endif %}
     {% if not can_confirm and not existing and point.active and stage_notice and not (long_period and execute and execution_time) %}
-    <div class="workflow-guide stage-notice" role="status"><strong>{{ '目前無法送出' ~ ('簽到' if simple_signin else '巡檢') }}</strong><p>{{ stage_notice }}</p>
+    <div class="workflow-guide stage-notice" role="status"><strong>{% if execute and execution_time %}<span lang="en">Step 1 complete</span> · 已有執行簽到{% else %}{{ '目前無法送出' ~ ('簽到' if simple_signin else '巡檢') }}{% endif %}</strong><p>{{ stage_notice }}</p>
       
     </div>
     {% endif %}

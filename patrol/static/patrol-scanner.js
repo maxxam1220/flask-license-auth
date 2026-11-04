@@ -5,7 +5,8 @@
   if (!starts.length || !dialog || typeof dialog.showModal !== 'function') return;
 
   const video = dialog.querySelector('[data-qr-video]');
-  const status = dialog.querySelector('[data-qr-status]');
+  const status = dialog.querySelector('[data-qr-status-zh]') || dialog.querySelector('[data-qr-status]');
+  const englishStatus = dialog.querySelector('[data-qr-status-en]');
   const retry = dialog.querySelector('[data-qr-retry]');
   const close = dialog.querySelector('[data-qr-close]');
   const draftActions = dialog.querySelector('[data-qr-draft-actions]');
@@ -77,7 +78,8 @@
     return null;
   }
 
-  function message(text) {
+  function message(text, english) {
+    if (englishStatus && englishStatus.textContent !== english) englishStatus.textContent = english;
     if (status.textContent !== text) status.textContent = text;
   }
 
@@ -134,10 +136,10 @@
     return run === generation && dialog.open && !document.hidden;
   }
 
-  function failed(run, text) {
+  function failed(run, text, english) {
     if (!active(run)) return;
     stopCamera();
-    message(text);
+    message(text, english);
     retry.hidden = false;
   }
 
@@ -148,14 +150,14 @@
     if (!dialog.open) dialog.showModal();
     retry.hidden = true;
     if (document.querySelector('form[data-submitting="true"]')) {
-      message('資料正在送出。請等候儲存完成後再掃描。');
+      message('資料正在送出。請等候儲存完成後再掃描。', 'Saving. Please wait.');
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia) {
-      message('此瀏覽器無法開啟相機。請用手機內建相機掃描巡檢點 QR Code。');
+      message('此瀏覽器無法開啟相機。請用手機內建相機掃描巡檢點 QR Code。', 'Use your phone’s Camera app to scan.');
       return;
     }
-    message('請允許使用相機，並將鏡頭對準巡檢點 QR Code。');
+    message('請允許使用相機，並將鏡頭對準巡檢點 QR Code。', 'Tap Allow to use the camera.');
     try {
       const acquired = await navigator.mediaDevices.getUserMedia({
         audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -165,23 +167,27 @@
         return;
       }
       stream = acquired;
-      onTrackEnd = () => failed(run, '相機連線已中斷。請重新開啟相機。');
+      onTrackEnd = () => failed(run, '相機連線已中斷。請重新開啟相機。', 'Camera stopped. Tap Retry.');
       stream.getTracks().forEach(track => track.addEventListener('ended', onTrackEnd));
       video.srcObject = stream;
       await video.play();
       if (!active(run)) return;
     } catch (error) {
       const denied = error.name === 'NotAllowedError' || error.name === 'SecurityError';
-      failed(run, denied
-        ? '相機使用權限未開啟。請在瀏覽器設定中允許使用相機後重試，或改用手機內建相機掃描。'
-        : '無法開啟相機。請確認裝置有相機，並關閉其他使用相機的程式後重試。');
+      if (denied) {
+        failed(run, '相機使用權限未開啟。請在瀏覽器設定中允許使用相機後重試，或改用手機內建相機掃描。',
+          'Allow camera access in your browser settings, then tap Retry.');
+      } else {
+        failed(run, '無法開啟相機。請確認裝置有相機，並關閉其他使用相機的程式後重試。',
+          'Close other camera apps, then tap Retry.');
+      }
       return;
     }
 
     let detector = await nativeDetector();
     if (!active(run)) return;
     let fallback;
-    message('請對準一張巡檢點 QR Code，掃到後會開啟打卡確認頁。');
+    message('請對準一張巡檢點 QR Code，掃到後會開啟打卡確認頁。', 'Point the camera at one QR code.');
     async function scan() {
       if (!active(run)) return;
       try {
@@ -209,10 +215,12 @@
               if (draftActions && keep && discard) {
                 pendingPath = path;
                 draftActions.hidden = false;
-                message('已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。');
+                message('已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。',
+                  'Leave this page and discard your changes?');
                 keep.focus();
               } else {
-                message('目前頁面有尚未送出的內容。請關閉掃描視窗，處理完畢後再掃描。');
+                message('目前頁面有尚未送出的內容。請關閉掃描視窗，處理完畢後再掃描。',
+                  'Close the scanner to finish your changes first.');
               }
               return;
             }
@@ -220,11 +228,11 @@
             location.assign(path);
             return;
           }
-          if (paths.size > 1) message('畫面中有多個巡檢點。請靠近要打卡的點位，一次只掃一張。');
-          else if (values.length) message('這張 QR Code 不是本站的巡檢點，請對準現場的巡檢點 QR Code。');
+          if (paths.size > 1) message('畫面中有多個巡檢點。請靠近要打卡的點位，一次只掃一張。', 'Scan one QR code at a time.');
+          else if (values.length) message('這張 QR Code 不是本站的巡檢點，請對準現場的巡檢點 QR Code。', 'Wrong QR code. Scan a patrol point.');
         }
       } catch {
-        failed(run, '無法讀取相機畫面。請重試，或用手機內建相機掃描巡檢點 QR Code。');
+        failed(run, '無法讀取相機畫面。請重試，或用手機內建相機掃描巡檢點 QR Code。', 'Cannot read the camera. Tap Retry.');
         return;
       }
       if (active(run)) timer = setTimeout(scan, 200);

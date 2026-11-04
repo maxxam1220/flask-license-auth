@@ -1,13 +1,16 @@
 {% from '_ui.html' import icon %}
 {% macro scanner_button(entry, label) %}
-<button type="button" class="button button-primary scan-trigger scan-trigger-{{ entry }}" data-qr-start data-qr-entry="{{ entry }}" aria-haspopup="dialog" aria-controls="patrol-scanner" hidden>{{ icon('qr') }}{{ label }}</button>
+<button type="button" class="button button-primary scan-trigger scan-trigger-{{ entry }}" data-qr-start data-qr-entry="{{ entry }}" aria-haspopup="dialog" aria-controls="patrol-scanner" hidden>
+  {{ icon('qr') }}<span lang="en">{{ 'SCAN NEXT' if entry == 'next' else 'SCAN' }}</span>
+  <span{% if entry == 'header' %} class="sr-only"{% endif %}>{{ label }}</span>
+</button>
 {% endmacro %}
 
-{% macro scanner_dialog() %}
+{% macro scanner_dialog(executor=false) %}
 <dialog id="patrol-scanner" class="scanner-dialog" data-qr-dialog aria-labelledby="patrol-scanner-title" aria-describedby="patrol-scanner-help">
   <div class="scanner-heading">
-    <div><span class="eyebrow">現場打卡</span><h2 id="patrol-scanner-title">掃描巡檢點</h2></div>
-    <button class="scanner-close" type="button" data-qr-close aria-label="關閉掃描視窗">{{ icon('close') }}</button>
+    <div><span class="eyebrow">{{ '掃描巡檢點' if executor else '現場打卡' }}</span><h2 id="patrol-scanner-title">{% if executor %}<span lang="en">Scan QR code</span>{% else %}掃描巡檢點{% endif %}</h2></div>
+    <button class="scanner-close" type="button" data-qr-close aria-label="{{ 'Close / 關閉掃描視窗' if executor else '關閉掃描視窗' }}">{{ icon('close') }}</button>
   </div>
   <div class="scanner-body">
     <div class="scanner-preview" aria-hidden="true">
@@ -15,12 +18,12 @@
       <span class="scanner-guide"></span>
     </div>
     <div class="scanner-instructions">
-      <p id="patrol-scanner-help">將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。</p>
-      <p class="scanner-status" data-qr-status role="status" aria-live="polite" aria-atomic="true">請允許此網站使用相機。</p>
-      <button class="button button-secondary" type="button" data-qr-retry hidden>{{ icon('camera') }}重新開啟相機</button>
+      <p id="patrol-scanner-help">{% if executor %}<span lang="en">Scan the QR code. Check the location, then tap OK.</span>{% else %}將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。{% endif %}</p>
+      <p class="scanner-status" data-qr-status role="status" aria-live="polite" aria-atomic="true">{% if executor %}<span lang="en" data-qr-status-en>Allow camera access.</span> {% endif %}<span data-qr-status-zh>請允許此網站使用相機。</span></p>
+      <button class="button button-secondary" type="button" data-qr-retry hidden>{{ icon('camera') }}{% if executor %}<span lang="en">Retry</span>{% endif %}重新開啟相機</button>
       <div class="scanner-draft-actions" data-qr-draft-actions hidden>
-        <button class="button button-primary" type="button" data-qr-keep>保留內容並返回</button>
-        <button class="button button-danger" type="button" data-qr-discard>放棄內容並前往巡檢點</button>
+        <button class="button button-primary" type="button" data-qr-keep>{% if executor %}<span lang="en">Keep editing</span>{% endif %}保留內容並返回</button>
+        <button class="button button-danger" type="button" data-qr-discard>{% if executor %}<span lang="en">Discard and go</span>{% endif %}放棄內容並前往巡檢點</button>
       </div>
       <p class="scanner-fallback">也可關閉此視窗，改用手機內建相機掃描標籤。</p>
     </div>
