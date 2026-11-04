@@ -289,7 +289,13 @@ def create_app(config=None):
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        viewer = g.get("user")
+        can_scan = (request.endpoint == "dashboard" and response.status_code == 200
+                    and viewer is not None and (viewer.role == "admin" or bool(patrol_scope(viewer))))
+        if can_scan:
+            response.headers["Content-Security-Policy"] += "; media-src 'self' blob:"
+        camera_policy = "(self)" if can_scan else "()"
+        response.headers["Permissions-Policy"] = f"camera={camera_policy}, microphone=(), geolocation=()"
         if request.endpoint != "static":
             response.headers["Cache-Control"] = "private, no-store" if request.endpoint == "photo_file" else "no-store"
         if app.config["COOKIE_SECURE"]:
