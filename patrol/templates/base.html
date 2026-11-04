@@ -4,12 +4,13 @@
 {% set detail_from_issues=detail_page and (back_url|default('')).split('?')[0] == '/issues' %}
 {% set record_nav_active=request.endpoint in ['records','execution_success'] or (request.endpoint == 'checkin_success' and request.args.get('return_to') and back_url|default('')) or (detail_page and not detail_from_issues) %}
 {% set issue_nav_active=request.endpoint == 'issues' or detail_from_issues %}
+{% set workspace_nav = current_user and request.endpoint != 'login' %}
 <!doctype html>
 <html lang="zh-Hant">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#102d39"><meta name="color-scheme" content="light"><title>{{ title|default('巡檢總覽') }} · 巡點</title><link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='logo.ico') }}"><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"><script defer src="{{ url_for('static', filename='app.js') }}"></script>{% block head %}{% endblock %}</head>
-<body class="{% if not current_user %}guest-body{% endif %} {% block body_class %}{% endblock %}">
+<body class="{% if not workspace_nav %}guest-body{% endif %} {% block body_class %}{% endblock %}">
 <a class="skip-link" href="#main">跳到主要內容</a>
-{% if current_user %}
+{% if workspace_nav %}
 <aside class="sidebar" aria-label="主要導覽">
   <a class="brand" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點<small>廠區巡檢管理</small></span></a>
   <div class="sidebar-navigation">
@@ -42,17 +43,17 @@
 <div class="app-content">
 {% if config.get('DEMO_MODE') %}<div class="demo-banner">本機示範環境<span>資料與正式系統分開儲存</span></div>{% endif %}
 <main id="main" class="main-content" tabindex="-1">
-{% with messages = get_flashed_messages(with_categories=true) %}{% if messages %}<div class="flash-stack">{% for category, message in messages %}<div class="flash flash-{{ category }}" role="{{ 'alert' if category in ['error','danger'] else 'status' }}">{{ icon('circle-check' if category == 'success' else 'info') }}<span>{{ message }}</span></div>{% endfor %}</div>{% endif %}{% endwith %}
+{% block flash_area %}{% include '_flashes.html' %}{% endblock %}
 {% block content %}{% endblock %}
 <footer class="page-footer"><span>巡點 · 廠區巡檢系統</span><span>時間以台灣時間顯示</span></footer>
 </main></div>
-{% if current_user %}<nav class="mobile-nav{{ ' mobile-nav-executor' if current_user.role == 'executor' }}" aria-label="手機主要導覽">
+{% if workspace_nav %}<nav class="mobile-nav{{ ' mobile-nav-executor' if current_user.role == 'executor' }}" aria-label="手機主要導覽">
   {% for endpoint,label,name,active in [('dashboard','總覽','grid',request.endpoint == 'dashboard'),('records','紀錄','list',record_nav_active),('missed','漏打','clock',request.endpoint == 'missed'),('issues','異常','alert',issue_nav_active),('devices','我的綁定','phone',request.endpoint == 'devices')] if endpoint != 'issues' or current_user.role != 'executor' %}
   <a href="{{ url_for(endpoint) }}" aria-current="{{ 'page' if active else 'false' }}" class="{{ 'active' if active }}">{{ icon(name) }}<span>{{ label }}</span></a>
   {% endfor %}
 </nav>{% endif %}
 <div id="page-feedback" class="sr-only" role="status" aria-live="polite"></div>
-{% if can_scan %}
+{% if workspace_nav and can_scan %}
 {{ scanner_dialog(current_user.role == 'executor') }}
 <script defer src="{{ url_for('static', filename='patrol-scanner.js') }}"></script>
 {% endif %}

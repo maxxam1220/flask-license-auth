@@ -696,10 +696,16 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stage-gap { font-weight: 700; color: #854326; }
 @media (max-width: 720px) { .mobile-nav-executor { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
-/* The sidebar layout has its own reading scale. Use rem so the browser's
-   preferred text size still applies, and keep printed QR sheets independent. */
+/* Reading scale for screen views only. Keep the native A4 label scale independent. */
+@media screen {
+  :root {
+    --reading-body: 1rem;
+    --reading-secondary: .875rem;
+    --reading-title: 1.375rem;
+  }
+}
 @media screen and (min-width: 721px) {
-  :root { font-size: 100%; }
+  :root { font-size: 112.5%; }
   h1, .page-heading h1 { font-size: 2.25rem; }
   h2, .section-heading h2, .confirm-dialog h2, .scanner-heading h2 { font-size: 1.375rem; }
   h3, .point-card h3, .management-identity h3, .issue-card-heading h3,
@@ -809,4 +815,57 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .mobile-menu nav > form { margin-top: 4px; padding: 0; }
   .mobile-menu nav > form .text-button { display: flex; align-items: center; min-height: 44px; padding: 10px 13px; text-align: start; border-top: 1px solid #dbe4df; }
   .mobile-menu nav > form .text-button:is(:hover, :focus-visible) { background: #f0f5eb; }
+}
+
+/* Field work: keep the actionable text large and use the space around it sparingly. */
+@media screen and (max-width: 720px) {
+  :root { font-size: 100%; --reading-title: 1.25rem; }
+  .main-content { padding-top: 16px; }
+  .page-heading { margin-bottom: 16px; }
+  .page-heading h1 { font-size: 1.75rem; line-height: 1.25; }
+  .section-heading h2, .help-panel h2 { font-size: var(--reading-title); line-height: 1.35; }
+  .point-card h3, .center-copy h3, .management-identity h3, .issue-card-heading h3 { font-size: 1.125rem; }
+  .page-heading p, .section-heading p, .mobile-menu nav > a, .mobile-menu .text-button,
+  .button, .text-button, .text-link, .page-heading > .button, .date-filter .button-small, .segmented > a,
+  .category-tabs a, .point-scope-link, .disclosure > summary, .create-disclosure > summary, .form-grid .category-choice,
+  .center-copy p, .steps strong, .callout strong, .issue-note-preview, .issue-history strong,
+  .checkin-details strong, .workflow-guide, .workflow-slot, .team-readonly-note, .issue-action-form .button,
+  .inspection-fields > label, .photo-picker-box strong, .photo-field > label,
+  .activity-info strong, .checkin-quick-action > p, .checkin-report-link { font-size: .9375rem; }
+  .button-large, .checkin-location { font-size: 1.125rem; }
+  input:not([type="checkbox"]):not([type="radio"]), textarea, select, .date-filter input,
+  .filter-form input, .filter-form select, .form-grid select, .photo-field input[type=file],
+  .issue-action-form textarea, .inspection-fields textarea { font-size: var(--reading-body); }
+  .back-link, .badge, .point-card .badge, .point-code, .point-card .point-code,
+  .point-meta, .point-card-bottom, .point-card-bottom small, .slot-card > div > span, .slot-card small,
+  .stats-grid .stat-label, .stats-grid .stat-value small, .floor-caption, .floor-ratio,
+  .activity-info strong span, .activity-info small, .activity-row time, .workflow-slot small,
+  .mobile-header .scan-trigger-header, .filter-form > label, .form-grid label, .form-stack label, .date-filter,
+  .form-grid label small, .field-meta, .notice-strip small, .callout p, .steps p, .fine-note,
+  .issue-card-meta, .issue-legend, .issue-overview p, .issue-status-tabs a, .issue-card-footer .button,
+  .issue-card-footer > div, .table-scroll td::before, .cell-hint, .count-label, .stat-detail-link,
+  .checkin-details > div, .checkin-personal-rule, .checkin-footnote, .photo-picker-box small,
+  .photo-guidance, .abnormal-toggle small, .compact-disclosure > summary, .issue-reopen > summary { font-size: var(--reading-secondary); }
+  .table-scroll td, .issue-action-form > label, .abnormal-toggle > span { font-size: var(--reading-body); }
+  .mobile-nav > a { font-size: .8125rem; }
+  .dashboard-actions .button, .management-top .button { font-size: var(--reading-secondary); }
+  .section-heading { gap: 8px 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .section-heading > div:first-child { flex: 1 1 10rem; }
+  .section-heading .text-link, .patrol-point-tools .text-link { min-height: 44px; font-size: var(--reading-secondary); }
+  .eyebrow, .floor-scroll-hint { font-size: .8125rem; }
+  .dashboard-stats .stat-label { min-height: 0; }
+  .dashboard-stats .stat-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 4px; }
+  .dashboard-stats .stat-value small { margin: 0; }
+  .floor-card { padding-block: 10px; }
+  .floor-card-top { margin-bottom: 9px; }
+  .point-card { padding: 14px 14px 0; }
+  .point-card-bottom { padding-block: 8px; margin-top: 12px; min-height: 48px; }
+  .checkin-point-icon { display: none; }
+  .checkin-topline { margin-bottom: 12px; }
+  .device-visual { width: 48px; height: 48px; margin: 12px auto; border-radius: 12px; }
+  .device-visual .icon { width: 26px; height: 26px; }
+}
+@media screen and (max-width: 480px) {
+  .toolbar .date-filter { width: 100%; }
+  .toolbar .date-filter input[type=date] { flex: 1; min-width: 0; }
 }

@@ -1,3 +1,53 @@
-{% extends 'base.html' %}{% from '_ui.html' import icon, csrf %}{% set title='登入' %}
-{% block content %}<div class="login-layout"><section class="login-intro"><div class="brand"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點<small>廠區巡檢管理</small></span></div><span class="eyebrow">讓每一次到訪，都有紀錄</span><h1>巡檢有序，<br>每一處都安心。</h1><p>到點掃描、確認打卡。<br>日常巡檢與每週任務，在同一處掌握。</p><div class="building-illustration" aria-hidden="true">{% for floor in [5,4,3,2,1] %}<div class="building-floor"><span>{{ floor }}F</span><i></i><i></i><i></i><b>{{ icon('check') }}</b></div>{% endfor %}</div><div class="intro-footer">廠區點位管理 <span>／</span> 手機即掃即用</div></section>
-<section class="login-panel"><div class="login-card"><span class="eyebrow">歡迎回來</span><h2>登入巡檢系統</h2><p class="muted">使用管理員提供的帳號登入。</p><form method="post" action="{{ url_for('login') }}" class="form-stack">{{ csrf() }}<input type="hidden" name="next" value="{{ next|default('') }}"><label>員工帳號<input name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="請輸入帳號" value="{{ request.form.get('username','') }}" autofocus></label><label>密碼<input type="password" name="password" required autocomplete="current-password" placeholder="請輸入密碼"></label><button class="button button-primary button-full" type="submit">登入 {{ icon('arrow') }}</button></form><div class="login-help">{{ icon('shield') }}<p>第一次使用此手機，登入後請申請瀏覽器綁定。經管理員核准後即可打卡。</p></div></div><p class="login-footnote">忘記密碼或需要新帳號，請聯繫系統管理員。</p></section></div>{% endblock %}
+{% extends 'base.html' %}
+{% from '_ui.html' import icon, csrf %}
+{% set title = '登入' %}
+{% block head %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='login-layout.css') }}">
+{% endblock %}
+{% block body_class %}signin-page{% endblock %}
+{% block flash_area %}{% endblock %}
+{% block content %}
+<div class="signin-shell">
+  <div class="login-layout">
+    <div class="signin-brand-panel">
+      <div class="brand"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點</span></div>
+      <span class="signin-mobile-name">廠區巡檢管理</span>
+      <div class="signin-intro">
+        <p class="signin-caption"><span aria-hidden="true"></span>巡檢工作台</p>
+        <p class="signin-intro-title">廠區巡檢<br>管理系統</p>
+        <p class="signin-intro-copy">到點掃描 QR Code，登記現場狀況。</p>
+      </div>
+      <svg class="signin-map" viewBox="0 0 400 170" fill="none" aria-hidden="true" focusable="false">
+        <g stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
+          <path d="M12 24h130v40h38V12h106v44h96v97H252v-30h-95v30H12z"/>
+          <path d="M12 68h60V24m0 68v61m30-129v40m111-52v45m30-45v45m43 35h96m-41 0v61M12 119h30m65 34v-28m89-33h56v31"/>
+          <path d="M19 32h30m-30 6h30m-30 6h30m-30 6h30m223 86h33m-33 6h33" opacity=".55"/>
+        </g>
+        <path d="M41 93h80V80h57V62h90v12h58v46" stroke="#b9dc86" stroke-width="3" stroke-linejoin="round" stroke-dasharray="5 5"/>
+        <g fill="#193d43" stroke="#c4e997" stroke-width="2.5"><circle cx="41" cy="93" r="6"/><circle cx="178" cy="62" r="6"/><circle cx="326" cy="120" r="9"/></g>
+        <path d="m322.4 120 2.3 2.5 4.8-5.1" stroke="#d7f3b0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <section class="login-panel" aria-labelledby="signin-heading">
+      <div class="login-card">
+        <h1 id="signin-heading">登入巡檢系統</h1>
+        <p class="signin-instruction">請輸入管理員提供的帳號與密碼。</p>
+        {% include '_flashes.html' %}
+        <form method="post" action="{{ url_for('login') }}" class="form-stack">
+          {{ csrf() }}
+          <input type="hidden" name="next" value="{{ next|default('') }}">
+          <label>員工帳號
+            <input name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="請輸入帳號" value="{{ request.form.get('username','') }}" enterkeyhint="next">
+          </label>
+          <label>密碼
+            <input type="password" name="password" required autocomplete="current-password" placeholder="請輸入密碼" enterkeyhint="go">
+          </label>
+          <button class="button button-primary button-full" type="submit">登入 {{ icon('arrow') }}</button>
+        </form>
+        <div class="login-help">{{ icon('phone') }}<p><strong>首次使用手機</strong>登入後申請瀏覽器綁定，核准即可打卡。</p></div>
+        <p class="login-footnote">忘記密碼或需要新帳號？請聯繫管理員。</p>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

@@ -1,18 +1,49 @@
 /* Adapt to the space left beside the navigation, including at browser zoom. */
 #record-results, #missed-results { container: report-results / inline-size; }
+.missed-point-summary { container: point-summary / inline-size; }
+
+.report-page {
+  --report-body: var(--reading-body, max(1rem, 16px));
+  --report-support: var(--reading-secondary, max(.875rem, 14px));
+}
+.report-page .table-scroll td, .report-page .table-scroll .note-summary,
+.report-page .missed-deadline, .report-page .missed-stats .stat-label,
+.report-page .records-query-title { font-size: var(--report-body); }
+.report-page .table-scroll td { color: #374e4d; }
+.report-page .record-point-cell strong { font-size: 1.0625em; color: var(--ink); line-height: 1.45; }
+.report-page .table-scroll :is(th, .point-code, .badge, .photo-count, .cell-hint),
+.report-page .table-scroll td::before, .report-page .count-label, .report-page .missed-rules,
+.report-page .missed-scope-note, .report-page .missed-summary-footnote,
+.report-page .records-query-dates, .report-page .records-query-action, .report-page .records-query-title small,
+.report-page .storage-usage-heading, .report-page .storage-usage-heading strong, .report-page .storage-usage p,
+.report-page .records-result-jump .text-link, .report-page .missed-point-summary > summary small,
+.report-page .missed-stats .stat-value small { font-size: var(--report-support); }
+.report-page .section-heading h2, .report-page .missed-point-summary > summary strong { font-size: 1.35rem; }
+.report-page .missed-count { font-size: 1.15em; }
+.report-page .missed-count, .report-page .missed-deadline { line-height: 1.45; }
+.report-scope-line { display: flex; align-items: center; justify-content: space-between; gap: 0 18px; flex-wrap: wrap; }
+.report-scope-line p { margin: 0; }
+.report-scope-line .text-link { min-height: 44px; font-size: var(--report-body); }
+.report-page .storage-usage { padding: 0 16px; }
+.report-page .storage-usage-heading { min-height: 44px; cursor: pointer; list-style: none; }
+.report-page .storage-usage-heading::-webkit-details-marker { display: none; }
+.report-page .storage-usage-heading .storage-balance { margin-left: auto; }
+.report-page .storage-usage[open] summary .icon:last-child:not(:first-child) { transform: rotate(180deg); }
+.report-page .storage-usage[open] { padding-bottom: 12px; }
+.report-page .storage-usage progress { margin-top: 2px; }
 
 @media (min-width: 721px) {
   .records-filter-form .records-filter-actions { grid-column: -2 / -1; }
   .records-filter-actions > .text-link { min-height: 44px; }
-  .records-filter-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 185px), 1fr)); }
+  .records-filter-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
 }
 
 /* Keep headings available to assistive technology when rows become cards. */
-@container report-results (min-width: 820px) and (max-width: 1040px) {
+@container report-results (min-width: 52rem) and (max-width: 67rem) {
   .table-scroll :is(th, td) { padding-inline: 12px; }
 }
 
-@container report-results (max-width: 819.99px) {
+@container report-results (width < 52rem) {
   .table-scroll { margin-inline: 0; overflow: visible; }
   .table-scroll table { display: block; }
   .table-scroll thead {
@@ -31,7 +62,7 @@
   }
   .table-scroll td::before {
     content: attr(data-label); display: block; margin-bottom: 4px;
-    color: var(--muted); font-size: max(13px, .875em); font-weight: 500; line-height: 1.45;
+    color: var(--muted); font-weight: 500; line-height: 1.45;
   }
   .table-scroll tbody td:nth-child(2) { grid-column: span 2; }
   .records-table tbody td:nth-child(6) { grid-column: span 2; }
@@ -61,4 +92,56 @@
   .missed-table tbody td:last-child { grid-column: 1 / -1; }
   .missed-table td:last-child { display: flex; align-items: baseline; justify-content: flex-start; gap: 8px; }
   .missed-table td:last-child::before { flex: none; margin: 0; }
+}
+
+/* A point summary is a ranking. Keep the count beside the name on small screens. */
+@container point-summary (max-width: 40rem) {
+  .missed-summary-table { margin: 12px 0 0; overflow: visible; }
+  .missed-summary-table table { display: block; }
+  .missed-summary-table thead {
+    display: block; position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .missed-summary-table tbody { display: block; }
+  .missed-summary-table tbody tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px;
+    align-items: baseline; padding: 12px 0; border: 0; border-top: 1px solid var(--line);
+  }
+  .missed-summary-table tbody td { display: block; padding: 0; text-align: start; border: 0; line-height: 1.45; }
+  .missed-summary-table td::before { content: none; }
+  .missed-summary-table td:first-child { grid-column: 1; }
+  .missed-summary-table td:first-child .record-point-cell {
+    display: flex; align-items: baseline; flex-wrap: wrap; max-width: none; gap: 2px 8px; text-align: left;
+  }
+  .missed-summary-table td:last-child { grid-row: 1; grid-column: 2; align-self: start; text-align: end; }
+  .missed-summary-table td:last-child::before { content: '漏打 '; font-size: var(--report-support); color: var(--muted); }
+  .missed-summary-table td:nth-child(2) > div { display: flex; gap: 6px; align-items: baseline; }
+  .missed-summary-table td:nth-child(2) .cell-hint { width: auto; margin: 0; }
+  .missed-summary-table td:nth-child(3) { text-align: end; }
+}
+
+@media (max-width: 720px) {
+  .report-page .main-content { padding-top: 16px; }
+  .report-page .page-heading { margin-bottom: 14px; }
+  .report-page .page-heading p { margin-top: 5px; }
+  .report-page .record-stage-tabs { margin-bottom: 12px; }
+  .report-page .storage-usage { margin-bottom: 12px; }
+  .report-page .spaced { margin-top: 14px; }
+  .report-page .records-query-panel { padding: 9px 13px; }
+  .report-page .section-heading { flex-wrap: wrap; gap: 4px 12px; margin-bottom: 11px; }
+  .report-page .section-heading > div { flex: 1 1 12rem; }
+  .report-page .section-heading > .count-label { align-self: flex-start; }
+  .report-page .missed-stats { gap: 8px; }
+  .report-page .missed-stats .stat-card { padding: 12px; }
+  .report-page .missed-stats .stat-icon { display: none; }
+  .report-page .missed-stats .stat-label { min-height: 0; }
+  .report-page .missed-stats .stat-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 6px; margin-top: 4px; }
+  .report-page .missed-stats .stat-value small { margin: 0; }
+  .report-page .missed-scope-note { margin: 6px 0 10px; }
+  .report-scope-line .text-link { margin-left: auto; }
+  .report-page .missed-rules { margin-top: 7px; }
+  .report-page .missed-point-summary, .report-page #record-results, .report-page #missed-results { padding: 13px; }
+  .report-page .missed-point-summary > summary > span { gap: 1px; }
+  .report-page .missed-summary-footnote { margin-top: 10px; }
+  .report-page .records-filter-form select, .report-page .records-filter-form input { font-size: max(16px, 1rem); }
 }

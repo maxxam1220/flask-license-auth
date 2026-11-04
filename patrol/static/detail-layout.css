@@ -1,0 +1,85 @@
+/* The detail and receipt views share the same reading scale as the reports. */
+.record-detail-wrap { max-width: 64rem; overflow-wrap: anywhere; }
+.detail-heading { align-items: center; gap: .4rem 1rem; }
+.detail-heading h1 { line-height: 1.25; }
+.detail-heading .eyebrow { display: flex; align-items: baseline; flex-wrap: wrap; gap: .35rem .7rem; }
+.detail-point-code { color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.record-status-badge { flex: none; }
+.record-status-badge > a { display: inline-flex; align-items: center; gap: .25rem; min-height: 44px; color: #495956; }
+.record-status-badge .icon { width: 1rem; height: 1rem; }
+.record-detail-wrap .record-facts { gap: 1rem 1.5rem; }
+.record-detail-wrap .record-facts > div { align-content: start; gap: .2rem; }
+.record-detail-wrap .record-facts span, .detail-heading .eyebrow, .field-photo-heading > span,
+.record-detail-wrap .issue-event-meta, .record-detail-wrap .stage-trail small,
+.record-detail-wrap .field-meta, .receipt-wrap .checkin-footnote { font-size: .875rem; }
+.record-detail-wrap .record-facts strong, .record-detail-wrap .stage-trail strong,
+.record-detail-wrap .issue-event-note, .record-detail-wrap .issue-history strong,
+.record-detail-wrap .issue-action-form label, .record-detail-wrap .record-photo > span,
+.receipt-wrap .success-receipt strong, .receipt-wrap .success-card .checkin-location { font-size: 1rem; }
+.record-detail-wrap .record-note { font-size: 1.0625rem; line-height: 1.65; }
+.record-detail-wrap .section-heading { margin-bottom: .8rem; }
+.record-detail-wrap .section-heading h2 { font-size: var(--reading-title, 1.3rem); }
+.record-detail-wrap .section-heading p { font-size: .9375rem; }
+.field-report h3 { font-size: .9375rem; color: var(--muted); font-weight: 600; }
+.field-report .record-note { margin-block: .3rem 0; }
+.field-report-empty { font-size: 1rem; color: var(--muted); }
+.field-photo-heading { display: flex; align-items: baseline; gap: .5rem; margin-top: .9rem; color: var(--muted); }
+.field-report .record-photos { margin-top: .5rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 10rem), 1fr)); }
+.field-report .record-photo > span { padding: .5rem .75rem; }
+.record-detail-wrap .stage-trail small { font-variant-numeric: tabular-nums; }
+@media (min-width: 1000px) {
+  .record-detail-wrap .stage-trail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+  .record-detail-wrap .stage-trail li + li { border-inline-start: 1px solid var(--line); padding-inline-start: 1.5rem; }
+}
+#issue-treatment-title { scroll-margin-block-start: .7rem; }
+#issue-treatment-title:focus-visible { outline: 2px solid var(--teal); outline-offset: 4px; }
+
+.receipt-wrap { max-width: 35rem; }
+.receipt-wrap .success-receipt { padding: 1rem 1.25rem; margin-block: 1.1rem; }
+.receipt-wrap .success-receipt h2 { overflow-wrap: anywhere; margin-bottom: .7rem; }
+.receipt-wrap .success-receipt > div {
+  display: grid; grid-template-columns: minmax(4.25em, auto) minmax(0, 1fr);
+  align-items: baseline; gap: .25rem .8rem; margin: 0; padding-block: .45rem;
+}
+.receipt-wrap .success-receipt > div + div { border-top: 1px solid #dfe7de; }
+.receipt-wrap .success-receipt > div > :last-child { justify-self: end; text-align: end; overflow-wrap: anywhere; }
+.receipt-wrap .success-receipt > div > span:first-child { color: var(--muted); font-size: .9375rem; }
+.receipt-wrap .success-receipt .badge-neutral { color: #4a6053; }
+.receipt-wrap .success-receipt .badge-abnormal { color: #92352d; }
+.receipt-wrap .success-receipt .badge-issue-resolved { color: #315a40; }
+.receipt-wrap .success-emblem { width: 3rem; height: 3rem; border: 0; margin-block: 0 .6rem; }
+.receipt-wrap .success-emblem .icon { width: 1.6rem; height: 1.6rem; }
+.receipt-wrap .success-card > .eyebrow { margin-top: 0; font-size: .875rem; }
+.receipt-wrap .success-card .checkin-location { line-height: 1.55; }
+
+@media (max-width: 720px) {
+  .record-detail-wrap .record-back-links { margin-bottom: .35rem; }
+  .record-detail-wrap .record-back-links a, .record-detail-wrap .badge { font-size: .875rem; }
+  .record-detail-wrap .detail-heading {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "code status" "name name"; gap: .15rem .5rem;
+    margin-bottom: .8rem; align-items: center;
+  }
+  .detail-heading > div:first-child { display: contents; }
+  .detail-heading .eyebrow { grid-area: code; }
+  .detail-heading .record-status-badge { grid-area: status; }
+  .detail-heading h1 { grid-area: name; font-size: 1.55rem; }
+  .record-detail-wrap .panel.spaced { margin-top: .75rem; }
+  .record-detail-wrap .panel { padding: .9rem 1rem; }
+  .record-detail-wrap .record-facts { gap: .6rem 1rem; }
+  .record-detail-wrap .record-facts > div { grid-template-columns: minmax(0, 1fr); }
+  .record-detail-wrap .record-facts strong { text-align: start; }
+  .record-detail-wrap .section-heading { margin-bottom: .55rem; }
+  .field-report .record-photos { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
+  .receipt-wrap .success-card { padding: 1rem; }
+  .receipt-wrap .success-receipt { padding: .75rem .85rem; margin-block: .8rem; }
+  .receipt-wrap .success-card h1 { font-size: 1.65rem; }
+}
+@media (max-width: 480px) {
+  .record-detail-wrap .record-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .record-detail-wrap .record-facts > div {
+    grid-template-columns: minmax(4.2em, auto) minmax(0, 1fr); align-items: baseline; gap: .7rem; padding-block: .32rem;
+  }
+  .record-detail-wrap .record-facts > div + div { border-top: 1px solid var(--line); }
+  .record-detail-wrap .record-facts strong { text-align: end; }
+}

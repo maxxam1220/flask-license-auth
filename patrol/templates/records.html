@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='report-layout.css') }}" media="screen">{% endblock %}
+{% block body_class %}report-page{% endblock %}
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, frequency, empty, slot_label, issue_status %}
 {% set executing = stage == 'execution' %}
@@ -27,11 +28,11 @@
 <div class="records-result-jump"><a class="text-link" href="#record-results">查看篩選結果 <strong>{{ results|length }} 筆</strong> {{ icon('down') }}</a></div>
 {% if current_user.role == 'admin' and not executing %}
 {% set storage_used = photo_storage_used|default(0) %}{% set storage_limit = photo_storage_limit|default(0) %}
-<section class="storage-usage {{ 'storage-usage-full' if storage_limit <= storage_used }}" aria-label="全站照片儲存空間">
-  <div class="storage-usage-heading"><span>{{ icon('camera') }}照片空間 <small>全站共用</small></span><strong>{{ '%.2f'|format(storage_used / 1048576) }} / {{ '%.0f'|format(storage_limit / 1048576) }} MiB</strong></div>
+<details class="storage-usage {{ 'storage-usage-full' if storage_limit <= storage_used }}" {% if storage_limit <= storage_used %}open{% endif %}>
+  <summary class="storage-usage-heading"><span>{{ icon('camera') }}全站照片空間</span><span class="storage-balance"><strong>{{ '%.2f'|format(storage_used / 1048576) }} / {{ '%.0f'|format(storage_limit / 1048576) }} MiB</strong>{{ icon('down') }}</span></summary>
   <progress value="{{ storage_used }}" max="{{ storage_limit if storage_limit > 0 else 1 }}" aria-label="全站照片已使用 {{ '%.2f'|format(storage_used / 1048576) }} MiB，額度 {{ '%.0f'|format(storage_limit / 1048576) }} MiB"></progress>
   <p>{% if storage_limit <= 0 %}目前不接受新增照片；巡檢與備註仍可正常儲存。{% elif storage_used >= storage_limit %}照片空間已滿，請先處理儲存容量，再新增照片。{% else %}尚可使用 {{ '%.2f'|format((storage_limit - storage_used) / 1048576) }} MiB；此用量不受下方篩選條件影響。{% endif %}</p>
-</section>
+</details>
 {% endif %}
 <section class="panel filter-panel records-query-panel" data-records-query>
 <button class="records-query-toggle" type="button" aria-expanded="true" aria-controls="records-query-fields" data-query-toggle hidden>
