@@ -1,0 +1,64 @@
+/* Adapt to the space left beside the navigation, including at browser zoom. */
+#record-results, #missed-results { container: report-results / inline-size; }
+
+@media (min-width: 721px) {
+  .records-filter-form .records-filter-actions { grid-column: -2 / -1; }
+  .records-filter-actions > .text-link { min-height: 44px; }
+  .records-filter-form { grid-template-columns: repeat(auto-fit, minmax(min(100%, 185px), 1fr)); }
+}
+
+/* Keep headings available to assistive technology when rows become cards. */
+@container report-results (min-width: 820px) and (max-width: 1040px) {
+  .table-scroll :is(th, td) { padding-inline: 12px; }
+}
+
+@container report-results (max-width: 819.99px) {
+  .table-scroll { margin-inline: 0; overflow: visible; }
+  .table-scroll table { display: block; }
+  .table-scroll thead {
+    display: block; position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .table-scroll tbody { display: grid; gap: 12px; }
+  .table-scroll tbody > tr:not([hidden]) {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start; gap: 14px 18px;
+    padding: 16px; border: 1px solid var(--line); border-radius: 8px;
+  }
+  .table-scroll tbody td {
+    display: block; min-width: 0; padding: 0; border: 0;
+    text-align: left; line-height: 1.5; overflow-wrap: anywhere;
+  }
+  .table-scroll td::before {
+    content: attr(data-label); display: block; margin-bottom: 4px;
+    color: var(--muted); font-size: max(13px, .875em); font-weight: 500; line-height: 1.45;
+  }
+  .table-scroll tbody td:nth-child(2) { grid-column: span 2; }
+  .records-table tbody td:nth-child(6) { grid-column: span 2; }
+  .records-table tbody td:last-child { justify-self: end; align-self: end; }
+  .records-table td:last-child::before { content: none; }
+  .records-table tbody td:last-child .button { min-height: 44px; }
+  .table-scroll .record-point-cell, .table-scroll .record-report-cell {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start;
+    gap: 4px 8px; min-width: 0; max-width: none; text-align: left;
+  }
+  .table-scroll .record-point-cell strong { min-width: 0; overflow-wrap: anywhere; }
+  .table-scroll .record-report-cell .note-summary { flex-basis: 100%; max-width: none; min-width: 0; }
+  .table-scroll .cell-hint { width: auto; margin-top: 3px; }
+  .missed-table tbody td:first-child { white-space: normal; }
+}
+
+@container report-results (max-width: 490px) {
+  .table-scroll tbody > tr:not([hidden]) { gap: 10px; padding: 12px; }
+  .table-scroll tbody td:first-child, .table-scroll tbody td:nth-child(2) { grid-column: 1 / -1; }
+  .table-scroll td:first-child, .table-scroll td:nth-child(2) {
+    display: flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-start; gap: 3px 8px;
+  }
+  .table-scroll td:first-child::before, .table-scroll td:nth-child(2)::before { flex: none; margin: 0; }
+  .table-scroll .record-point-cell { flex: 1 1 135px; }
+  .records-table tbody td:nth-child(6) { grid-column: 1 / -1; }
+  .records-table tbody td:last-child { grid-column: 1 / -1; }
+  .missed-table tbody td:last-child { grid-column: 1 / -1; }
+  .missed-table td:last-child { display: flex; align-items: baseline; justify-content: flex-start; gap: 8px; }
+  .missed-table td:last-child::before { flex: none; margin: 0; }
+}

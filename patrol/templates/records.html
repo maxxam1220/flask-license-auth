@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='report-layout.css') }}" media="screen">{% endblock %}
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, frequency, empty, slot_label, issue_status %}
 {% set executing = stage == 'execution' %}

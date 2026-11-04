@@ -52,7 +52,22 @@
 </form></details>{% endif %}
 <div class="section-heading outside"><h2>{{ '已刪除點位' if show_deleted else category_label(selected_category) ~ '巡檢點' if selected_category else '全部巡檢點' }}</h2><span class="count-label">{{ points|length }} 個點位</span></div>
 <div class="management-list">{% for point in points %}<article class="panel point-management">
-  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span>{% if point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段巡檢</span>{% endif %}<span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
+  <div class="management-top">
+    <div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div>
+    <div class="management-meta">
+      {{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}
+      <span class="badge badge-category">{{ category_label(point.category) }}</span>
+      {% if point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段巡檢</span>{% endif %}
+      <span class="badge badge-neutral">{{ frequency(point.frequency) }}</span>
+      <span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>
+    </div>
+    {% if point.active and not show_deleted %}
+    <div class="point-row-actions">
+      <a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('qr') }}QR Code</a>
+      <a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>
+    </div>
+    {% endif %}
+  </div>
   {% if show_deleted %}
   <div class="archive-row"><span class="muted">刪除時間：{{ point.deleted_at|localtime }}</span><div class="archive-actions">
     <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all') }}">查看歷史案件</a>

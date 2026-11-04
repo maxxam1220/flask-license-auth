@@ -40,6 +40,7 @@
   {% set done_count = card.slots|selectattr('status','equalto','done')|list|length %}
   {% set slot_count = card.slots|length %}
   {% set current_slot = card.slots|selectattr('status','equalto','pending')|rejectattr('expired')|first %}
+  <div class="point-card-content">
   <div class="point-card-top"><span class="point-code">{{ card.point.code }}</span>
     <div class="point-card-badges">
       {% if card.status == 'done' %}<span class="badge badge-done">已完成</span>
@@ -60,6 +61,7 @@
     <div>{{ stage_badge(slot) }}{% if slot.executed_at %}<small>執行時間 {{ slot.executed_at|localtime }}</small>{% endif %}</div>
   </div>{% endfor %}</div>
   {% elif card.point.frequency == 'daily2' %}<div class="slot-grid" aria-label="上午及下午巡檢狀態">{% for slot in card.slots %}<div class="slot-card slot-{{ 'missed' if slot.expired else slot.status }}"><div><strong>{{ slot.label }}</strong><span>{{ '已完成' if slot.status == 'done' else '尚未開始' if slot.status in ['not_due','upcoming'] else '已到期、未巡檢' if slot.expired else '待巡檢' }}</span></div>{% if slot.record %}<small>{{ reporter_name(slot.record) }} · {{ slot.record.created_at|shorttime }}</small>{% else %}<small>{{ '00:00–11:59' if slot.key == 'am' else '12:00–23:59' }}</small>{% endif %}</div>{% endfor %}</div>{% endif %}
+  </div>
   <div class="point-card-bottom">{% if card.point.frequency == 'daily2' %}<span class="completion-mark {{ 'muted-mark' if card.status != 'done' }}">{{ icon('circle-check' if card.status == 'done' else 'clock') }}</span><span>{{ card.period_label }}<small>已完成 {{ done_count }} / {{ slot_count }} 次</small></span>{% elif card.latest %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>{{ reporter_name(card.latest) }}<small>{{ card.latest.created_at|localtime }}</small></span>{% elif card.status == 'done' %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>本期已完成<small>已由其他巡檢人員完成</small></span>{% else %}<span class="completion-mark muted-mark">{{ icon('clock') }}</span><span class="muted">{{ card.period_label }}<small>{{ '此日未列入巡檢' if card.status == 'not_due' else '本期已截止' if card.missed_count else '本期尚未完成' }}</small></span>{% endif %}</div>
 </article>{% else %}{{ empty('本期沒有應巡點位' if irregular_points else '尚無巡檢點', '可在下方查看不定期或免排程的點位。' if irregular_points else  '可更換日期、樓層或巡檢週期。' if is_patrol_admin else '可更換日期、樓層或巡檢週期。若尚未設置負責點位，請聯絡管理員。', 'pin') }}{% endfor %}</div></section>
 {% if irregular_points %}<section class="panel spaced" aria-labelledby="spot-points-title"><div class="section-heading"><div><h2 id="spot-points-title">不定期與免排程點位</h2><p>這些點位可依現場需要打卡，不列入團隊應巡及漏打。{{ '指定點位可直接簽到，每人每點每天一次。' if current_user.role == 'executor' else '指定的總務不定期點由巡檢員或執行人員直接登記，每人每天一次。' }}</p></div><span class="count-label">{{ irregular_points|length }} 個點位</span></div>

@@ -12,20 +12,28 @@
 {% if current_user %}
 <aside class="sidebar" aria-label="主要導覽">
   <a class="brand" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點<small>廠區巡檢管理</small></span></a>
-  <div class="sidebar-label">工作空間</div>
-  <nav class="nav-links">
+  <div class="sidebar-navigation">
+  <div class="sidebar-label" id="workspace-nav-label">工作空間</div>
+  <nav class="nav-links" aria-labelledby="workspace-nav-label">
     <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}">{{ icon('grid') }}巡檢總覽</a>
     <a class="nav-link {% if record_nav_active %}active{% endif %}" href="{{ url_for('records') }}" aria-current="{{ 'page' if record_nav_active else 'false' }}">{{ icon('list') }}{{ '執行紀錄' if current_user.role == 'executor' else '巡檢紀錄' }}</a>
     <a class="nav-link {% if request.endpoint == 'missed' %}active{% endif %}" href="{{ url_for('missed') }}" aria-current="{{ 'page' if request.endpoint == 'missed' else 'false' }}">{{ icon('clock') }}漏打查詢</a>
     {% if current_user.role != 'executor' %}<a class="nav-link {% if issue_nav_active %}active{% endif %}" href="{{ url_for('issues') }}" aria-current="{{ 'page' if issue_nav_active else 'false' }}">{{ icon('alert') }}異常追蹤</a>{% endif %}
     <a class="nav-link {% if request.endpoint == 'devices' %}active{% endif %}" href="{{ url_for('devices') }}" aria-current="{{ 'page' if request.endpoint == 'devices' else 'false' }}">{{ icon('phone') }}我的綁定</a>
   </nav>
-  {% if is_patrol_admin %}<div class="sidebar-label">管理設定</div><nav class="nav-links">
+  {% if is_patrol_admin %}<div class="sidebar-label" id="admin-nav-label">管理設定</div><nav class="nav-links" aria-labelledby="admin-nav-label">
     <a class="nav-link {% if request.endpoint == 'points' %}active{% endif %}" href="{{ url_for('points') }}" aria-current="{{ 'page' if request.endpoint == 'points' else 'false' }}">{{ icon('pin') }}巡檢點管理</a>
     <a class="nav-link {% if request.endpoint == 'admin_devices' %}active{% endif %}" href="{{ url_for('admin_devices') }}" aria-current="{{ 'page' if request.endpoint == 'admin_devices' else 'false' }}">{{ icon('shield') }}綁定審核</a>
     <a class="nav-link {% if request.endpoint == 'users' %}active{% endif %}" href="{{ url_for('users') }}" aria-current="{{ 'page' if request.endpoint == 'users' else 'false' }}">{{ icon('users') }}人員管理</a>
   </nav>{% endif %}
-  <div class="sidebar-bottom"><div class="sidebar-note">{{ icon('building') }}<span>每個點位，一目了然<small>每一次巡檢都有紀錄</small></span></div><div class="account"><span class="avatar">{{ current_user.display_name[:1] }}</span><span class="account-name">{{ current_user.display_name }}<small>{{ role_label(current_user) }}</small></span><a class="icon-button" href="{{ url_for('change_password') }}" aria-label="變更密碼" title="變更密碼">{{ icon('key') }}</a><form action="{{ url_for('logout') }}" method="post">{{ csrf() }}<button class="icon-button" aria-label="登出" title="登出">{{ icon('logout') }}</button></form></div></div>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="account">
+      <span class="avatar" aria-hidden="true">{{ current_user.display_name[:1] }}</span>
+      <span class="account-name">{{ current_user.display_name }}<small>{{ role_label(current_user) }}</small></span>
+      <div class="account-actions"><a class="icon-button" href="{{ url_for('change_password') }}" aria-current="{{ 'page' if request.endpoint == 'change_password' else 'false' }}">{{ icon('key') }}變更密碼</a><form action="{{ url_for('logout') }}" method="post">{{ csrf() }}<button class="icon-button" type="submit">{{ icon('logout') }}登出</button></form></div>
+    </div>
+  </div>
 </aside>
 <header class="mobile-header"><a class="brand" href="{{ url_for('dashboard') }}" aria-current="{{ 'page' if request.endpoint == 'dashboard' else 'false' }}"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點</span></a>
   {% if can_scan %}{{ scanner_button('header', '掃描巡檢點') }}{% endif %}
