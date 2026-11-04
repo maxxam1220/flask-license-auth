@@ -329,7 +329,7 @@
 
     const mobileMenu = document.querySelector('.mobile-menu');
     document.addEventListener('click', event => {
-      if (mobileMenu?.open && !mobileMenu.contains(event.target)) mobileMenu.open = false;
+      if (mobileMenu?.open && (!mobileMenu.contains(event.target) || event.target.closest('[data-ready-jump]'))) mobileMenu.open = false;
     });
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && mobileMenu?.open) {

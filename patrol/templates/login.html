@@ -7,9 +7,9 @@
 {% block body_class %}signin-page{% endblock %}
 {% block flash_area %}{% endblock %}
 {% block content %}
-<div class="signin-shell">
   <div class="login-layout">
     <div class="signin-brand-panel">
+      <div class="signin-brand-inner">
       <div class="brand"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點</span></div>
       <span class="signin-mobile-name">廠區巡檢管理</span>
       <div class="signin-intro">
@@ -27,6 +27,7 @@
         <g fill="#193d43" stroke="#c4e997" stroke-width="2.5"><circle cx="41" cy="93" r="6"/><circle cx="178" cy="62" r="6"/><circle cx="326" cy="120" r="9"/></g>
         <path d="m322.4 120 2.3 2.5 4.8-5.1" stroke="#d7f3b0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
+      </div>
     </div>
     <section class="login-panel" aria-labelledby="signin-heading">
       <div class="login-card">
@@ -49,5 +50,4 @@
       </div>
     </section>
   </div>
-</div>
 {% endblock %}

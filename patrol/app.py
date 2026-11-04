@@ -35,6 +35,7 @@ from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label,
 from missed import period_bounds
 from images import PhotoValidationError, process_uploads
 from patrol_access import can_access_category, can_read_inspection, can_view_general_team, patrol_scope
+from ready_patrol import ready_patrol_points
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -657,6 +658,29 @@ def create_app(config=None):
                 return redirect(destination)
         return render_template("change_password.html", next_url=destination)
 
+    def ready_context(instant, floor_filter, category_filter, points=None):
+        local_now = local_dt(instant)
+        if points is None:
+            query = select(Point).where(Point.active.is_(True), Point.deleted_at.is_(None),
+                                        Point.schedule_start <= local_now.date(), Point.frequency != "irregular")
+            scope = patrol_scope(g.user)
+            if scope is not None:
+                query = query.where(Point.category == scope if scope else db.false())
+            if category_filter:
+                query = query.where(Point.category == category_filter)
+            if floor_filter:
+                query = query.where(Point.floor == int(floor_filter))
+            points = db.session.scalars(query.options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        return dict(ready_points=ready_patrol_points(points, g.user, local_now, floor_filter, category_filter),
+                    ready_date=local_now.date(), ready_as_of=local_now, ready_slot_label=slot_label("am" if local_now.hour < 12 else "pm"))
+
+    @app.get("/dashboard/ready")
+    @login_required
+    def dashboard_ready():
+        floor, category = scope_filters()
+        return render_template("_today_ready.html", selected_floor=floor, selected_category=category,
+                               **ready_context(now_utc(), floor, category))
+
     @app.get("/dashboard")
     @login_required
     def dashboard():
@@ -817,6 +841,7 @@ def create_app(config=None):
             recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
+                               **ready_context(instant, floor_filter, category_filter, points),
                                missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, device_state=device_status(), irregular_points=irregular_points, spot_points=irregular_points,
                                recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
