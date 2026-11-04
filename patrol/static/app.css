@@ -657,3 +657,86 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stage-trail li > div { min-width: 0; overflow-wrap: anywhere; }
 .stage-gap { font-weight: 700; color: #854326; }
 @media (max-width: 720px) { .mobile-nav-executor { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* The sidebar layout has its own reading scale. Use rem so the browser's
+   preferred text size still applies, and keep printed QR sheets independent. */
+@media screen and (min-width: 721px) {
+  :root { font-size: 100%; }
+  h1, .page-heading h1 { font-size: 2.25rem; }
+  h2, .section-heading h2, .confirm-dialog h2, .scanner-heading h2 { font-size: 1.375rem; }
+  h3, .point-card h3, .management-identity h3, .issue-card-heading h3,
+  .center-copy h3, .success-receipt h2, .empty-state h3 { font-size: 1.1875rem; }
+  .stat-value { font-size: clamp(2rem, 3vw, 2.625rem); }
+
+  /* Navigation, controls and primary text. */
+  .nav-link, .account-name, .page-heading p, .section-heading p,
+  .button, .text-link, .text-button, .segmented > a, .category-tabs a,
+  .filter-form > .text-link, .records-filter-actions > .text-link,
+  .point-scope-link, .form-grid .category-choice, .date-filter input,
+  input:not([type=checkbox]), select, textarea, .photo-field input[type=file], .login-card label,
+  .dialog-actions .button, .issue-action-form .button, .scan-trigger-next,
+  .disclosure > summary, .stat-detail-link, .patrol-point-tools .text-link,
+  .checkin-report-link, .point-own-issues-link, .back-link,
+  td, .record-facts strong, .record-note, .notice-strip strong,
+  .activity-info strong, .center-copy p, .steps strong, .callout,
+  .callout strong, .login-card > .muted, .login-intro > p, .flash,
+  .issue-note-preview, .issue-event-note, .issue-history strong, .issue-staff-note,
+  .issue-point-filter > span, .records-query-title, .missed-point-summary > summary strong,
+  .workflow-guide, .workflow-slot, .period-handoff, .checkin-personal-rule,
+  .checkin-quick-action > p, .checkin-result-note strong,
+  .success-card .checkin-location, .checkin-details > div,
+  .success-receipt > div, .success-receipt strong, .confirm-dialog p,
+  .scanner-instructions p, .record-photo > span { font-size: 1rem; }
+  .button-large, .checkin-location { font-size: 1.1875rem; }
+  .checkin-card h1, .success-card h1 { font-size: 2.25rem; }
+  .login-card h2 { font-size: 1.875rem; }
+
+  /* Field labels, statuses and supporting information remain readable alongside the data. */
+  label, .filter-form > label, .password-reset-form label, .issue-action-form > label,
+  .point-scope-filter > span, .point-category-field legend, .inspection-fields > label:not(.abnormal-toggle),
+  .photo-field > label, .abnormal-toggle > span, .photo-picker-box strong,
+  .stats-grid .stat-label, .floor-ratio, .point-code, .records-table .point-code,
+  .slot-card strong, .compact-disclosure > summary, .issue-reopen > summary,
+  .issue-overview > div > span, .button-small, .issue-status-tabs a,
+  .checkin-card > .eyebrow, .open-issue-badge, .query-chip, .team-readonly-note,
+  .issue-card-footer .button, .pagination .button, .storage-usage-heading strong { font-size: .9375rem; }
+  .brand small, .sidebar .brand small, .sidebar-label, .sidebar-note, .sidebar-note small,
+  .account-name small, .eyebrow, .page-footer, .count-label, .demo-banner,
+  .badge, .point-card .badge, .record-status-badge .badge, .issue-card-heading .badge,
+  .issue-treatment .badge, .point-meta, .point-card-bottom,
+  .point-card-bottom small, .workflow-slot small, .stage-trail small,
+  .floor-caption, .floor-number small, .stats-grid .stat-value small,
+  .slot-card > div > span, .slot-card small, .notice-strip small,
+  .activity-info small, .activity-info strong span, .activity-row time,
+  th, .cell-hint, .note-summary, .photo-count, .query-chip-label,
+  label small, .point-category-field small, .danger-zone strong, .danger-zone small,
+  .user-management .management-identity .muted, .you-label, .fine-note,
+  .field-meta, .optional-label, .photo-picker-box small, .photo-guidance, .photo-feedback,
+  .photo-preview-placeholder, .photo-preview figcaption small, .photo-preview figcaption > span,
+  .photo-remove, .abnormal-toggle small, .slot-emphasis small, .upload-form-error p,
+  .callout p, .steps p, .checkin-topline, .checkin-footnote, .checkin-outside-note,
+  .checkin-result-note p, .record-facts span, .checkin-issue-notice p,
+  .login-help p, .login-footnote, .intro-footer, .qr-source,
+  .issue-legend, .issue-card-meta, .issue-overview small, .issue-overview p,
+  .issue-resolution > div, .issue-event-meta, .issue-action-form > label > span,
+  .issue-card-footer > div, .pagination > span, .records-query-title small,
+  .records-query-dates, .records-query-action, .storage-usage-heading, .storage-usage-heading small, .storage-usage p,
+  .dashboard-missed-help, .missed-scope-note, .missed-rules, .missed-deadline,
+  .missed-point-summary > summary small, .missed-summary-footnote,
+  .archive-guide, .assignment-note, .archive-row, .scanner-instructions .scanner-fallback { font-size: .875rem; }
+  input::placeholder { font-size: inherit; }
+  .qr-label-header, .qr-instruction, .qr-label-bottom { font-size: .875rem; }
+
+  /* Give larger labels room before they collide with an icon or another control. */
+  .toolbar, .page-heading, .slot-card > div, .floor-card-top { flex-wrap: wrap; }
+  .stat-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; align-content: start; }
+  .stat-icon { position: static; grid-column: 2; grid-row: 1 / 3; }
+  .stat-value { grid-column: 1; }
+  .floor-caption .icon { flex: none; }
+}
+@media screen and (min-width: 721px) and (max-width: 980px) {
+  .floor-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stat-value { grid-column: 1 / -1; }
+  .stat-icon { grid-row: 1; }
+  .point-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)); }
+}
