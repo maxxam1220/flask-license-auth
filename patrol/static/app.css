@@ -639,6 +639,11 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .toolbar .segmented > a { padding-inline: 4px; text-align: center; }
 }
 .workflow-slots { margin-top: 12px; border-top: 1px solid #dfe6e6; }
+.point-card-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; margin-inline-start: auto; max-width: 100%; }
+.badge-signin { background: #fff1ce; color: #754300; }
+.badge-review, .point-card .badge-todo, .point-card .slot-pending > div > span { background: #e6f0ff; color: #194e82; }
+.badge-partial { background: #f2eafa; color: #613789; }
+.slot-pending > div > span { border-radius: 4px; padding-inline: 4px; }
 .workflow-slot { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; font-size: 14px; }
 .workflow-slot + .workflow-slot { border-top: 1px dashed #dfe6e6; }
 .workflow-slot-label { flex-shrink: 0; color: #53666a; }
