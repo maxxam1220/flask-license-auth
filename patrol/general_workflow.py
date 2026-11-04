@@ -3,13 +3,22 @@ from datetime import timezone
 
 from sqlalchemy import select
 
-from models import PatrolExecution, db
+from models import Inspection, PatrolExecution, db
 
 
 def execution_in_slot(point, key, slot):
     return db.session.scalar(select(PatrolExecution).where(
         PatrolExecution.point_id == point.id, PatrolExecution.frequency == point.frequency,
         PatrolExecution.period_key == key, PatrolExecution.slot == slot))
+
+
+def personal_inspection_in_slot(point, user, personal_day, slot):
+    query = select(Inspection).where(Inspection.point_id == point.id, Inspection.user_id == user.id,
+                                     Inspection.personal_day == personal_day)
+    if slot != "any":
+        query = query.where(Inspection.slot.in_(("any", slot)))
+    # Includes v7 entries, even duplicate spot history preserved during upgrade.
+    return db.session.scalar(query.order_by(Inspection.created_at, Inspection.id).limit(1))
 
 
 def new_execution(point, user, binding, key, slot, created_at):

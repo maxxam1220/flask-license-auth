@@ -108,7 +108,8 @@ def test_daily_all_return_filter_survives_detail_validation(application, seeded,
     with rendered_contexts(application) as contexts:
         assert client.get(f"/records/{row.id}", query_string={"return_to": source}).status_code == 200
     assert contexts[-1][1]["back_url"] == source
-    assert app_module.normalise_return_to("/records?frequency=monthly", seeded["inspector"]) is None
+    assert app_module.normalise_return_to("/records?frequency=monthly", seeded["inspector"]) == "/records?frequency=monthly"
+    assert app_module.normalise_return_to("/records?frequency=bogus", seeded["inspector"]) is None
 
 
 def test_daily_all_never_becomes_a_stored_point_frequency(application, seeded, report_points):

@@ -70,3 +70,5 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 參考：[Render monorepo](https://render.com/docs/monorepo-support)、[Web Service](https://render.com/docs/web-services)、[Private Network](https://render.com/docs/private-network)、[Waitress 反向代理](https://docs.pylonsproject.org/projects/waitress/en/stable/reverse-proxy.html)。
 
 版本 7 新增總務點位打卡方式、執行紀錄與巡檢配對，舊總務排程留歷史快照，生效後預設抽查。部署前確認資料庫匯出已完成，盡量選總務無人送單時段；部署後再設定兩段式設備與執行人員。若需修正，部署支援版本 7 的修正版，不降版或覆蓋共用授權資料庫。
+
+版本 8 支援每月與不定期排程、總務同一時段多人巡檢與個人日上限。正式總務清冊由服務私有的 GENERAL_PATROL_CATALOG_JSON 提供，各筆與授權清冊摘要核對後才匯入。啟動紀錄可核對新增、既有與是否已匯入的數量。資料表升級前應完成資料庫備份，修正部署請使用支援版本 8 的程式。

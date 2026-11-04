@@ -8,7 +8,8 @@ FLOOR_LABELS = dict(FLOOR_OPTIONS)
 FLOOR_ORDER = {value: index for index, (value, _) in enumerate(FLOOR_OPTIONS)}
 CATEGORY_OPTIONS = [("safety", "職安"), ("general", "總務"), ("uncategorized", "未分類")]
 CATEGORY_LABELS = dict(CATEGORY_OPTIONS)
-FREQUENCY_OPTIONS = [("daily", "每日一次"), ("daily2", "每日兩次（上午／下午）"), ("weekly", "每週一次")]
+FREQUENCY_OPTIONS = [("daily", "每日一次"), ("daily2", "每日兩次（上午／下午）"), ("weekly", "每週一次"),
+                     ("monthly", "每月一次"), ("irregular", "不定期")]
 
 
 def floor_label(value):

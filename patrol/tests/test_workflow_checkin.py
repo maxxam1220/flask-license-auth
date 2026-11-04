@@ -73,12 +73,16 @@ def test_roles_order_receipt_and_time_slot(application, monkeypatch):
     log = db.session.scalar(db.select(Inspection))
     assert log.execution.user_id != log.user_id and log.is_abnormal and log.issue is not None
     assert peer.get(r.location).status_code == 403 and executor.get(r.location).status_code == 403
+    peer_receipt = peer.post(post, data=payload(peer, url))
+    assert peer_receipt.status_code == 302 and peer_receipt.location != r.location
+    assert db.session.query(Inspection).count() == 2 and db.session.query(PatrolExecution).count() == 1
+    assert {row.execution_id for row in db.session.scalars(db.select(Inspection))} == {log.execution_id}
     now += timedelta(minutes=1)
     assert inspector.post(post, data=final).status_code == 409  # stale AM form
     assert inspector.post(post, data=final | {"slot":"pm"}).status_code == 409  # cannot use AM execution for PM
 
 
-def test_spot_shared_cooldown_crosses_midnight_and_idempotent(application, monkeypatch):
+def test_direct_checkins_are_personal_and_reset_at_taipei_midnight(application, monkeypatch):
     now = FIXED_NOW.replace(hour=15, minute=45)  # local 23:45
     monkeypatch.setattr(patrol, "now_utc", lambda: now)
     _, a, b, admin, _, url, other = team(application)
@@ -90,31 +94,31 @@ def test_spot_shared_cooldown_crosses_midnight_and_idempotent(application, monke
     changed = a.post(url + "/confirm", data=a_form | {"note":"duplicate edit","is_abnormal":"1"}, follow_redirects=True)
     assert "重送時更改的備註、異常或照片不會追加" in changed.text
     assert not db.session.scalar(db.select(Inspection)).is_abnormal
-    for c, fields in ((b,b_form),(admin,admin_form)):
-        denied = c.post(url + "/confirm", data=fields)
-        assert denied.status_code == 429 and denied.headers["Retry-After"] == "1800"
-        assert "23:45" not in denied.text or "00:15" in denied.text
+    for viewer, fields in ((b, b_form), (admin, admin_form)):
+        assert viewer.post(url + "/confirm", data=fields).status_code == 302
+        assert 'name="spot_ticket"' not in viewer.get(url).text
     assert b.post(other + "/confirm", data=payload(b, other)).status_code == 302
-    now += timedelta(minutes=29, seconds=59)
-    assert 'name="spot_ticket"' not in b.get(url).text and "00:15:00" in b.get(url).text
-    now += timedelta(seconds=1)
-    assert b.post(url + "/confirm", data=payload(b,url)).status_code == 302
-    assert db.session.query(Inspection).count() == 3
+    now += timedelta(minutes=15)
+    assert b.post(url + "/confirm", data=b_form).status_code == 409
+    assert b.post(url + "/confirm", data=payload(b, url)).status_code == 302
+    assert db.session.query(Inspection).count() == 5
 
 
-def test_postgres_spot_two_simultaneous_accounts_only_one_saved(postgres_app):
+def test_postgres_simultaneous_accounts_and_double_submit(postgres_app):
     with postgres_app.app_context():
         _, a, b, _, _, url, _ = team(postgres_app)
-    candidates = [(c,payload(c,url)) for c in (a,b)]
-    gate = Barrier(2)
+    candidates = [(a, payload(a, url)), (b, payload(b, url)), (a, payload(a, url))]
+    gate = Barrier(len(candidates))
     def submit(item):
         c, data = item
         gate.wait(timeout=10)
         return c.post(url + "/confirm", data=data).status_code
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(submit, candidates)) == [302,429]
+    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+        assert list(pool.map(submit, candidates)) == [302, 302, 302]
     with postgres_app.app_context():
-        assert db.session.query(Inspection).count() == 1
+        saved = db.session.scalars(db.select(Inspection)).all()
+        assert len(saved) == 2 and len({r.user_id for r in saved}) == 2
+
 
 def test_admin_configures_general_and_cannot_swap_an_open_execution(application):
     executor, _, _, admin, url, _, _ = team(application)
@@ -133,3 +137,43 @@ def test_admin_configures_general_and_cannot_swap_an_open_execution(application)
     assert admin.post(target + "/update", data=fields | {"code":pt.code,"workflow_mode":"spot","active":"on"}).status_code == 409
     assert admin.post(target + "/delete").status_code == 409
     assert pt.active and pt.workflow_mode == "two_stage" and pt.deleted_at is None
+
+def test_weekly_shared_execution_but_personal_checkins_reset_daily(application, monkeypatch):
+    now = FIXED_NOW
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    executor, a, b, _, url, _, _ = team(application)
+    pt = db.session.scalar(db.select(Point).where(Point.workflow_mode == "two_stage"))
+    pt.frequency = pt.schedules[0].frequency = "weekly"
+    db.session.commit()
+    assert executor.post(url + "/confirm", data=payload(executor, url)).status_code == 302
+    old = payload(a, url)
+    for viewer in (a, b):
+        assert viewer.post(url + "/confirm", data=payload(viewer, url)).status_code == 302
+    assert 'id="inspection-form"' not in a.get(url).text
+    now += timedelta(days=1)
+    assert a.post(url + "/confirm", data=old).status_code == 409
+    assert a.post(url + "/confirm", data=payload(a, url)).status_code == 302
+    assert db.session.query(PatrolExecution).count() == 1 and db.session.query(Inspection).count() == 3
+    now += timedelta(days=7)
+    assert 'id="inspection-form"' not in a.get(url).text
+
+
+def test_monthly_and_irregular_direct_checks_without_execution(application, monkeypatch):
+    now = FIXED_NOW.replace(day=29)
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    _, a, b, _, _, monthly, irregular = team(application)
+    for url, frequency in ((monthly, "monthly"), (irregular, "irregular")):
+        pt = db.session.scalar(db.select(Point).where(Point.qr_token == url.split("/")[-1]))
+        pt.frequency = pt.schedules[0].frequency = frequency
+    db.session.commit()
+    for url in (monthly, irregular):
+        for viewer in (a, b):
+            assert viewer.post(url + "/confirm", data=payload(viewer, url)).status_code == 302
+            assert 'id="inspection-form"' not in viewer.get(url).text
+    now += timedelta(days=1)
+    assert a.post(monthly + "/confirm", data=payload(a, monthly)).status_code == 302
+    now += timedelta(days=1)
+    assert a.post(monthly + "/confirm", data=payload(a, monthly)).status_code == 302
+    months = db.session.scalars(db.select(Inspection).where(Inspection.frequency == "monthly").order_by(Inspection.id)).all()
+    assert [r.period_key for r in months] == ["2026-11-01"]*3 + ["2026-12-01"]
+    assert db.session.query(PatrolExecution).count() == 0

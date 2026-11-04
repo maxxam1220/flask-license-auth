@@ -610,6 +610,11 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .stage-notice { background: #fcf3e2; border-color: #a46722; color: #694315; }
 .stage-notice .button { margin-top: 10px; }
 .checkin-quick-action .period-label { white-space: nowrap; }
+.checkin-personal-rule { color: #435e64; font-size: 14px; line-height: 1.65; text-align: start; }
+@media (max-width: 480px) {
+  .toolbar .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .toolbar .segmented > a { padding-inline: 4px; text-align: center; }
+}
 .workflow-slots { margin-top: 12px; border-top: 1px solid #dfe6e6; }
 .workflow-slot { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; font-size: 14px; }
 .workflow-slot + .workflow-slot { border-top: 1px dashed #dfe6e6; }

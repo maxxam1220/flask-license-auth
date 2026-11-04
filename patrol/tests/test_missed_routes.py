@@ -120,7 +120,7 @@ def test_pagination_total_summary_and_export_are_not_limited_to_one_page(applica
 @pytest.mark.parametrize('query', [
     'date_from=2026-11-04&date_to=2026-11-03',
     'date_from=2025-01-01&date_to=2026-11-03',
-    'date_from=bad', 'category=bad', 'floor=13', 'frequency=monthly', 'page=0',
+    'date_from=bad', 'category=bad', 'floor=13', 'frequency=bogus', 'page=0',
 ])
 def test_invalid_report_filters_fail_closed(application, seeded, query):
     client = application.test_client()

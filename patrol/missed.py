@@ -1,16 +1,16 @@
 """Pure, historical calculation of expired, uncompleted patrol obligations.
 
 The selected dates mean *due dates*: a daily slot is due on its patrol day,
-and a weekly slot is due on Sunday. The actual exclusive deadline is noon,
-the following midnight, or the following Monday. At the deadline a missing
-slot becomes overdue. A week is therefore counted once across adjacent ranges.
+a weekly slot on Sunday, and a monthly slot on the last Taipei calendar day.
+At the exclusive deadline (noon or the following midnight) it becomes overdue.
 
 Callers must preload point.schedules and supply completions for every user,
-starting at the Monday containing date_from through date_to. Ordinary schedule
+starting at the earliest overlapping week or month start. Ordinary schedule
 changes apply to the whole effective date. A deletion records its precise
 instant so obligations already overdue that day can still be reported.
 """
 from bisect import bisect_right
+from calendar import monthrange
 from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -18,7 +18,17 @@ from zoneinfo import ZoneInfo
 from domain import CATEGORY_OPTIONS, FLOOR_ORDER
 
 TAIPEI = ZoneInfo("Asia/Taipei")
-FREQUENCIES = {"daily", "daily2", "weekly"}
+VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "weekly": ("weekly",), "monthly": ("monthly",)}
+FREQUENCIES = {"daily", "daily2", "weekly", "monthly", "irregular"}
+
+
+def period_bounds(day, view):
+    if view == "monthly":
+        return day.replace(day=1), day.replace(day=monthrange(day.year, day.month)[1])
+    if view == "weekly":
+        monday = day - timedelta(days=day.weekday())
+        return monday, monday + timedelta(days=6)
+    return day, day
 
 
 def _value(item, name, default=None):
@@ -35,6 +45,8 @@ def _utc(instant):
 def _completion_keys(completions, default_mode="standard"):
     keys = set()
     for item in completions:
+        if _value(item, "legacy_unscheduled", False):
+            continue
         if isinstance(item, (tuple, list)) and not hasattr(item, "point_id"):
             point_id, frequency, period_key, slot, *modes = item
             mode = modes[0] if modes else default_mode
@@ -72,11 +84,12 @@ def _snapshot(point, schedule):
         "frequency": historical("frequency", _value(point, "frequency")),
         # Schedules from before workflows were introduced represent the original rules.
         "workflow_mode": _value(schedule if schedule is not None else point, "workflow_mode", "standard") or "standard",
+        "legacy_unscheduled": bool(_value(schedule, "legacy_unscheduled", False)),
         "active": historical("active", _value(point, "active", True)),
     }
 
 
-def slot_plans(point, day, timeline, *, for_missed=False, weekly_view=False):
+def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
     """Yield the schedule binding each slot immediately before its Taipei deadline."""
     dates, schedules = timeline
     last = bisect_right(dates, day) - 1
@@ -107,13 +120,13 @@ def slot_plans(point, day, timeline, *, for_missed=False, weekly_view=False):
                 index -= 1
         snapshot = _snapshot(point, schedule)
         frequency = snapshot["frequency"]
-        if not snapshot["active"] or frequency not in FREQUENCIES:
+        if not snapshot["active"] or snapshot["legacy_unscheduled"] or frequency not in FREQUENCIES or frequency == "irregular":
             continue
         if morning and frequency != "daily2":
             continue
-        if frequency == "weekly" and for_missed and day.weekday() != 6:
+        if for_missed and day != period_bounds(day, frequency)[1]:
             continue
-        if not for_missed and (frequency == "weekly") != weekly_view:
+        if not for_missed and frequency not in VIEW_FREQUENCIES[view]:
             continue
         slot = ("am" if morning else "pm") if frequency == "daily2" else "any"
         yield snapshot, slot, deadline
@@ -152,9 +165,9 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
 
     instant = _utc(now)
     last_due_day = min(date_to, instant.astimezone(TAIPEI).date())
-    # A genuine scheduled inspection predating a same-period workflow change
-    # continues to satisfy that slot. An optional spot check never does.
-    completed = {key[:4] for key in _completion_keys(completions) if key[4] in ("standard", "two_stage")}
+    # A scheduled completion survives same-period plan edits. Several qualifying
+    # inspections by one or more people still satisfy just one team obligation.
+    completed = {key[:4] for key in _completion_keys(completions)}
     executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
@@ -172,17 +185,16 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         while due_day <= last_due_day:
             for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True):
                 period_frequency, mode = snapshot["frequency"], snapshot["workflow_mode"]
-                if (mode == "spot" or (two_stage_only and mode != "two_stage")
+                if ((two_stage_only and mode != "two_stage")
                         or (category and snapshot["category"] != category)
                         or (floor is not None and snapshot["floor"] != floor)
                         or (frequency and period_frequency != frequency
                             and not (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
                     continue
-                if period_frequency == "weekly":
-                    period_start = due_day - timedelta(days=6)
+                period_start, _ = period_bounds(due_day, period_frequency)
+                if period_frequency in ("weekly", "monthly"):
                     period_label = f"{period_start.isoformat()} – {due_day.isoformat()}"
                 else:
-                    period_start = due_day
                     period_label = due_day.isoformat()
                 period_key = period_start.isoformat()
                 deadline = local_deadline.astimezone(timezone.utc)

@@ -159,6 +159,8 @@
       validateRange();
     });
 
+    const officialCodes = JSON.parse(document.querySelector('#official-general-codes')?.dataset.codes || '{}');
+    const catalogCodes = new Map(Object.entries(officialCodes).map(([code, floor]) => [code.toLowerCase(), {code, floor}]));
     document.querySelectorAll('form[data-point-form]').forEach(form => {
       const workflow = form.querySelector('[data-workflow-control]');
       if (workflow) {
@@ -168,6 +170,11 @@
           const general = form.elements.namedItem('category')?.value === 'general';
           workflow.hidden = !general;
           select.disabled = !general;
+          const frequency = form.elements.namedItem('frequency');
+          for (const option of frequency.querySelectorAll('[data-general-frequency]')) {
+            option.hidden = option.disabled = !general;
+            if (!general && option.selected) frequency.value = 'daily';
+          }
           if (general && !select.value) select.value = 'spot';
         };
         categoryInputs.forEach(input => input.addEventListener('change', updateWorkflow));
@@ -176,17 +183,37 @@
       const floor = form.elements.namedItem('floor');
       const code = form.elements.namedItem('code');
       if (!floor || !code) return;
+      const registeredCode = value => {
+        const official = catalogCodes.get(value.toLowerCase());
+        if (official) return official;
+        const original = form.dataset.originalCode;
+        if (original && value === original && form.elements.namedItem('category')?.value === 'general'
+            && form.dataset.originalFloor === floor.value) return {code: original, floor: floor.value};
+      };
       const validatePoint = () => {
         code.setCustomValidity('');
-        const value = code.value.trim().toUpperCase();
+        const value = code.value.trim();
+        if (!value) return;
+        const registered = registeredCode(value);
+        if (registered) {
+          if (String(registered.floor) !== floor.value || form.elements.namedItem('category')?.value !== 'general') {
+            code.setCustomValidity('清冊原始編號須對應總務分類與原樓層。');
+          }
+          return;
+        }
         const prefix = floor.selectedOptions[0]?.textContent.trim().toUpperCase();
-        if (value && /^[A-Z0-9]+-[A-Z0-9]{2,20}$/.test(value) && prefix && !value.startsWith(`${prefix}-`)) {
+        if (!/^[A-Z0-9]+-[A-Z0-9]{2,20}$/i.test(value) || !value.toUpperCase().startsWith(`${prefix}-`)) {
           code.setCustomValidity(`點位編號需與樓層一致，請使用 ${prefix}- 開頭。`);
         }
       };
       code.addEventListener('input', validatePoint);
       floor.addEventListener('change', validatePoint);
-      code.addEventListener('blur', () => { code.value = code.value.trim().toUpperCase(); validatePoint(); });
+      form.querySelectorAll('input[name=category]').forEach(input => input.addEventListener('change', validatePoint));
+      code.addEventListener('blur', () => {
+        const value = code.value.trim();
+        code.value = registeredCode(value)?.code || value.toUpperCase();
+        validatePoint();
+      });
       validatePoint();
     });
 

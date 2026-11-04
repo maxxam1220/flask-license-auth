@@ -13,14 +13,16 @@
   <select name="workflow_mode">
     {% if point and point.category == 'general' and point.workflow_mode == 'standard' %}
       <option value="standard" selected>沿用既有定期巡檢</option>
-    {% else %}<option value=""{% if not point or point.category != 'general' %} selected{% endif %}>依分類預設（總務為抽查）</option>{% endif %}
-    <option value="spot"{% if point and point.workflow_mode == 'spot' %} selected{% endif %}>抽查點</option>
+    {% else %}<option value=""{% if not point or point.category != 'general' %} selected{% endif %}>依分類預設（總務為單段）</option>{% endif %}
+    <option value="spot"{% if point and point.workflow_mode == 'spot' %} selected{% endif %}>單段巡檢</option>
     <option value="two_stage"{% if point and point.workflow_mode == 'two_stage' %} selected{% endif %}>兩階段：先執行、再巡檢</option>
   </select>
-  <small>抽查點由同一點所有人共用 30 分鐘間隔，不列漏打。兩階段點位由執行人員先簽到，再由巡檢員巡檢。</small>
+  <small>單段由巡檢員直接打卡。兩階段由執行人員先簽到，再由各巡檢員分別登記。是否列入漏打依巡檢頻率決定。</small>
 </label>
 {% endmacro %}
+{% macro frequency_select(selected) %}<select name="frequency">{% for value,label in [('daily','每日一次'),('daily2','每日兩次（上午／下午）'),('weekly','每週一次'),('monthly','每月一次'),('irregular','不定期')] %}<option value="{{ value }}"{% if value in ['monthly','irregular'] %} data-general-frequency{% endif %}{% if selected == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}
 {% block content %}
+<div hidden id="official-general-codes" data-codes='{{ official_general_codes|default({})|tojson }}'></div>
 <div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢時段與專屬 QR Code。</p></div>{% if not show_deleted %}<a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a>{% endif %}</div>
 <nav class="category-tabs" aria-label="點位清單">
   <a class="{{ 'selected' if not show_deleted }}" aria-current="{{ 'page' if not show_deleted else 'false' }}" href="{{ url_for('points', category=selected_category, floor=selected_floor) }}">現有點位</a>
@@ -42,15 +44,15 @@
     {{ category_choices(selected_category) }}
     {{ workflow_choices() }}
     <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+-[A-Za-z0-9]{2,20}" title="樓層代碼加上連字號，後段使用 2 至 20 個英文字母或數字" autocapitalize="characters" spellcheck="false"><small>編號需對應樓層，每個點位編號不可重複。</small></label>
+    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>請使用樓層代碼加編號，或依總務清冊保留原編號與大小寫。</small></label>
     <label>地點名稱<input name="name" required maxlength="100" placeholder="例如：機房入口"></label>
-    <label>巡檢頻率<select name="frequency"><option value="daily">每日一次</option><option value="daily2">每日兩次（上午／下午）</option><option value="weekly">每週一次</option></select><small>每日兩次以中午 12:00 分界。</small></label>
+    <label>巡檢頻率{{ frequency_select('daily') }}<small>每日兩次以中午 12:00 分界。</small></label>
   </div>
   <input type="hidden" name="active" value="on"><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立點位</button></div>
 </form></details>{% endif %}
 <div class="section-heading outside"><h2>{{ '已刪除點位' if show_deleted else category_label(selected_category) ~ '巡檢點' if selected_category else '全部巡檢點' }}</h2><span class="count-label">{{ points|length }} 個點位</span></div>
 <div class="management-list">{% for point in points %}<article class="panel point-management">
-  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span>{% if point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif point.workflow_mode == 'spot' %}<span class="badge badge-neutral">抽查點</span>{% endif %}{% if point.workflow_mode != 'spot' %}<span class="badge badge-neutral">{{ frequency(point.frequency) }}</span>{% endif %}<span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
+  <div class="management-top"><div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div><div class="management-meta">{{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}<span class="badge badge-category">{{ category_label(point.category) }}</span>{% if point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段巡檢</span>{% endif %}<span class="badge badge-neutral">{{ frequency(point.frequency) }}</span><span class="badge {{ 'badge-done' if point.active and not show_deleted else 'badge-revoked' }}">{{ '已刪除' if show_deleted else '啟用中' if point.active else '已停用' }}</span>{% if point.active and not show_deleted %}<a class="button button-secondary button-small" href="{{ url_for('print_qr', ids=point.id, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('qr') }}QR Code</a><a class="button button-secondary button-small" href="{{ url_for('checkin', token=point.qr_token) }}">{{ icon('arrow') }}開啟確認頁</a>{% endif %}</div></div>
   {% if show_deleted %}
   <div class="archive-row"><span class="muted">刪除時間：{{ point.deleted_at|localtime }}</span><div class="archive-actions">
     <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all') }}">查看歷史案件</a>
@@ -58,14 +60,14 @@
   </div></div>
   {% else %}
   <details class="disclosure compact-disclosure"><summary><span>編輯或刪除點位</span>{{ icon('down') }}</summary>
-  <form method="post" action="{{ url_for('update_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form>{{ csrf() }}{{ management_revision(point) }}
+  <form method="post" action="{{ url_for('update_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" class="edit-form" data-point-form{% if point.category == 'general' %} data-original-code="{{ point.code }}" data-original-floor="{{ point.floor }}"{% endif %}>{{ csrf() }}{{ management_revision(point) }}
     <div class="form-grid point-fields">
       {{ category_choices(point.category, point.category == 'uncategorized') }}
       {{ workflow_choices(point) }}
       <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if point.floor == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+-[A-Za-z0-9]{2,20}" title="樓層代碼加上連字號，後段使用 2 至 20 個英文字母或數字" autocapitalize="characters" spellcheck="false"></label>
+      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"></label>
       <label>地點名稱<input name="name" required maxlength="100" value="{{ point.name }}"></label>
-      <label>巡檢頻率<select name="frequency"><option value="daily" {% if point.frequency == 'daily' %}selected{% endif %}>每日一次</option><option value="daily2" {% if point.frequency == 'daily2' %}selected{% endif %}>每日兩次（上午／下午）</option><option value="weekly" {% if point.frequency == 'weekly' %}selected{% endif %}>每週一次</option></select></label>
+      <label>巡檢頻率{{ frequency_select(point.frequency) }}</label>
     </div>
     <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if point.active %}checked{% endif %}>啟用此巡檢點</label><button class="button button-primary button-small">儲存變更</button></div>
   </form>

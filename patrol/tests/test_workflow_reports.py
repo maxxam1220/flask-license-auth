@@ -11,16 +11,16 @@ DAY = date(2026, 11, 2)
 RANGE = "date_from=2026-11-02&date_to=2026-11-02&category=general"
 
 
-def plan(point, day, mode, changed=None):
+def plan(point, day, mode, changed=None, *, legacy=False):
     point.schedules.append(PointSchedule(effective_date=day, active=True, frequency=point.frequency,
         category="general", workflow_mode=mode, floor=point.floor, point_code=point.code,
-        point_name=point.name, workflow_changed_at=changed))
+        point_name=point.name, workflow_changed_at=changed, legacy_unscheduled=legacy))
 
 
-def point(code, mode):
-    item = Point(code=code, name=code, floor=1, category="general", active=True, frequency="daily2",
+def point(code, mode, *, legacy=False, frequency="daily2"):
+    item = Point(code=code, name=code, floor=1, category="general", active=True, frequency=frequency,
                  workflow_mode=mode, schedule_start=date(2026, 1, 1), created_at=datetime(2026, 1, 1))
-    plan(item, item.schedule_start, mode)
+    plan(item, item.schedule_start, mode, legacy=legacy)
     db.session.add(item)
     db.session.flush()
     return item
@@ -38,7 +38,7 @@ def workflow(seeded):
     db.session.flush()
     for user in (worker, reviewer, other):
         db.session.add(DeviceBinding(user_id=user.id, token_hash=f"unused-report-fixture-{user.id}", status="approved"))
-    scheduled, spot = point("1F-TWO", "two_stage"), point("1F-SPOT", "spot")
+    scheduled, spot = point("1F-TWO", "two_stage"), point("1F-SPOT", "spot", legacy=True)
     db.session.commit()
     return worker, reviewer, other, scheduled, spot
 
@@ -68,11 +68,12 @@ def csv_rows(response):
     return list(csv.reader(io.StringIO(response.data.decode("utf-8-sig"))))
 
 
-def test_spot_never_in_denominator_or_missed_and_two_stages_count_one_slot(application, workflow):
+def test_legacy_spot_never_in_denominator_or_missed_and_two_stages_count_one_slot(application, workflow):
     worker, reviewer, _, pair, spot = workflow
     db.session.add(PatrolExecution(**values(worker,pair,"am")))
-    for token in ("a"*64,"b"*64):
-        db.session.add(Inspection(**values(reviewer,spot,"am"),workflow_mode="spot",spot_request_id=token))
+    for slot, token in (("am", "a"*64), ("pm", "b"*64)):
+        db.session.add(Inspection(**values(reviewer,spot,slot), workflow_mode="spot", spot_request_id=token,
+                                  legacy_unscheduled=True))
     db.session.commit()
     client=open_as(application,reviewer)
     dash=context(application,client,"/dashboard?date=2026-11-02")
@@ -122,11 +123,11 @@ def test_only_own_execution_and_authorized_final_reports_can_export_paired_perso
     ("spot","two_stage",4,["pm"]), ("spot","two_stage",3,["pm","am"]),
 ])
 def test_workflow_changes_preserve_only_slots_that_existed_before_each_deadline(application, seeded, old, new, hour, expected):
-    item=point("1F-SWITCH",old)
+    item=point("1F-SWITCH",old,legacy=old=="spot")
     item.workflow_mode=new
-    plan(item, DAY, new, datetime(2026,11,2,hour))
+    plan(item, DAY, new, datetime(2026,11,2,hour), legacy=new=="spot")
     item.name="Renamed after switch"
-    plan(item, DAY, new)
+    plan(item, DAY, new, legacy=new=="spot")
     db.session.commit()
     client=open_as(application,seeded["manager"])
     report=context(application,client,"/missed?"+RANGE)
@@ -153,3 +154,86 @@ def test_completed_legacy_week_survives_midweek_switch_without_inventing_executi
     assert dash["cards"][0]["point"].workflow_mode=="standard"
     missed=context(application,client,"/missed?date_from=2026-11-08&date_to=2026-11-08&category=general")
     assert not missed["occurrences"]
+
+
+def test_scheduled_spot_counts_after_cutover_and_old_optional_receipt_does_not_cover_it(application, workflow):
+    _, reviewer, _, _, item = workflow
+    plan(item, DAY, "spot", datetime(2026,11,2,5))  # 13:00 Taipei: no retroactive AM duty
+    before_cutover = values(reviewer,item,"pm") | {"created_at": datetime(2026,11,2,4,15)}
+    db.session.add(Inspection(**before_cutover, workflow_mode="spot", spot_request_id="c"*64,
+                              legacy_unscheduled=True))
+    db.session.commit()
+    client = open_as(application, reviewer)
+    dash = context(application, client, "/dashboard?date=2026-11-02")
+    card, = [c for c in dash["cards"] if c["point"].id == item.id]
+    assert [(s["key"], s["status"]) for s in card["slots"]] == [("pm", "pending")]
+    rows = context(application, client, "/missed?" + RANGE)["occurrences"]
+    assert [r["slot"] for r in rows if r["point_id"] == item.id] == ["pm"]
+    assert item.code in client.get("/records/export?" + RANGE).get_data(as_text=True)
+
+
+def test_monthly_repeated_personal_reviews_one_team_slot_one_execution_private_receipts(application, seeded, workflow, monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+    worker, first_reviewer, second_reviewer, _, _ = workflow
+    second_reviewer.role = "inspector"
+    item = point("1F-MONTHLY", "two_stage", frequency="monthly")
+    def fields(person, day):
+        return values(person, item, "any") | {"period_key": "2026-11-01", "created_at": datetime(2026, 11, day, 1)}
+    execution = PatrolExecution(**fields(worker, 1))
+    db.session.add(execution)
+    db.session.flush()
+    reviews = []
+    for person, day in ((first_reviewer, 2), (second_reviewer, 3), (second_reviewer, 8)):
+        row = Inspection(**fields(person, day), workflow_mode="two_stage", execution_id=execution.id, note=f"private-{day}")
+        db.session.add(row)
+        reviews.append(row)
+    item.floor = 2
+    plan(item, date(2026,11,12), "two_stage")
+    late = Inspection(**fields(first_reviewer, 13), workflow_mode="two_stage", execution_id=execution.id, note="private-new-floor")
+    db.session.add(late)
+    db.session.commit()
+    monkeypatch.setattr(app_module, "now_utc", lambda: datetime(2026,11,30,16,tzinfo=timezone.utc))
+    client = open_as(application, second_reviewer)
+    dash = context(application, client, "/dashboard?view=monthly&date=2026-11-29")
+    assert dash["totals"] == {"total": 1, "done": 1, "pending": 0}
+    assert [f["floor"] for f in dash["floors"] if f["done"]] == [1]
+    card, = dash["cards"]
+    assert card["point"].floor == 1 and card["latest"].id == reviews[2].id
+    for link in ("missed_query_url", "records_query_url"):
+        query = parse_qs(urlsplit(dash[link]).query)
+        assert (query["date_from"], query["date_to"], query["frequency"]) == (["2026-11-01"], ["2026-11-30"], ["monthly"])
+    narrow = "date_from=2026-11-30&date_to=2026-11-30&frequency=monthly"
+    assert not context(application, client, "/missed?" + narrow)["occurrences"]
+    assert len(csv_rows(client.get("/missed/export?" + narrow))) == 1
+    filters = "date_from=2026-11-01&date_to=2026-11-30&frequency=monthly"
+    receipts = context(application, client, "/records?" + filters)["records"]
+    assert [r.id for r in receipts] == [reviews[2].id, reviews[1].id]
+    csv_data = csv_rows(client.get("/records/export?" + filters))
+    assert len(csv_data) == 3 and "private-2" not in str(csv_data) and "private-new-floor" not in str(csv_data)
+    admin = open_as(application, seeded["manager"])
+    report = context(application, admin, "/records?stage=execution&" + filters)
+    assert [e.id for e in report["executions"]] == [execution.id] and report["reviewed_execution_ids"] == {execution.id}
+    execution_csv = csv_rows(admin.get("/records/export?stage=execution&" + filters))
+    assert len(execution_csv) == 2 and execution_csv[1][-1] == "已巡檢"
+
+
+def test_irregular_list_monthly_misses_and_exact_frequency_filters(application, seeded, workflow, monkeypatch):
+    worker, reviewer, _, _, _ = workflow
+    one = point("1F-IRREGULAR", "spot", frequency="irregular")
+    two = point("1F-IRREG-TWO", "two_stage", frequency="irregular")
+    month = point("1F-MONTH-END", "spot", frequency="monthly")
+    db.session.add(Inspection(**values(reviewer,one,"any"), workflow_mode="spot", spot_request_id="d"*64))
+    db.session.commit()
+    monkeypatch.setattr(app_module, "now_utc", lambda: datetime(2026,11,30,16,tzinfo=timezone.utc))
+    client = open_as(application, reviewer)
+    dash = context(application, client, "/dashboard?view=monthly&date=2026-11-30")
+    assert {p.id for p in dash["irregular_points"] if not p.legacy_unscheduled} == {one.id, two.id}
+    assert dash["totals"] == {"total": 1, "done": 0, "pending": 1}
+    worker_dash = context(application, open_as(application, worker), "/dashboard?view=monthly&date=2026-11-30")
+    assert [p.id for p in worker_dash["irregular_points"]] == [two.id] and worker_dash["totals"]["total"] == 0
+    filters = "date_from=2026-11-01&date_to=2026-11-30"
+    row, = context(application, client, "/missed?" + filters + "&frequency=monthly")["occurrences"]
+    assert (row["point_id"], row["due_date"], row["period_key"]) == (month.id, date(2026,11,30), "2026-11-01")
+    assert not context(application, client, "/missed?" + filters + "&frequency=irregular")["occurrences"]
+    csv_data = csv_rows(client.get("/records/export?" + filters + "&frequency=irregular"))
+    assert len(csv_data) == 2 and csv_data[1][2:4] == [one.code, one.name]

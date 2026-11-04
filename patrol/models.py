@@ -1,5 +1,6 @@
 """Patrol data. All table names are isolated from other applications."""
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import secrets
 import sqlite3
 
@@ -11,6 +12,9 @@ from sqlalchemy.engine import Engine
 db = SQLAlchemy()
 
 POINT_WORKFLOW_RULE = "workflow_mode = 'standard' OR (category = 'general' AND workflow_mode IN ('spot','two_stage'))"
+EXECUTION_SLOT_RULE = ("(frequency IN ('daily','weekly','monthly','irregular') AND slot = 'any') OR "
+                       "(frequency = 'daily2' AND slot IN ('am','pm'))")
+TAIPEI = ZoneInfo("Asia/Taipei")
 
 
 @event.listens_for(Engine, "connect")
@@ -24,6 +28,16 @@ def configure_sqlite(connection, _):
 
 def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def inspection_personal_day(context):
+    values = context.get_current_parameters()
+    if values.get("workflow_mode") in ("spot", "two_stage"):
+        instant = values.get("created_at") or utcnow()
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        return instant.astimezone(TAIPEI).date()
+    return None
 
 
 class User(db.Model):
@@ -77,6 +91,7 @@ class PointSchedule(db.Model):
     workflow_mode = db.Column(db.String(10), db.CheckConstraint(POINT_WORKFLOW_RULE, name="patrol_schedule_workflow"),
                               nullable=False, default="standard", server_default="standard")
     workflow_changed_at = db.Column(db.DateTime)
+    legacy_unscheduled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     # Nullable so older workers can finish during a rolling deployment.
     floor = db.Column(db.Integer)
     point_code = db.Column(db.String(30))
@@ -119,12 +134,11 @@ class PatrolExecution(db.Model):
     user_name = db.Column(db.String(100), nullable=False)
     user = db.relationship(User)
     point = db.relationship(Point)
-    inspection = db.relationship("Inspection", back_populates="execution", uselist=False,
-                                 foreign_keys="Inspection.execution_id", viewonly=True)
+    inspections = db.relationship("Inspection", back_populates="execution", order_by="Inspection.created_at, Inspection.id",
+                                  foreign_keys="Inspection.execution_id", viewonly=True)
     __table_args__ = (
         db.CheckConstraint("category = 'general'", name="patrol_execution_general"),
-        db.CheckConstraint("(frequency IN ('daily','weekly') AND slot = 'any') OR "
-                           "(frequency = 'daily2' AND slot IN ('am','pm'))", name="patrol_execution_valid_slot"),
+        db.CheckConstraint(EXECUTION_SLOT_RULE, name="patrol_execution_valid_slot"),
         db.UniqueConstraint("point_id", "frequency", "period_key", "slot", name="patrol_one_execution_per_slot"),
         # A final review may only reference the first stage from the exact same obligation.
         db.UniqueConstraint("id", "point_id", "frequency", "period_key", "slot", name="patrol_execution_identity"),
@@ -145,6 +159,9 @@ class Inspection(db.Model):
     workflow_mode = db.Column(db.String(10), nullable=False, default="standard", server_default="standard")
     execution_id = db.Column(db.Integer)
     spot_request_id = db.Column(db.String(64))
+    personal_day = db.Column(db.Date, default=inspection_personal_day)
+    legacy_slot_repeat = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    legacy_unscheduled = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     note = db.Column(db.Text, nullable=False, default="", server_default="")
     is_abnormal = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     point_code = db.Column(db.String(30), nullable=False)
@@ -153,12 +170,19 @@ class Inspection(db.Model):
     user_name = db.Column(db.String(100), nullable=False, default="")
     user = db.relationship(User)
     point = db.relationship(Point)
-    execution = db.relationship(PatrolExecution, back_populates="inspection", foreign_keys=[execution_id])
+    execution = db.relationship(PatrolExecution, back_populates="inspections", foreign_keys=[execution_id])
     photos = db.relationship("InspectionPhoto", back_populates="inspection", lazy="select", cascade="all, delete-orphan")
     issue = db.relationship("InspectionIssue", back_populates="inspection", uselist=False, lazy="select")
     __table_args__ = (
-        db.Index("patrol_one_required_inspection_per_slot", "point_id", "frequency", "period_key", "slot", unique=True,
-                 sqlite_where=db.text("workflow_mode <> 'spot'"), postgresql_where=db.text("workflow_mode <> 'spot'")),
+        db.Index("patrol_one_standard_per_slot", "point_id", "frequency", "period_key", "slot", unique=True,
+                 sqlite_where=db.text("workflow_mode = 'standard'"), postgresql_where=db.text("workflow_mode = 'standard'")),
+        # An all-day entry consumes both halves if the point is reconfigured during that day.
+        db.Index("patrol_person_am_once", "point_id", "user_id", "personal_day", unique=True,
+                 sqlite_where=db.text("personal_day IS NOT NULL AND NOT legacy_slot_repeat AND slot <> 'pm'"),
+                 postgresql_where=db.text("personal_day IS NOT NULL AND NOT legacy_slot_repeat AND slot <> 'pm'")),
+        db.Index("patrol_person_pm_once", "point_id", "user_id", "personal_day", unique=True,
+                 sqlite_where=db.text("personal_day IS NOT NULL AND NOT legacy_slot_repeat AND slot <> 'am'"),
+                 postgresql_where=db.text("personal_day IS NOT NULL AND NOT legacy_slot_repeat AND slot <> 'am'")),
         db.ForeignKeyConstraint(["execution_id", "point_id", "frequency", "period_key", "slot"],
                                 ["patrol_executions.id", "patrol_executions.point_id", "patrol_executions.frequency",
                                  "patrol_executions.period_key", "patrol_executions.slot"],
@@ -168,12 +192,13 @@ class Inspection(db.Model):
                            "AND spot_request_id IS NOT NULL AND spot_request_id <> '') OR "
                            "(workflow_mode = 'two_stage' AND category = 'general' AND execution_id IS NOT NULL "
                            "AND spot_request_id IS NULL)", name="patrol_inspection_workflow"),
+        db.CheckConstraint("(workflow_mode = 'standard' AND personal_day IS NULL AND NOT legacy_slot_repeat) OR "
+                           "(workflow_mode IN ('spot','two_stage') AND personal_day IS NOT NULL AND slot IN ('any','am','pm'))",
+                           name="patrol_personal_day_required"),
         db.Index("patrol_spot_request_once", "spot_request_id", unique=True,
                  sqlite_where=db.text("spot_request_id IS NOT NULL"), postgresql_where=db.text("spot_request_id IS NOT NULL")),
-        db.Index("patrol_execution_review_once", "execution_id", unique=True,
+        db.Index("patrol_execution_reviews", "execution_id",
                  sqlite_where=db.text("execution_id IS NOT NULL"), postgresql_where=db.text("execution_id IS NOT NULL")),
-        db.Index("patrol_recent_spot_at_point", "point_id", "created_at",
-                 sqlite_where=db.text("workflow_mode = 'spot'"), postgresql_where=db.text("workflow_mode = 'spot'")),
     )
 
 
@@ -198,9 +223,37 @@ def protect_execution_link(connection):
         """)
 
 
+def protect_legacy_exemptions(connection):
+    """Only the v7 migration may exempt an existing row from the new daily limit."""
+    if connection.dialect.name == "sqlite":
+        for operation, name in (("INSERT", "insert"), ("UPDATE OF legacy_slot_repeat", "update")):
+            condition = "NEW.legacy_slot_repeat" if name == "insert" else "NEW.legacy_slot_repeat IS NOT OLD.legacy_slot_repeat"
+            connection.exec_driver_sql(f"""
+                CREATE TRIGGER patrol_protect_legacy_{name} BEFORE {operation} ON patrol_inspections
+                WHEN {condition} BEGIN SELECT RAISE(ABORT, 'Legacy exemption is immutable'); END
+            """)
+    elif connection.dialect.name == "postgresql":
+        connection.exec_driver_sql("""
+            CREATE OR REPLACE FUNCTION patrol_keep_legacy_exemption() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF (TG_OP = 'INSERT' AND NEW.legacy_slot_repeat) OR
+                   (TG_OP = 'UPDATE' AND NEW.legacy_slot_repeat IS DISTINCT FROM OLD.legacy_slot_repeat) THEN
+                    RAISE EXCEPTION 'Legacy exemption is immutable' USING ERRCODE = '23514';
+                END IF;
+                RETURN NEW;
+            END
+            $$
+        """)
+        connection.exec_driver_sql("""
+            CREATE TRIGGER patrol_protect_legacy_exemption BEFORE INSERT OR UPDATE OF legacy_slot_repeat ON patrol_inspections
+            FOR EACH ROW EXECUTE FUNCTION patrol_keep_legacy_exemption()
+        """)
+
+
 @event.listens_for(Inspection.__table__, "after_create")
 def install_execution_link_protection(_table, connection, **_):
     protect_execution_link(connection)
+    protect_legacy_exemptions(connection)
 
 
 class InspectionPhoto(db.Model):

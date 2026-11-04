@@ -9,7 +9,7 @@
   <span class="success-emblem">{{ icon('check') }}</span>
   <span class="eyebrow">{{ '第一階段 · 簽到紀錄已儲存' if executed else '巡檢紀錄已儲存' }}</span>
   <h1>{{ title }}</h1>
-  <p class="checkin-location">{% if executed %}{{ '本時段已完成巡檢。' if finalized else '待巡檢，由總務巡檢員掃描同一點位完成第二階段。' }}{% elif record.execution %}第二階段已完成，本時段兩筆紀錄已連結。{% elif record.workflow_mode == 'spot' %}本次抽查已儲存。間隔到後可重新掃碼回報。{% elif record.is_abnormal %}本次異常回報與巡檢紀錄已儲存。{% else %}辛苦了，本次巡檢已完成。{% endif %}</p>
+  <p class="checkin-location">{% if executed %}{{ '本時段已完成巡檢。' if finalized else '待巡檢，由總務巡檢員掃描同一點位完成第二階段。' }}{% elif record.execution %}本人巡檢已完成，這筆紀錄已連結同一時段的執行簽到。{% elif record.workflow_mode == 'spot' %}本人單段巡檢已儲存，其他人員仍可在此點打卡。{% elif record.is_abnormal %}本次異常回報與巡檢紀錄已儲存。{% else %}辛苦了，本次巡檢已完成。{% endif %}</p>
   {% if can_scan %}{{ scanner_button('next', '繼續掃下一點') }}{% endif %}
   <div class="success-receipt">
     <span class="point-code">{{ point_code(record) }}</span><h2>{{ point_name(record) }}</h2>

@@ -248,8 +248,8 @@ def test_v1_indexes_unique_constraints_and_foreign_keys_survive(engine, legacy):
     upgrade_schema(engine)
     after_inspector = inspect(engine)
     for name in legacy.tables:
-        additions = ({"patrol_execution_review_once", "patrol_spot_request_once", "patrol_one_required_inspection_per_slot",
-                      "patrol_recent_spot_at_point"}
+        additions = ({"patrol_execution_reviews", "patrol_spot_request_once", "patrol_one_standard_per_slot",
+                      "patrol_person_am_once", "patrol_person_pm_once"}
                      if name == "patrol_inspections" else set())
         assert {index["name"] for index in after_inspector.get_indexes(name)} == index_names[name] | additions
         assert {(tuple(key["constrained_columns"]), key["referred_table"], tuple(key["referred_columns"]))
@@ -379,10 +379,10 @@ def test_postgres_schema_compiles_expected_defaults_binary_and_slot_key():
     dialect = postgresql.dialect()
     inspection_ddl = str(CreateTable(Inspection.__table__).compile(dialect=dialect))
     photo_ddl = str(CreateTable(InspectionPhoto.__table__).compile(dialect=dialect))
-    slot_index = next(index for index in Inspection.__table__.indexes if index.name == "patrol_one_required_inspection_per_slot")
+    slot_index = next(index for index in Inspection.__table__.indexes if index.name == "patrol_one_standard_per_slot")
     assert str(CreateIndex(slot_index).compile(dialect=dialect)) == (
-        "CREATE UNIQUE INDEX patrol_one_required_inspection_per_slot ON patrol_inspections "
-        "(point_id, frequency, period_key, slot) WHERE workflow_mode <> 'spot'")
+        "CREATE UNIQUE INDEX patrol_one_standard_per_slot ON patrol_inspections "
+        "(point_id, frequency, period_key, slot) WHERE workflow_mode = 'standard'")
     assert "is_abnormal BOOLEAN DEFAULT false NOT NULL" in inspection_ddl
     assert "slot VARCHAR(8) DEFAULT 'any' NOT NULL" in inspection_ddl
     assert "data BYTEA NOT NULL" in photo_ddl
@@ -458,6 +458,18 @@ def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, ve
                                              "ALTER TABLE PATROL_INSPECTIONS DROP CONSTRAINT PATROL_ONE_INSPECTION_PER_SLOT",
                                              "ALTER TABLE PATROL_INSPECTIONS ADD CONSTRAINT PATROL_FINAL_EXECUTION_SLOT",
                                              "ALTER TABLE PATROL_INSPECTIONS ADD CONSTRAINT PATROL_INSPECTION_WORKFLOW",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD CONSTRAINT PATROL_PERSONAL_DAY_REQUIRED",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN PERSONAL_DAY",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN LEGACY_SLOT_REPEAT",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN LEGACY_UNSCHEDULED",
+                                             "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN LEGACY_UNSCHEDULED",
+                                             "ALTER TABLE PATROL_EXECUTIONS DROP CONSTRAINT PATROL_EXECUTION_VALID_SLOT",
+                                             "ALTER TABLE PATROL_EXECUTIONS ADD CONSTRAINT PATROL_EXECUTION_VALID_SLOT",
+                                             "DROP TABLE PATROL_EXECUTIONS",
+                                             "ALTER TABLE _PATROL_MIGRATE_EXECUTIONS RENAME TO PATROL_EXECUTIONS",
+                                             "UPDATE PATROL_INSPECTIONS SET PERSONAL_DAY=",
+                                             "UPDATE PATROL_POINT_SCHEDULES SET LEGACY_UNSCHEDULED=",
+                                             "UPDATE PATROL_POINTS SET FREQUENCY=",
                                              "DROP TABLE PATROL_INSPECTIONS",
                                              "ALTER TABLE _PATROL_MIGRATE_INSPECTIONS RENAME TO PATROL_INSPECTIONS",
                                              "UPDATE PATROL_POINTS SET WORKFLOW_MODE=",

@@ -199,7 +199,7 @@ def test_mapping_inputs_and_tuple_completions_produce_same_result():
     assert missed([mapped], [completion], now=local("2026-11-04", 0)) == missed([current], [(1, "daily2", "2026-11-03", "am")], now=local("2026-11-04", 0))
 
 
-@pytest.mark.parametrize("filters", [{"floor": "0"}, {"category": "unknown"}, {"frequency": "monthly"}])
+@pytest.mark.parametrize("filters", [{"floor": "0"}, {"category": "unknown"}, {"frequency": "bogus"}])
 def test_invalid_filters_fail_explicitly(filters):
     with pytest.raises(ValueError):
         missed([point()], **filters)
@@ -208,3 +208,24 @@ def test_invalid_filters_fail_explicitly(filters):
 def test_invalid_date_order_fails_explicitly():
     with pytest.raises(ValueError):
         missed([point()], begin="2026-11-04", end="2026-11-03")
+
+
+@pytest.mark.parametrize(("last", "following"), [
+    ("2026-02-28", "2026-03-01"), ("2028-02-29", "2028-03-01"), ("2026-12-31", "2027-01-01"),
+])
+def test_monthly_uses_actual_month_end_and_exact_taipei_midnight(last, following):
+    item = point("monthly")
+    first = date.fromisoformat(last).replace(day=1).isoformat()
+    assert missed([item], begin=first, end=last, now=local(last, 23, 59, 59)) == []
+    row, = missed([item], begin=first, end=following, now=local(following, 0), frequency="monthly")
+    assert row["period_key"] == first and row["period_label"] == f"{first} – {last}"
+    assert row["due_date"] == date.fromisoformat(last) and row["deadline"] == local(following, 0)
+    assert not missed([item], [(1, "monthly", first, "any")], begin=last, now=local(following, 0))
+
+
+@pytest.mark.parametrize("mode", ["spot", "two_stage"])
+def test_irregular_has_no_deadline_in_either_workflow(mode):
+    item = point("irregular")
+    item.schedules[0].workflow_mode = mode
+    assert not missed([item], begin="2026-01-01", end="2026-12-31", now=local("2027-01-01"))
+    assert not missed([item], begin="2026-01-01", end="2026-12-31", now=local("2027-01-01"), frequency="irregular")

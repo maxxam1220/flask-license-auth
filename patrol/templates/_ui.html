@@ -26,7 +26,7 @@
 {%- endmacro %}
 {% macro management_revision(item) %}<input type="hidden" name="expected_state" value="{{ management_state(item) }}">{% endmacro %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
-{% macro frequency(value) %}{{ '每日兩次' if value == 'daily2' else '每日一次' if value == 'daily' else '每週一次' }}{% endmacro %}
+{% macro frequency(value) %}{{ {'daily':'每日一次','daily2':'每日兩次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(value, value) }}{% endmacro %}
 {% macro status(value) %}<span class="badge badge-{{ value }}">{% if value == 'approved' %}已核准{% elif value == 'pending' %}待審核{% elif value == 'revoked' %}已解除{% elif value == 'rejected' %}未核准{% elif value == 'done' %}已完成{% elif value == 'not_due' %}不需巡檢{% else %}尚未綁定{% endif %}</span>{% endmacro %}
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ title }}</h3><p>{{ description }}</p></div>{% endmacro %}
 
