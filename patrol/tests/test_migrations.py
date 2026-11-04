@@ -217,7 +217,8 @@ def test_fresh_database_and_idempotent_upgrade(engine):
         assert connection.exec_driver_sql("SELECT * FROM patrol_schema_versions").all() == before
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
-    assert len(inspect(engine).get_table_names()) == 11
+    assert len(inspect(engine).get_table_names()) == 12
+    assert inspect(engine).has_table("patrol_revoked_sessions")
 
 
 def test_v1_rows_ids_qr_credentials_and_unrelated_data_survive(engine, legacy):
@@ -730,3 +731,82 @@ def test_v4_preexisting_category_default_cannot_grant_access_to_legacy_accounts(
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 4
         assert "deleted_at" not in {col["name"] for col in inspect(connection).get_columns("patrol_points")}
+
+
+@pytest.fixture
+def version_five(engine, version_four):
+    """Freeze the deployed v5 layout, including assigned users and a retired point."""
+    with engine.begin() as connection:
+        for table, column in (
+            ("patrol_users", Column("patrol_category", String(20), CheckConstraint(
+                "patrol_category IN ('safety', 'general')", name="patrol_user_category_allowed"))),
+            ("patrol_points", Column("deleted_at", DateTime)),
+            ("patrol_point_schedules", Column("retired_at", DateTime)),
+        ):
+            version_four.tables[table].append_column(column)
+            definition = str(CreateColumn(column).compile(dialect=connection.dialect))
+            connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {definition}")
+        connection.execute(version_four.tables["patrol_users"].update().where(
+            version_four.tables["patrol_users"].c.id == 18).values(patrol_category="safety"))
+        retired_at = datetime(2026, 11, 4, 7, 30)
+        connection.execute(version_four.tables["patrol_points"].update().values(active=False, deleted_at=retired_at))
+        connection.execute(version_four.tables["patrol_point_schedules"].insert().values(
+            id=32, point_id=23, active=False, retired_at=retired_at, effective_date=retired_at.date(),
+            frequency="daily2", category="safety"))
+        connection.execute(version_four.tables["patrol_schema_versions"].insert().values(version=5))
+    return version_four
+
+
+def test_v5_adds_empty_revocation_table_and_preserves_other_tables(engine, version_five):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_five)
+        old_tables = set(inspect(connection).get_table_names())
+
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.begin() as connection:
+        assert set(inspect(connection).get_table_names()) == old_tables | {"patrol_revoked_sessions"}
+        after = snapshot(connection, version_five)
+        assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
+        assert after == before
+        assert connection.exec_driver_sql("SELECT COUNT(*) FROM patrol_revoked_sessions").scalar_one() == 0
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+        revoked = db.metadata.tables["patrol_revoked_sessions"]
+        row = dict(token_hash="0" * 64, user_id=18, auth_version=3, revoked_at=datetime(2026, 11, 4, 8))
+        connection.execute(revoked.insert().values(**row))
+
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(revoked.insert().values(**row))
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(revoked.insert().values(**{**row, "token_hash": "1" * 64, "user_id": 99999}))
+
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.connect() as connection:
+        assert connection.execute(select(revoked)).mappings().one() == row
+        assert connection.exec_driver_sql("SELECT version FROM patrol_schema_versions ORDER BY version").scalars().all() == [2, 3, 4, 5, LATEST_VERSION]
+
+
+def test_v5_failure_rolls_back_new_table_and_preserves_shared_database(engine, version_five, monkeypatch):
+    with engine.connect() as connection:
+        before = snapshot(connection, version_five)
+    def fail_before_commit(connection):
+        assert inspect(connection).has_table("patrol_revoked_sessions")
+        raise RuntimeError("Injected v6 migration failure")
+    monkeypatch.setattr(migrations, "_validate_current", fail_before_commit)
+    with pytest.raises(RuntimeError, match="Injected v6"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert not inspect(connection).has_table("patrol_revoked_sessions")
+        assert snapshot(connection, version_five) == before
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]
+
+
+def test_v5_partial_revocation_table_without_unique_token_refuses_upgrade(engine, version_five):
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE patrol_revoked_sessions (token_hash VARCHAR(64) NOT NULL, "
+                                   "user_id INTEGER NOT NULL REFERENCES patrol_users(id), "
+                                   "auth_version INTEGER NOT NULL, revoked_at TIMESTAMP NOT NULL)")
+    with pytest.raises(SchemaMigrationError, match="token primary key"):
+        upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 5
+        assert connection.exec_driver_sql("SELECT * FROM unrelated_license").all() == [(1, "untouched")]

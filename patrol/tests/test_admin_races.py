@@ -85,6 +85,7 @@ def pg_admin_clients(application):
         client = application.test_client()
         with client.session_transaction() as session:
             session["user_id"], session["auth_version"] = user_id, 1
+            session["csrf_token"] = f"synthetic-admin-login-{user_id}"
         clients.append(client)
     return clients, ids
 

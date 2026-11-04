@@ -824,7 +824,7 @@ def test_password_change_rechecks_auth_version_after_account_lock(application, s
     sql_session = db.session()
 
     def invalidate_before_lock_read(state):
-        if state.is_select and state.execution_options.get("populate_existing"):
+        if state.is_select and getattr(state.statement, "_for_update_arg", None) is not None:
             state.session.connection().execute(
                 db.update(User).where(User.id == user.id).values(auth_version=original_version + 1)
             )

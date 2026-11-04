@@ -75,6 +75,7 @@ def seed_clients(application, separate_points=False):
             client = application.test_client()
             with client.session_transaction() as session:
                 session["user_id"], session["auth_version"] = user.id, 1
+                session["csrf_token"] = uuid.uuid4().hex
             client.set_cookie("patrol_device", secret)
             selected_point = points[number if separate_points else 0]
             clients.append((client, selected_point.qr_token, selected_point.frequency))

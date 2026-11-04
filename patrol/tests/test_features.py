@@ -302,6 +302,19 @@ def test_photo_quota_context_is_admin_only_and_uses_all_photo_bytes(application,
     assert contexts[-1][1]["photo_storage_limit"] == application.config["PHOTO_STORAGE_LIMIT_BYTES"]
 
 
+def test_browser_multiline_note_limit_counts_newlines_as_entered(application, seeded):
+    point = seeded["daily"]
+    client = logged_browser(application, seeded)
+    note = "前" * 999 + "\n" + "後" * 1000
+    wire_note = note.replace("\n", "\r\n")
+    path = f"/c/{point.qr_token}/confirm"
+    for submitted, expected in ((wire_note + "超", 400), (wire_note, 302)):
+        response = client.post(path, data={"frequency": point.frequency, "note": submitted},
+                               content_type="multipart/form-data")
+        assert response.status_code == expected
+    assert db.session.scalars(db.select(Inspection.note)).all() == [note]
+
+
 @pytest.mark.parametrize("note", ["x" * 2001, "bad\x00note"])
 def test_invalid_note_does_not_reach_database(application, seeded, note):
     point = feature_point()

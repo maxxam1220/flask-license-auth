@@ -11,10 +11,10 @@ import re
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, exists, inspect, literal, select, text
 from sqlalchemy.schema import CreateColumn, CreateTable
 
-from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, SchemaVersion, User, db
+from models import Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Point, PointSchedule, RevokedSession, SchemaVersion, User, db
 
 
-LATEST_VERSION = 5
+LATEST_VERSION = 6
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -104,6 +104,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v3_to_v4(connection)
         if current < 5:
             _upgrade_v4_to_v5(connection)
+        if current < 6:
+            RevokedSession.__table__.create(connection, checkfirst=True)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -270,8 +272,9 @@ def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False,
 
 def _validate_current(connection):
     inspector = inspect(connection)
+    revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
-                                   "patrol_inspection_issues", "patrol_issue_events"}
+                                   "patrol_inspection_issues", "patrol_issue_events", revoked}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     for table_name, required in {
@@ -281,10 +284,22 @@ def _validate_current(connection):
         "patrol_inspection_photos": ("inspection_id", "data", "mime_type", "size_bytes", "width", "height", "created_at"),
         "patrol_inspection_issues": ("inspection_id", "status", "opened_at", "resolved_by_name", "resolution_note"),
         "patrol_issue_events": ("inspection_id", "actor_id", "actor_name", "action", "note", "created_at"),
+        revoked: ("token_hash", "user_id", "auth_version", "revoked_at"),
     }.items():
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
             raise SchemaMigrationError(f"Required non-null columns are missing in {table_name}.")
+    revoked_columns = {column["name"]: column["type"] for column in inspector.get_columns(revoked)}
+    if (inspector.get_pk_constraint(revoked)["constrained_columns"] != ["token_hash"]
+            or getattr(revoked_columns["token_hash"], "length", None) != 64
+            or not isinstance(revoked_columns["auth_version"], db.Integer)
+            or not isinstance(revoked_columns["revoked_at"], db.DateTime)):
+        raise SchemaMigrationError("Session revocation columns or token primary key are invalid.")
+    if not any(fk["constrained_columns"] == ["user_id"] and fk["referred_table"] == User.__tablename__
+               and fk["referred_columns"] == ["id"] for fk in inspector.get_foreign_keys(revoked)):
+        raise SchemaMigrationError("Session revocation account foreign key is missing.")
+    if not any(index["column_names"] == ["user_id"] for index in inspector.get_indexes(revoked)):
+        raise SchemaMigrationError("Session revocation account index is missing.")
     keys = _unique_keys(connection, "patrol_inspections")
     if NEW_INSPECTION_KEY not in keys or OLD_INSPECTION_KEY in keys:
         raise SchemaMigrationError("Inspection uniqueness does not match the slot-based schema.")

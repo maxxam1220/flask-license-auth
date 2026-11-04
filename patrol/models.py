@@ -188,3 +188,11 @@ class LoginAttempt(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(64), nullable=False, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
+
+
+class RevokedSession(db.Model):
+    __tablename__ = "patrol_revoked_sessions"
+    token_hash = db.Column(db.String(64), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"), nullable=False, index=True)
+    auth_version = db.Column(db.Integer, nullable=False)
+    revoked_at = db.Column(db.DateTime, nullable=False, default=utcnow)

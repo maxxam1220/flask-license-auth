@@ -25,7 +25,7 @@ from sqlalchemy.orm import selectinload
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, Point, PointSchedule, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, Point, PointSchedule, RevokedSession, User, db
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from images import PhotoValidationError, process_uploads
 from patrol_access import can_access_category, can_read_inspection, patrol_scope
@@ -223,6 +223,15 @@ def create_app(config=None):
             session["csrf_token"] = secrets.token_urlsafe(32)
         return session["csrf_token"]
 
+    def signed_session_nonce():
+        # Older signed login cookies already contain a random per-login CSRF
+        # token. Use it until the next rotation, preserving valid v5 sessions.
+        return session.get("sid") or session.get("csrf_token")
+
+    def session_revoked():
+        return select(RevokedSession.token_hash).where(
+            RevokedSession.token_hash == g.patrol_session_hash).exists()
+
     app.jinja_env.globals["csrf_token"] = csrf_token
     app.jinja_env.globals["issue_state"] = issue_state
     app.jinja_env.globals["management_state"] = management_state
@@ -248,10 +257,14 @@ def create_app(config=None):
             if name.endswith("_id") and not 1 <= value <= 2147483647:
                 abort(404, description="找不到指定的資料。")
         if session.get("user_id"):
-            user = db.session.get(User, session["user_id"])
-            if user and user.active and session.get("auth_version") == user.auth_version:
-                g.user = user
-            else:
+            nonce = signed_session_nonce()
+            if isinstance(nonce, str) and nonce:
+                g.patrol_session_hash = hashlib.sha256(f"{session['user_id']}:{nonce}".encode("utf-8")).hexdigest()
+                g.user = db.session.scalar(select(User).where(
+                    User.id == session["user_id"], User.active.is_(True),
+                    User.auth_version == session.get("auth_version"), ~session_revoked()
+                ).execution_options(populate_existing=True))
+            if not g.user:
                 session.clear()
         # An expired protected submission has no authority to write. Recover its
         # safe GET confirmation page before checking the now-missing CSRF secret;
@@ -336,7 +349,9 @@ def create_app(config=None):
 
     def lock_current_user(allow_password_change=False):
         user = lock_user(g.user.id)
-        if not user or not user.active or user.auth_version != session.get("auth_version") or (user.must_change_password and not allow_password_change):
+        if (not user or not user.active or user.auth_version != session.get("auth_version")
+                or (user.must_change_password and not allow_password_change)
+                or db.session.scalar(select(session_revoked()))):
             abort(403, description="帳號狀態已更新，請重新登入。")
         return user
 
@@ -354,7 +369,8 @@ def create_app(config=None):
         locked = {user_id: lock_user(user_id) for user_id in sorted({actor_id, *target_ids})}
         actor = locked[actor_id]
         if (not actor or not actor.active or actor.auth_version != session.get("auth_version")
-                or actor.must_change_password or actor.role != "admin"):
+                or actor.must_change_password or actor.role != "admin"
+                or db.session.scalar(select(session_revoked()))):
             abort(403, description="管理員權限或帳號狀態已更新，請重新登入後再試。")
         return locked
 
@@ -487,6 +503,7 @@ def create_app(config=None):
                 session.clear()
                 session["user_id"] = user.id
                 session["auth_version"] = user.auth_version
+                session["sid"] = secrets.token_urlsafe(32)
                 session.permanent = True
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 if user.must_change_password:
@@ -501,6 +518,20 @@ def create_app(config=None):
 
     @app.post("/logout")
     def logout():
+        if g.user:
+            # Serialize the revocation against writes authorized by this login.
+            # A late response can refresh a signed cookie after logout, so the
+            # hash stays revoked regardless of the cookie's refreshed timestamp.
+            actor = lock_user(g.user.id)
+            if actor:
+                revoke = db.text(
+                    "INSERT INTO patrol_revoked_sessions (token_hash, user_id, auth_version, revoked_at) "
+                    "VALUES (:token_hash, :user_id, :auth_version, :revoked_at) "
+                    "ON CONFLICT (token_hash) DO NOTHING"
+                ).bindparams(db.bindparam("revoked_at", type_=db.DateTime()))
+                db.session.execute(revoke, {"token_hash": g.patrol_session_hash, "user_id": actor.id,
+                                            "auth_version": actor.auth_version, "revoked_at": naive_utc()})
+                db.session.commit()
         session.clear()
         return redirect(url_for("login"))
 
@@ -527,6 +558,7 @@ def create_app(config=None):
                 db.session.commit()
                 session.pop("after_password", None)
                 session["auth_version"] = g.user.auth_version
+                session["sid"] = signed_session_nonce()
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 flash("密碼已更新。", "success")
                 return redirect(destination)
@@ -723,7 +755,8 @@ def create_app(config=None):
                 or (submitted_slot is not None and submitted_slot != slot)
                 or (submitted_period is not None and submitted_period != key)):
             return form_error("巡檢日期或時段已變更，請確認目前時段後重新送出。照片需重新選擇。", 409)
-        note = request.form.get("note", "").strip()
+        # HTML forms send CRLF for the single newline counted by a textarea.
+        note = request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n").strip()
         abnormal = request.form.get("is_abnormal", "") in ("on", "1", "true", "yes")
         uploads = request.files.getlist("photos")
         record = inspection_in_slot(point, key, slot)

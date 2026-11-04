@@ -21,7 +21,7 @@ import migrations
 from migrations import LATEST_VERSION, upgrade_schema
 from models import Inspection, InspectionPhoto
 from test_migrations import (  # Imported isolated fixtures and cross-dialect cases.
-    legacy, snapshot, version_two, version_three, version_four,
+    legacy, snapshot, version_two, version_three, version_four, version_five,
     test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once as _v2_backfill_case,
     test_v2_backfill_never_overwrites_existing_resolved_case_or_events as _v2_existing_case,
     test_issue_relationships_events_order_and_history_flag_survive_resolution_and_reopen as _issue_history_case,
@@ -34,6 +34,9 @@ from test_migrations import (  # Imported isolated fixtures and cross-dialect ca
     test_v4_partial_install_without_category_constraint_refuses_upgrade as _v4_partial_case,
     test_v4_preexisting_category_default_cannot_grant_access_to_legacy_accounts as _v4_unsafe_default_case,
     test_v5_schedule_keeps_retirement_instant_after_restore_and_legacy_writes as _v5_retirement_case,
+    test_v5_adds_empty_revocation_table_and_preserves_other_tables as _v6_preservation_case,
+    test_v5_failure_rolls_back_new_table_and_preserves_shared_database as _v6_rollback_case,
+    test_v5_partial_revocation_table_without_unique_token_refuses_upgrade as _v6_partial_case,
 )
 
 
@@ -86,6 +89,7 @@ def schema_signature(engine):
 
 def test_postgres_fresh_creation_and_idempotency(engine):
     assert upgrade_schema(engine) == LATEST_VERSION
+    assert inspect(engine).has_table("patrol_revoked_sessions")
     before = schema_signature(engine)
     with engine.connect() as connection:
         version_before = connection.exec_driver_sql("SELECT * FROM patrol_schema_versions").all()
@@ -336,6 +340,18 @@ def test_postgres_v4_rejects_unsafe_default_category(engine, version_four):
 
 def test_postgres_v5_schedule_keeps_retirement_instant_after_restore_and_legacy_writes(engine, version_four):
     _v5_retirement_case(engine, version_four)
+
+
+def test_postgres_v5_adds_empty_revocation_table_and_preserves_other_tables(engine, version_five):
+    _v6_preservation_case(engine, version_five)
+
+
+def test_postgres_v5_failure_rolls_back_new_table_and_preserves_shared_database(engine, version_five, monkeypatch):
+    _v6_rollback_case(engine, version_five, monkeypatch)
+
+
+def test_postgres_v5_partial_revocation_table_without_unique_token_refuses_upgrade(engine, version_five):
+    _v6_partial_case(engine, version_five)
 
 
 def test_postgres_v3_location_upgrade_failure_restores_entire_schema(engine, version_three, monkeypatch):
