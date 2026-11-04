@@ -1,11 +1,10 @@
-/* Refresh the current shift without changing the dashboard date or scrolling the page. */
+/* Refresh this shift's list in place, keeping the current filters and focus. */
 (() => {
   let panel = document.querySelector('[data-ready-panel]');
   if (!panel || !window.fetch || !window.AbortController) return;
   let busy = false;
   let lastAttempt = Date.now();
   let shiftTimer;
-  const more = p => p.querySelector('[data-ready-more]');
   const updateLink = p => p.querySelector('[data-ready-refresh]');
   function refreshIfVisible(minAge = 60000) {
     const rect = panel.getBoundingClientRect();
@@ -41,18 +40,15 @@
       const next = fragment.querySelector('section#today-ready[data-ready-panel]');
       if (!next || !updateLink(next)) throw Error('Missing list');
       const active = document.activeElement;
-      const focus = active === panel ? 'panel' : active === updateLink(panel) ? 'link'
-        : more(panel)?.contains(active) ? 'more' : null;
+      const focusedPanel = active === panel;
+      const focusedRefresh = active === updateLink(panel);
       updateLink(next).href = updateLink(panel).href;
-      if (more(next) && more(panel)) more(next).open = more(panel).open;
-      const feedback = next.querySelector('[data-ready-feedback]');
-      if (manual && feedback) feedback.textContent = '已更新列表。';
       panel.replaceWith(next);
       panel = next;
+      if (manual) panel.querySelector('[data-ready-feedback]').textContent = '已更新列表。';
       scheduleShiftChange();
-      if (focus) {
-        const target = focus === 'panel' ? panel : focus === 'more' ? more(panel)?.querySelector('summary') : updateLink(panel);
-        (target || updateLink(panel)).focus({preventScroll: true});
+      if (focusedPanel || focusedRefresh) {
+        (focusedPanel ? panel : updateLink(panel)).focus({preventScroll: true});
       }
     } catch {
       const feedback = panel.querySelector('[data-ready-feedback]');
@@ -68,7 +64,7 @@
     if (event.target.closest('[data-ready-refresh]')) {
       event.preventDefault();
       refresh(true);
-    } else if (event.target.closest('[data-ready-jump]') && Date.now() - lastAttempt >= 60000) refresh(false);
+    }
   });
   window.addEventListener('pageshow', event => { if (event.persisted) refresh(false); });
   document.addEventListener('visibilitychange', () => refreshIfVisible(0));

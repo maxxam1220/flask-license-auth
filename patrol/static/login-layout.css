@@ -38,7 +38,6 @@
   margin: 0; color: var(--ink); font-size: clamp(2.25rem, 3.35vw, 3.25rem);
   line-height: 1.2; letter-spacing: .01em;
 }
-.signin-page .login-card h1::before { content: ""; display: block; width: 2.4rem; height: 4px; margin-bottom: 1rem; border-radius: 2px; background: var(--teal); }
 .signin-instruction { margin: .7rem 0 1.8rem; color: #52676a; font-size: clamp(1rem, 1.5vw, 1.15rem); line-height: 1.55; }
 .signin-page .form-stack { gap: 1.15rem; }
 .signin-page .login-card label { gap: .45rem; color: var(--ink); font-size: 1.075rem; font-weight: 650; line-height: 1.4; }
@@ -60,7 +59,6 @@
 @media (min-width: 851px) and (max-height: 700px) {
   .signin-brand-panel, .signin-page .login-panel { padding-block: 1.5rem; }
   .signin-intro { padding-block: 1rem; }
-  .signin-page .login-card h1::before { margin-bottom: .7rem; }
   .signin-instruction { margin-bottom: 1.2rem; }
   .signin-page .form-stack { gap: .8rem; }
   .signin-page .login-help { margin-top: .9rem; padding-block: .7rem; }
@@ -71,7 +69,7 @@
   .signin-brand-inner { flex-direction: row; justify-content: space-between; align-items: center; gap: 1rem; }
   .signin-brand-panel .brand { gap: .6rem; font-size: 1.5rem; }
   .signin-mobile-name { display: block; color: #dae8da; font-size: max(14px, .95rem); }
-  .signin-intro, .signin-map, .signin-page .login-card h1::before { display: none; }
+  .signin-intro, .signin-map { display: none; }
   .signin-page .login-panel { justify-content: flex-start; padding: clamp(1.35rem, 6vw, 2.5rem) 1.2rem 1.4rem; }
   .signin-page .login-card h1 { font-size: clamp(1.95rem, 6.2vw, 2.5rem); }
   .signin-instruction { margin: .6rem 0 1.35rem; font-size: 1rem; }

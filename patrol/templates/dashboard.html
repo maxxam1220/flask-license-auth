@@ -2,10 +2,6 @@
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge %}
 {% set title='巡檢總覽' %}
-{% block head %}
-  <link rel="stylesheet" href="{{ url_for('static', filename='ready-list.css') }}" media="screen">
-  <script defer src="{{ url_for('static', filename='ready-refresh.js') }}"></script>
-{% endblock %}
 {% from '_scanner.html' import scanner_button %}
 {% macro stage_badge(slot) %}
   {%- if slot.status == 'done' %}<span class="badge badge-done">兩階段已完成</span>
@@ -24,7 +20,14 @@
     <a class="button button-secondary" href="{{ records_query_url }}">{{ icon('list') }}查看紀錄</a>
   </div>
   {% endif %}
-  <div class="dashboard-heading-copy"><div class="eyebrow">{{ '巡檢工作台' if is_patrol_admin else role_label(current_user) }}</div><h1>巡檢總覽</h1><p>{{ '依分類與樓層查看進度，掌握每個巡檢時段。' if is_patrol_admin else '在兩階段點執行簽到，也可到指定的不定期點直接簽到。' if current_user.role == 'executor' else '依樓層查看負責點位與本期巡檢進度。' if viewer_category else '你的帳號尚未指派巡檢分類。' }}</p></div>
+  <div class="dashboard-heading-copy">
+    <div class="eyebrow">{{ '巡檢工作台' if is_patrol_admin else role_label(current_user) }}</div><h1>巡檢總覽</h1>
+    <p>{{ '依分類與樓層查看進度，掌握每個巡檢時段。' if is_patrol_admin else '在兩階段點執行簽到，也可到指定的不定期點直接簽到。' if current_user.role == 'executor' else '依樓層查看負責點位與本期巡檢進度。' if viewer_category else '你的帳號尚未指派巡檢分類。' }}
+      {% if is_patrol_admin or viewer_category %}
+      <a id="today-ready" data-today-ready-entry class="text-link" href="{{ url_for('ready', category=selected_category if is_patrol_admin and selected_category else none, floor=selected_floor or none) }}">{{ ready_nav_label }} {{ icon('arrow') }}</a>
+      {% endif %}
+    </p>
+  </div>
 </div>
 {% if not is_patrol_admin and not viewer_category %}<section class="panel" id="today-ready" tabindex="-1">{{ empty('等待指派巡檢分類', '請聯絡管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
 {% else %}
@@ -34,7 +37,6 @@
   <a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor','')) }}" class="{{ 'selected' if not selected_category }}" aria-current="{{ 'page' if not selected_category else 'false' }}">全部分類</a>
   {% for value,label in category_options %}<a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor',''), category=value) }}" class="{{ 'selected' if selected_category == value }}" aria-current="{{ 'page' if selected_category == value else 'false' }}">{{ label }}</a>{% endfor %}
 </nav>{% endif %}
-{% include '_today_ready.html' %}
 <div class="toolbar"><div class="segmented" aria-label="巡檢週期" role="navigation">{% for value,label in [('daily','每日巡檢'),('weekly','每週巡檢'),('monthly','每月巡檢')] %}<a class="{{ 'selected' if view == value }}" aria-current="{{ 'page' if view == value else 'false' }}" href="{{ url_for('dashboard', view=value, date=selected_date, floor=request.args.get('floor',''), category=selected_category) }}">{{ label }}</a>{% endfor %}</div><form method="get" class="date-filter"><input type="hidden" name="view" value="{{ view }}"><input type="hidden" name="floor" value="{{ request.args.get('floor','') }}">{% if is_patrol_admin %}<input type="hidden" name="category" value="{{ selected_category }}">{% endif %}<label for="dashboard-date" class="sr-only">查詢日期</label><input id="dashboard-date" name="date" type="date" value="{{ selected_date }}" required><button class="button button-secondary button-small">查詢</button></form></div>
 <section class="stats-grid dashboard-stats" aria-label="{{ '所選月' if view == 'monthly' else '所選週' if view == 'weekly' else '所選日' }}巡檢次數">
   {% for label,value,tone,accent,symbol in [('應巡',totals.total,'','neutral','pin'),('已完成',totals.done,'teal-text','positive','circle-check'),('尚未完成',totals.pending,'','amber','clock')] %}

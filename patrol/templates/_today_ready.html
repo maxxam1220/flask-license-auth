@@ -1,54 +1,43 @@
 {% from '_ui.html' import icon %}
 {% set executing = current_user.role == 'executor' %}
 {% set scope = selected_category if is_patrol_admin else viewer_category %}
-{% set heading = '今日待簽到列表' if executing else '今日待巡列表' %}
-{% set preview_count = 4 %}
-{% macro ready_table(items, caption) -%}
-<div class="ready-mobile-key" aria-hidden="true"><span>樓層／編號 · 地點</span><span>{{ '簽到狀態' if executing else '巡檢狀態' }}</span></div>
-<table class="ready-table" role="table" aria-label="{{ caption }}">
-  <thead role="rowgroup">
-    {% for mirrored in [false, true] %}
-    <tr {% if mirrored %}class="ready-mirror" aria-hidden="true"{% endif %} role="row">
-      <th scope="col" role="columnheader">樓層</th><th scope="col" role="columnheader">編號</th>
-      <th scope="col" role="columnheader">地點</th><th scope="col" role="columnheader">{{ '簽到狀態' if executing else '巡檢狀態' }}</th>
-    </tr>
-    {% endfor %}
-  </thead>
-  <tbody role="rowgroup">
-    {% for row in items %}
-    <tr role="row">
-      <td class="ready-floor" role="cell">{{ floor_label(row.floor) }}</td>
-      <td class="ready-code" role="cell">{{ row.code }}</td>
-      <td class="ready-name" role="cell">{{ row.name }}</td>
-      <td class="ready-status" role="cell"><span class="ready-tag {{ 'ready-tag-execute' if row.status_key == 'execute' }}">{{ row.status_label }}</span></td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-{%- endmacro %}
+{% set heading = '待簽到點位' if executing else '待巡點位' %}
 <section id="today-ready" class="panel ready-panel" tabindex="-1" aria-labelledby="today-ready-title" data-ready-panel
          data-ready-url="{{ url_for('dashboard_ready', category=selected_category or none, floor=selected_floor or none) }}">
   <div class="ready-heading">
     <h2 id="today-ready-title">{{ heading }}</h2>
     <span class="ready-count">{{ ready_points|length }} 個點位</span>
     <a class="text-link ready-refresh" data-ready-refresh
-       href="{{ url_for('dashboard', category=selected_category or none, floor=selected_floor or none, view=request.args.get('view') or none, date=request.args.get('date') or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新列表</a>
+       href="{{ url_for('ready', category=selected_category or none, floor=selected_floor or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新列表</a>
   </div>
   <p class="ready-scope">
     <time datetime="{{ ready_date }}">{{ ready_date }}</time><span>{{ ready_slot_label }}</span><span>{{ category_label(scope) if scope else '全部分類' }} · {{ floor_label(selected_floor) if selected_floor else '全部樓層' }}</span>
+    <span class="ready-asof">更新於 <time datetime="{{ ready_as_of.isoformat() }}">{{ ready_as_of.strftime('%H:%M') }}</time></span>
   </p>
-  <p class="ready-guidance">{% if is_patrol_admin %}可安排巡檢員前往，兩階段點位簽到後列入。{% elif executing %}可前往執行簽到的兩階段點位。{% else %}兩階段點位會在執行人員簽到後列入。{% endif %}</p>
-  <p class="ready-feedback" data-ready-feedback role="status" aria-live="polite"></p>
+  <p class="ready-feedback" data-ready-feedback role="status"></p>
   {% if ready_points %}
-    {{ ready_table(ready_points[:preview_count], heading) }}
-    {% if ready_points|length > preview_count %}
-    <details class="ready-more" data-ready-more>
-      <summary><span class="ready-more-open">展開其餘 {{ ready_points|length - preview_count }} 個點位</span><span class="ready-more-close">收合其餘點位</span>{{ icon('down') }}</summary>
-      {{ ready_table(ready_points[preview_count:], '其餘待簽到點位' if executing else '其餘待巡點位') }}
-    </details>
-    {% endif %}
+    <div class="ready-mobile-key" aria-hidden="true"><span>樓層／編號 · 地點</span><span>{{ '簽到狀態' if executing else '巡檢狀態' }}</span></div>
+    <table class="ready-table" role="table" aria-labelledby="today-ready-title">
+      <thead role="rowgroup">
+        {% for mirrored in [false, true] %}
+        <tr {% if mirrored %}class="ready-mirror" aria-hidden="true"{% endif %} role="row">
+          <th scope="col" role="columnheader">樓層</th><th scope="col" role="columnheader">編號</th>
+          <th scope="col" role="columnheader">地點</th><th scope="col" role="columnheader">{{ '簽到狀態' if executing else '巡檢狀態' }}</th>
+        </tr>
+        {% endfor %}
+      </thead>
+      <tbody role="rowgroup">
+        {% for row in ready_points %}
+        <tr role="row">
+          <td class="ready-floor" role="cell">{{ floor_label(row.floor) }}</td>
+          <td class="ready-code" role="cell">{{ row.code }}</td>
+          <td class="ready-name" role="cell">{{ row.name }}</td>
+          <td class="ready-status" role="cell"><span class="ready-tag {{ 'ready-tag-execute' if row.status_key == 'execute' }}">{{ row.status_label }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   {% else %}
     <p class="ready-empty">{{ icon('circle-check') }}目前沒有{{ '待簽到' if executing else '可巡檢' }}的排程點位。</p>
   {% endif %}
-  <p class="ready-asof">更新於 <time datetime="{{ ready_as_of.isoformat() }}">{{ ready_as_of.strftime('%H:%M') }}</time></p>
 </section>

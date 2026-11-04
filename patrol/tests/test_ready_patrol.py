@@ -1,5 +1,6 @@
 """Check today's work list against real scans, team completion and category boundaries."""
 from datetime import date, datetime, timedelta
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from sqlalchemy import event
@@ -8,10 +9,11 @@ from missed import TAIPEI
 from models import Point, User, db
 from test_app import application, app_module, rendered_contexts
 from test_features import feature_point
+from test_frontend_navigation import Anchors
 from test_workflow_checkin import payload, team
 
 
-def ready(app, client, path="/dashboard/ready"):
+def ready(app, client, path="/ready"):
     with rendered_contexts(app) as rendered:
         response = client.get(path)
     assert response.status_code == 200
@@ -41,7 +43,7 @@ def test_two_rounds_with_independent_report_dates_and_scope(application, monkeyp
     singles = {"1F-G01": "inspect", "1F-G02": "inspect"}
 
     assert ready(application, executor) == {"1F-G00": "execute"}
-    assert ready(application, inspector, "/dashboard?date=2025-01-01&view=monthly") == singles
+    assert ready(application, inspector, "/ready?date=2025-01-01&view=monthly") == singles
     assert ready(application, inspector, "/dashboard/ready?category=safety") == singles
     assert ready(application, admin, "/dashboard/ready?floor=11") == {other.code: "inspect"}
     assert ready(application, admin, "/dashboard/ready?category=general&floor=11") == {}
@@ -110,9 +112,51 @@ def test_hide_optional_inactive_transferred_own_execution_and_future_points(appl
     db.session.commit()
     assert ready(application, executor) == {}
     assert ready(application, inspector) == {"1F-G00": "review"}
-    assert ready(application, peer, "/dashboard?category=general") == {"1F-G00": "review"}
+    assert ready(application, peer, "/ready?category=general") == {"1F-G00": "review"}
     assert ready(application, admin, "/dashboard/ready?category=general") == {"1F-G00": "review"}
     assert application.test_client().get("/dashboard/ready").status_code == 302
+
+
+def test_dashboard_links_to_today_without_loading_its_list(application, monkeypatch):
+    _, _, _, admin, *_ = actors(application)
+
+    def unexpected_ready_query(*args):
+        pytest.fail("The overview should only link to today's list")
+
+    monkeypatch.setattr(app_module, "ready_patrol_points", unexpected_ready_query)
+    response = admin.get("/dashboard?category=general&floor=1&view=weekly&date=2025-01-01")
+    assert response.status_code == 200
+    assert "data-ready-panel" not in response.text and "ready-refresh.js" not in response.text
+    entry, = [link for link in Anchors(response.text).links if "data-today-ready-entry" in link]
+    target = urlsplit(entry["href"])
+    assert entry["id"] == "today-ready" and target.path == "/ready"
+    assert parse_qs(target.query) == {"category": ["general"], "floor": ["1"]}
+
+
+def test_full_page_filters_and_fragment_have_the_same_scope(application):
+    executor, inspector, _, admin, *_ = actors(application)
+    other = feature_point(frequency="daily", category="safety", floor=11)
+    page = admin.get("/ready?floor=11&category=safety")
+    assert page.status_code == 200
+    assert '<option value="11" selected>' in page.text and '<option value="safety" selected>' in page.text
+    assert 'camera=(self)' in page.headers["Permissions-Policy"] and 'data-qr-dialog' in page.text
+    assert '<h1>今日待簽到</h1>' in executor.get("/ready").text
+
+    for path in ["/ready", "/dashboard/ready"]:
+        assert ready(application, admin, path + "?floor=11&category=safety") == {other.code: "inspect"}
+        assert ready(application, inspector, path + "?floor=11&category=safety") == {}
+        assert admin.get(path + "?floor=invalid").status_code == 400
+        assert application.test_client().get(path).status_code == 302
+    assert '<select name="category">' not in inspector.get("/ready").text
+    assert 'camera=()' in inspector.get("/dashboard/ready").headers["Permissions-Policy"]
+
+    user = db.session.scalar(db.select(User).where(User.username == "inspect"))
+    user.patrol_category = None
+    db.session.commit()
+    unassigned = inspector.get("/ready?category=safety")
+    assert "等待指派巡檢分類" in unassigned.text and "data-ready-panel" not in unassigned.text
+    assert "camera=()" in unassigned.headers["Permissions-Policy"]
+    assert ready(application, inspector, "/dashboard/ready?category=safety") == {}
 
 
 def test_fragment_query_count_is_independent_of_point_count(application):
@@ -132,6 +176,12 @@ def test_fragment_query_count_is_independent_of_point_count(application):
     for n in range(15):
         feature_point(code=f"1F-Q{n:02d}", category="general")
     assert query_count() == baseline
+    for path in ["/ready", "/dashboard/ready"]:
+        response = inspector.get(path)
+        panel = response.text.split("data-ready-panel", 1)[1].split("</section>", 1)[0]
+        assert "<details" not in panel
+        for n in range(15):
+            assert panel.count(f">1F-Q{n:02d}<") == 1
 
 
 def test_changed_frequency_preserves_the_personal_checkin_limit(application):

@@ -26,6 +26,17 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    // Bookmarks from when the work list was part of the overview.
+    const formerReadyEntry = document.querySelector('a[data-today-ready-entry]');
+    if (formerReadyEntry) {
+      const redirectOldBookmark = () => {
+        if (location.hash !== '#today-ready') return false;
+        location.replace(formerReadyEntry.href);
+        return true;
+      };
+      if (redirectOldBookmark()) return;
+      window.addEventListener('hashchange', redirectOldBookmark);
+    }
     const dialog = document.getElementById('confirm-dialog');
     const dialogTitle = document.getElementById('confirm-title');
     const dialogMessage = document.getElementById('confirm-message');
@@ -329,7 +340,7 @@
 
     const mobileMenu = document.querySelector('.mobile-menu');
     document.addEventListener('click', event => {
-      if (mobileMenu?.open && (!mobileMenu.contains(event.target) || event.target.closest('[data-ready-jump]'))) mobileMenu.open = false;
+      if (mobileMenu?.open && (!mobileMenu.contains(event.target) || event.target.closest('a[href]'))) mobileMenu.open = false;
     });
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && mobileMenu?.open) {
