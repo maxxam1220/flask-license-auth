@@ -49,6 +49,38 @@
 .report-page .storage-usage[open] { padding-bottom: 12px; }
 .report-page .storage-usage progress { margin-top: 2px; }
 
+/* Keep the data easy to follow without using status colours for decoration. */
+.report-page .table-scroll th { color: #50635e; background: #f3f6f3; font-weight: 650; }
+.report-page .missed-count, .report-page .missed-deadline,
+.report-page .record-range, .report-page .record-pagination { font-variant-numeric: tabular-nums; }
+.report-page .issue-list-card { border-inline-start-width: 4px; }
+.report-page .issue-list-card-open { border-inline-start-color: #ad5145; }
+.report-page .issue-list-card-resolved { border-inline-start-color: #52806c; }
+.report-page .issue-card-heading h3 { line-height: 1.5; margin-top: 4px; }
+.report-page .issue-card-meta { column-gap: 14px; row-gap: 5px; }
+.report-page .issue-note-preview { background: #f5f7f5; color: #354e46; line-height: 1.75; }
+.report-page .issue-note-text {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4;
+  overflow: hidden;
+}
+.report-page .table-scroll .note-summary {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; line-height: 1.6;
+}
+.report-page .issue-card-footer { padding-top: 14px; border-top: 1px solid var(--line); }
+.report-page .issue-card-footer > div { row-gap: 3px; }
+
+@container report-results (min-width: 52rem) {
+  .table-scroll td { vertical-align: top; }
+  .table-scroll tbody tr:nth-child(even) { background: #f8faf8; }
+  .table-scroll tbody tr:focus-within { background: #edf5f1; }
+}
+@media (hover: hover) {
+  @container report-results (min-width: 52rem) {
+    .table-scroll tbody tr:hover { background: #edf5f1; }
+  }
+}
+
 @media (min-width: 721px) {
   .records-filter-form .records-filter-actions { grid-column: -2 / -1; }
   .records-filter-actions > .text-link { min-height: 44px; }

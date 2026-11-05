@@ -31,6 +31,8 @@
 .ready-table tr { display: grid; grid-template-columns: var(--ready-columns); align-items: center; gap: .45rem; padding: .5rem .4rem; }
 .ready-table thead tr { background: #f1f5f2; border-radius: 4px; padding-block: .35rem; }
 .ready-table tbody tr { border-bottom: 1px solid var(--line); }
+.ready-table tbody tr { align-items: start; padding-block: .65rem; }
+.ready-table tbody tr:nth-child(even) { background: #f8faf8; }
 .ready-table th, .ready-table td {
   min-width: 0; padding: 0; border: 0; background: transparent; text-align: start;
   line-height: 1.45; overflow-wrap: anywhere; word-break: normal;
@@ -45,7 +47,9 @@
   display: inline-block; max-width: 100%; padding: .16rem .4rem; border-radius: 4px;
   color: #194e82; background: #e6f0ff; font-size: var(--reading-secondary); font-weight: 650; text-wrap: balance;
 }
+.ready-tag { border: 1px solid #d4e3f7; line-height: 1.45; }
 .ready-tag-execute { color: #754300; background: #fff1ce; }
+.ready-tag-execute { border-color: #ead7a8; }
 .ready-refresh:hover { text-decoration: underline; }
 .ready-empty { display: flex; align-items: center; gap: .55rem; margin: 0; padding: .65rem .75rem; border-radius: 6px; background: #f3f6f3; }
 .ready-empty .icon { flex: none; color: #427859; }
@@ -64,6 +68,10 @@
 @container ready-list (min-width: 42rem) {
   .ready-table thead, .ready-table tbody { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ready-table .ready-mirror { display: grid; }
+  .ready-table tbody tr,
+  .ready-table tbody tr:nth-child(even) { background: transparent; }
+  .ready-table tbody tr:nth-child(4n + 3),
+  .ready-table tbody tr:nth-child(4n + 4) { background: #f8faf8; }
 }
 @container ready-list (max-width: 26rem) {
   .ready-scope > span:not(.ready-asof)::before { content: none; }
@@ -77,10 +85,10 @@
   .ready-table tbody tr {
     grid-template-columns: auto minmax(0, 1fr) minmax(0, auto);
     grid-template-areas: "floor code status" "name name status";
-    gap: .15rem .5rem; padding: .5rem 0;
+    gap: .2rem .5rem; padding: .65rem .2rem;
   }
   .ready-floor { grid-area: floor; }
   .ready-code { grid-area: code; }
   .ready-name { grid-area: name; }
-  .ready-status { grid-area: status; justify-self: end; max-width: 6.5rem; }
+  .ready-status { grid-area: status; justify-self: end; align-self: start; max-width: 6.5rem; }
 }

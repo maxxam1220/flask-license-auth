@@ -37,10 +37,10 @@
 <div class="issue-list">
 {% for record in records %}
   {% set can_handle = is_patrol_admin or record.user_id == current_user.id %}
-  <article class="panel issue-list-card">
+  <article class="panel issue-list-card issue-list-card-{{ issue_state(record) }}">
     <div class="issue-card-heading"><div><span class="point-code">{{ point_code(record) }}</span><h3>{{ point_name(record) }}</h3></div>{{ issue_status(record) }}</div>
     <div class="issue-card-meta"><span>{% if is_patrol_admin %}{{ category_label(record.category) }} · {% endif %}{{ record_floor(record) }}</span><span>{{ frequency(record.frequency) }}{% if record.frequency == 'daily2' %} · {{ slot_label(record.slot) }}{% endif %}</span>{% if record.point.deleted_at %}<span class="badge badge-neutral">點位已刪除</span>{% elif not record.point.active %}<span class="badge badge-neutral">點位已停用</span>{% endif %}</div>
-    <p class="issue-note-preview">{{ record.note[:180] if record.note else '回報時未填寫備註，可開啟詳情查看照片與後續處理。' }}{{ '…' if record.note|length > 180 else '' }}</p>
+    <p class="issue-note-preview"><span class="issue-note-text">{{ record.note[:180] if record.note else '回報時未填寫備註，可開啟詳情查看照片與後續處理。' }}{{ '…' if record.note|length > 180 else '' }}</span></p>
     <div class="issue-card-footer"><div><span>回報：{{ record.created_at|localtime }}</span><span>{{ reporter_name(record) }}{% if record.photos %} · {{ record.photos|length }} 張照片{% endif %}</span>{% if issue_state(record) == 'resolved' %}<span>結案：{{ record.issue.resolved_at|localtime }}</span>{% endif %}</div><a class="button {{ 'button-primary' if can_handle and issue_state(record) == 'open' else 'button-secondary' }}" href="{{ url_for('record_detail', record_id=record.id, return_to=request.full_path.rstrip('?')) }}">{{ '查看與處理' if can_handle and issue_state(record) == 'open' else '查看結案詳情' if issue_state(record) == 'resolved' else '查看異常詳情' }} {{ icon('arrow') }}</a></div>
   </article>
 {% else %}

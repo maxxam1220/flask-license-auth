@@ -22,6 +22,10 @@
 .record-detail-wrap .issue-action-form label, .record-detail-wrap .record-photo > span,
 .receipt-wrap .success-receipt strong, .receipt-wrap .success-card .checkin-location { font-size: 1rem; }
 .record-detail-wrap .record-note { font-size: 1.0625rem; line-height: 1.65; }
+.record-detail-wrap .record-facts strong { color: var(--ink); }
+.record-detail-wrap .record-note { color: var(--ink); }
+.record-detail-wrap .stage-trail li > div { line-height: 1.6; }
+.record-detail-wrap .stage-trail small { margin-top: .15rem; }
 .record-detail-wrap .section-heading { margin-bottom: .8rem; }
 .record-detail-wrap .section-heading h2 { font-size: var(--reading-title, 1.3rem); }
 .record-detail-wrap .section-heading p { font-size: .9375rem; }
@@ -56,6 +60,10 @@
 .receipt-wrap .success-emblem { width: 3rem; height: 3rem; border: 0; margin-block: 0 .6rem; }
 .receipt-wrap .success-emblem .icon { width: 1.6rem; height: 1.6rem; }
 .receipt-wrap .success-card .checkin-location { line-height: 1.55; }
+.checkin-wrap-wide .checkin-location { color: var(--ink); font-weight: 600; }
+.checkin-wrap-wide .checkin-details strong { color: var(--ink); }
+.checkin-wrap-wide .inspection-fields > label,
+.checkin-wrap-wide .photo-picker-box strong { line-height: 1.5; }
 
 @media (max-width: 720px) {
   .record-detail-wrap .record-back-links { margin-bottom: .35rem; }

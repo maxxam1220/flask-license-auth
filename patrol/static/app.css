@@ -913,6 +913,25 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .period-step:is(:hover,:focus-visible) { background: #e7f3ee; }
 .period-step .icon { width: 1.1rem; height: 1.1rem; }
 .period-today { min-height: 44px; white-space: nowrap; }
+/* Screen controls: clearer field boundaries and a visible keyboard location. */
+@media screen {
+  :root { --field-border: #84958d; --focus-ring: #176b5b; }
+  input:not([type=checkbox]):not([type=radio]):not([type=hidden]):not([type=file]),
+  select, textarea { border-color: var(--field-border); }
+  :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 3px;
+  }
+  :is(input, select, textarea):focus-visible { border-color: var(--focus-ring); }
+  :is(.sidebar, .mobile-header) :is(a, button, summary):focus-visible {
+    outline-color: #d4ecab;
+  }
+  .mobile-menu nav :is(a, button):focus-visible { outline-color: var(--focus-ring); }
+  .sidebar .nav-link.active { box-shadow: inset 3px 0 #c9e8a0; }
+  .mobile-nav > a.active { box-shadow: inset 0 3px var(--teal); }
+  .mobile-nav > a:focus-visible { outline-offset: -4px; }
+  ::selection { background: #d4eadd; color: #163d32; }
+}
 @media (max-width: 720px) {
   .dashboard-period .date-filter { width: 100%; }
   .dashboard-period .date-filter input[type=date] { min-width: 0; flex: 1 1 auto; }

@@ -44,7 +44,7 @@
 .signin-page .login-card input:not([type=hidden]) {
   --field-height: max(52px, 3.25rem);
   --field-font-size: max(16px, 1.075rem);
-  min-height: var(--field-height); padding: .62rem 1rem; border: 1px solid #92a79f; border-radius: .5rem;
+  min-height: var(--field-height); padding: .62rem 1rem; border: 1px solid var(--field-border, #84958d); border-radius: .5rem;
   color: var(--ink); background: #fff; font: 400 var(--field-font-size)/1.4 sans-serif;
 }
 /* Chromium previews a saved credential at its system control size until the

@@ -1,2 +1,7 @@
 .account-security-page .form-stack label { font-size: max(16px, 1rem); }
 .account-security-page .form-stack label small { font-size: max(14px, .875rem); line-height: 1.6; }
+.account-security-page .narrow-page { max-width: 36rem; }
+.account-security-page .page-heading p { max-width: none; }
+.account-security-page .form-stack { gap: 1.25rem; }
+.account-security-page .form-stack input { min-height: 48px; }
+.account-security-page .form-stack > .button { min-height: 48px; margin-top: .5rem; }

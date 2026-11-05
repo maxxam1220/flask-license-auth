@@ -10,6 +10,46 @@
 }
 .user-management .compact-disclosure > summary { min-height: 44px; }
 .user-management .management-meta .badge { white-space: nowrap; }
+/* Editing fields should follow the available panel width, including at zoom. */
+.create-disclosure { container: management-create / inline-size; }
+.create-disclosure .form-grid:not(.point-fields),
+.user-management .form-grid.two-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@container management-create (max-width: 32rem) {
+  .create-disclosure .form-grid:not(.point-fields) { grid-template-columns: minmax(0, 1fr); }
+}
+.management-list .compact-disclosure > summary {
+  min-height: 44px; color: var(--teal); font-size: .9375rem;
+}
+.management-list .compact-disclosure[open] > summary {
+  padding-inline: .75rem; border-radius: 7px; background: var(--teal-light);
+  margin-bottom: 1rem;
+}
+.management-list .form-actions .checkbox-label {
+  min-height: 44px; padding-block: .5rem; font-size: .9375rem;
+  line-height: 1.5; cursor: pointer;
+}
+.point-management .danger-zone {
+  padding: 1rem; margin-top: 1rem; border: 1px solid #ead9d0;
+  border-radius: 8px; background: #fff9f6; align-items: flex-start;
+}
+.point-management .danger-zone > div { min-width: 0; }
+.point-management .danger-zone strong { color: var(--ink); font-size: .9375rem; font-weight: 650; }
+.point-management .danger-zone small { font-size: .875rem; line-height: 1.65; color: var(--muted); }
+@container point-panel (max-width: 30rem) {
+  .danger-zone { flex-direction: column; gap: .75rem; }
+  .danger-zone > div { flex-basis: auto; width: 100%; }
+}
+.user-management { container: user-panel / inline-size; }
+.user-management .password-reset-form label { min-width: 0; }
+@container user-panel (max-width: 30rem) {
+  .user-management .form-grid.two-fields { grid-template-columns: minmax(0, 1fr); }
+  .password-reset-form { flex-wrap: wrap; }
+  .password-reset-form > label { flex-basis: 100%; max-width: none; }
+  .management-top { flex-direction: column; align-items: stretch; }
+  .management-meta { max-width: none; margin-left: 0; justify-content: flex-start; }
+}
 .point-filter-toolbar .filter-form {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: end; gap: 8px; flex: 1 1 16rem;

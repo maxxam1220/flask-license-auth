@@ -18,3 +18,39 @@
 .dashboard-guide > div { max-width: 60rem; padding: 4px 0 12px; }
 .dashboard-guide p { font-size: .875rem; line-height: 1.65; }
 .dashboard-guide p + p { margin-top: 6px; }
+
+/* Keep the selected floor and each point's identity easy to find in a long list. */
+.floor-overview .floor-card.is-selected {
+  border-color: var(--teal);
+  box-shadow: inset 0 0 0 1px var(--teal);
+  background: #edf6f1;
+}
+.floor-overview .floor-card:focus-visible { outline-offset: 3px; }
+.point-card h3 { color: var(--ink); line-height: 1.5; }
+.point-card .point-code { color: #47635c; letter-spacing: .025em; }
+.point-card .workflow-slot { align-items: flex-start; }
+.point-card .workflow-slot > div { min-width: 0; }
+.point-card .workflow-slot .badge { white-space: normal; text-align: start; }
+.point-card .workflow-slot small { margin-top: .25rem; line-height: 1.5; }
+.point-card-bottom { border-top-color: #dce5de; }
+
+/* Unscheduled locations use the same fixed reading order on every row. */
+.spot-point-list li {
+  display: grid;
+  grid-template-columns: minmax(6rem, 1fr) minmax(0, 2.2fr) 3rem minmax(7rem, auto);
+  align-items: start;
+  gap: .4rem .8rem;
+  padding-block: .8rem;
+}
+.spot-point-list li > * { min-width: 0; }
+.spot-point-list li > strong { line-height: 1.5; }
+.spot-point-list li > .badge { justify-self: end; white-space: normal; text-align: end; }
+.spot-point-list li > .point-issue-row { grid-column: 2 / -1; margin: 0; }
+@media (max-width: 980px) {
+  .spot-point-list li { grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .7rem; }
+  .spot-point-list li > .point-code { grid-column: 1; grid-row: 1; }
+  .spot-point-list li > span:not([class]) { grid-column: 2; grid-row: 1; color: var(--muted); }
+  .spot-point-list li > strong { grid-column: 1 / -1; }
+  .spot-point-list li > .badge { grid-column: 1 / -1; justify-self: start; text-align: start; }
+  .spot-point-list li > .point-issue-row { grid-column: 1 / -1; }
+}
