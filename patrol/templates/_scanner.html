@@ -9,7 +9,7 @@
 {% macro scanner_dialog(executor=false) %}
 <dialog id="patrol-scanner" class="scanner-dialog" data-qr-dialog aria-labelledby="patrol-scanner-title" aria-describedby="patrol-scanner-help">
   <div class="scanner-heading">
-    <div><span class="eyebrow">{{ '掃描巡檢點' if executor else '現場打卡' }}</span><h2 id="patrol-scanner-title">{% if executor %}<span lang="en">Scan QR code</span>{% else %}掃描巡檢點{% endif %}</h2></div>
+    <h2 id="patrol-scanner-title">{% if executor %}<span lang="en">Scan QR code</span>{% else %}掃描巡檢點{% endif %}</h2>
     <button class="scanner-close" type="button" data-qr-close aria-label="{{ 'Close / 關閉掃描視窗' if executor else '關閉掃描視窗' }}">{{ icon('close') }}</button>
   </div>
   <div class="scanner-body">

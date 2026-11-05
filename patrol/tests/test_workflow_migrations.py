@@ -15,7 +15,7 @@ import migrations
 import general_workflow
 from general_workflow import new_execution
 from migrations import LATEST_VERSION, upgrade_schema
-from models import DeviceBinding, Inspection, PatrolExecution, Point, PointSchedule, RevokedSession, User
+from models import DeviceBinding, Inspection, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User
 from test_migrations import engine as sqlite_store, snapshot, version_two, version_three, version_four, version_five
 from test_postgres import engine as postgres_store
 
@@ -420,7 +420,7 @@ def test_v10_preserves_v9_accounts_history_and_titles_on_rerun(engine, v9):
         assert conn.execute(select(User.id, User.role, User.patrol_category, User.general_manager_title)
                             .where(User.id.in_((19, 20))).order_by(User.id)).all() == [
             (19, "inspector", "general", True), (20, "inspector", "general", False)]
-        assert conn.exec_driver_sql("SELECT COUNT(*) FROM patrol_schema_versions WHERE version=10").scalar_one() == 1
+        assert conn.scalar(select(func.count()).where(migrations.SchemaVersion.version == LATEST_VERSION)) == 1
 
 
 def test_v10_refuses_existing_title_column_with_unsafe_default(engine, v9):
@@ -430,3 +430,49 @@ def test_v10_refuses_existing_title_column_with_unsafe_default(engine, v9):
         upgrade_schema(engine)
     with engine.connect() as conn:
         assert conn.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 9
+
+
+@pytest.fixture
+def v10(engine, v9):
+    with engine.begin() as conn:
+        migrations._add_missing_columns(conn, User.__tablename__, [User.__table__.c.general_manager_title])
+        conn.exec_driver_sql("INSERT INTO patrol_schema_versions(version) VALUES(10)")
+        metadata = MetaData()
+        metadata.reflect(conn)
+        assert LoginEvent.__tablename__ not in metadata.tables
+        return metadata
+
+
+def test_v11_starts_login_history_at_cutover_and_keeps_account_snapshots(engine, v10):
+    with engine.connect() as conn:
+        before = snapshot(conn, v10)
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.begin() as conn:
+        after = snapshot(conn, v10)
+        assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
+        assert before == after
+        assert conn.scalar(select(func.count(LoginEvent.id))) == 0
+        username, original_name = conn.execute(select(User.username, User.display_name).where(User.id == 19)).one()
+        timestamp = datetime(2026, 11, 5, 1, 2, 3)
+        event = dict(user_id=19, username=username, display_name=original_name, browser="Safari", created_at=timestamp)
+        for client_type in ("mobile", "desktop"):
+            conn.execute(LoginEvent.__table__.insert().values(**event, client_type=client_type))
+        conn.execute(User.__table__.update().where(User.id == 19).values(display_name="新顯示姓名", active=False))
+        with pytest.raises(IntegrityError), conn.begin_nested():
+            conn.execute(LoginEvent.__table__.insert().values(**event, client_type="other"))
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.connect() as conn:
+        assert conn.execute(select(LoginEvent.username, LoginEvent.display_name, LoginEvent.created_at, LoginEvent.client_type)
+                            .where(LoginEvent.user_id == 19).order_by(LoginEvent.created_at.desc(), LoginEvent.id.desc())).all() == [
+            (username, original_name, timestamp, "desktop"), (username, original_name, timestamp, "mobile")]
+
+
+def test_v11_refuses_partial_login_table_with_wrong_index(engine, v10):
+    with engine.begin() as conn:
+        LoginEvent.__table__.create(conn)
+        conn.exec_driver_sql("DROP INDEX patrol_login_events_user_time")
+        conn.exec_driver_sql("CREATE INDEX patrol_login_events_user_time ON patrol_login_events (created_at)")
+    with pytest.raises(migrations.SchemaMigrationError, match="invalid login event index"):
+        upgrade_schema(engine)
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 10

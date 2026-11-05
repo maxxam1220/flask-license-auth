@@ -10,7 +10,7 @@ from flask import has_request_context, request
 from sqlalchemy import event
 from sqlalchemy.orm import Session
 
-from models import DeviceBinding, RevokedSession, User, db
+from models import DeviceBinding, LoginEvent, RevokedSession, User, db
 from test_app import PASSWORD, application, approve_browser, seeded  # noqa: F401
 from test_postgres_features import postgres_app  # noqa: F401
 
@@ -169,6 +169,8 @@ def test_switching_account_cannot_use_password_reset_during_handoff(postgres_app
     finally:
         event.remove(Session, "do_orm_execute", wait_for_reset)
     assert browser.get("/dashboard").location.startswith("/login")
+    with postgres_app.app_context():
+        assert db.session.scalar(db.select(LoginEvent.id).where(LoginEvent.user_id == worker_id)) is None
 
 
 def test_postgres_late_response_cookie_cannot_restore_admin_session(postgres_app):

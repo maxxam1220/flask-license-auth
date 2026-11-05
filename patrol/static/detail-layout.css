@@ -2,14 +2,12 @@
 .record-detail-wrap { max-width: 64rem; overflow-wrap: anywhere; }
 .detail-heading { align-items: center; gap: .4rem 1rem; }
 .detail-heading h1 { line-height: 1.25; }
-.detail-heading .eyebrow { display: flex; align-items: baseline; flex-wrap: wrap; gap: .35rem .7rem; }
-.detail-point-code { color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 .record-status-badge { flex: none; }
 .record-status-badge > a { display: inline-flex; align-items: center; gap: .25rem; min-height: 44px; color: #495956; }
 .record-status-badge .icon { width: 1rem; height: 1rem; }
 .record-detail-wrap .record-facts { gap: 1rem 1.5rem; }
 .record-detail-wrap .record-facts > div { align-content: start; gap: .2rem; }
-.record-detail-wrap .record-facts span, .detail-heading .eyebrow, .field-photo-heading > span,
+.record-detail-wrap .record-facts span, .field-photo-heading > span,
 .record-detail-wrap .issue-event-meta, .record-detail-wrap .stage-trail small,
 .record-detail-wrap .field-meta, .receipt-wrap .checkin-footnote { font-size: .875rem; }
 .record-detail-wrap .record-facts strong, .record-detail-wrap .stage-trail strong,
@@ -49,7 +47,6 @@
 .receipt-wrap .success-receipt .badge-issue-resolved { color: #315a40; }
 .receipt-wrap .success-emblem { width: 3rem; height: 3rem; border: 0; margin-block: 0 .6rem; }
 .receipt-wrap .success-emblem .icon { width: 1.6rem; height: 1.6rem; }
-.receipt-wrap .success-card > .eyebrow { margin-top: 0; font-size: .875rem; }
 .receipt-wrap .success-card .checkin-location { line-height: 1.55; }
 
 @media (max-width: 720px) {
@@ -57,13 +54,10 @@
   .record-detail-wrap .record-back-links a, .record-detail-wrap .badge { font-size: .875rem; }
   .record-detail-wrap .detail-heading {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "code status" "name name"; gap: .15rem .5rem;
+    gap: .15rem .5rem;
     margin-bottom: .8rem; align-items: center;
   }
-  .detail-heading > div:first-child { display: contents; }
-  .detail-heading .eyebrow { grid-area: code; }
-  .detail-heading .record-status-badge { grid-area: status; }
-  .detail-heading h1 { grid-area: name; font-size: 1.55rem; }
+  .detail-heading h1 { min-width: 0; font-size: 1.55rem; }
   .record-detail-wrap .panel.spaced { margin-top: .75rem; }
   .record-detail-wrap .panel { padding: .9rem 1rem; }
   .record-detail-wrap .record-facts { gap: .6rem 1rem; }

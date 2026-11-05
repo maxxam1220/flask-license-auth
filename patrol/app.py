@@ -29,7 +29,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from account_roles import ACCOUNT_CHOICES, ACCOUNT_ROLE_LABELS, account_role_choice, role_label
 
-from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
+from login_client import classify_login_client
+from login_history import login_records_page
 from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execution_in_slot, execution_review_status,
                               new_execution, personal_inspection_in_slot)
 from catalog_general import catalogue_rows as general_catalogue_rows
@@ -316,7 +318,7 @@ def create_app(config=None):
                         and template.name in {
                             "dashboard.html", "ready.html", "checkin.html", "checkin_success.html", "records.html",
                             "record_detail.html", "issues.html", "missed.html", "devices.html",
-                            "admin_devices.html", "points.html", "users.html",
+                            "admin_devices.html", "points.html", "users.html", "login_records.html",
                         })
         context["can_scan"] = g.patrol_scanner_page = can_scan
 
@@ -629,12 +631,23 @@ def create_app(config=None):
                 flash("帳號或密碼不正確，或帳號已停用。", "error")
             else:
                 next_url = safe_next(request.form.get("next") or request.args.get("next"))
-                # Use the version that matched the password. Revoking the old
-                # login can commit and expire ORM attributes while another
-                # request concurrently resets the destination user's password.
+                # Use the identity and version that actually matched the password.
                 user_id, version, change_required = user.id, user.auth_version, user.must_change_password
+                client_type, browser = classify_login_client(request.user_agent.string, request.headers.get("Sec-CH-UA-Mobile"))
                 revoke_current_login()
+                # A reset or deactivation during an account switch must not
+                # produce a success event or start a session for the stale login.
+                source = select(User.id, User.username, User.display_name, db.literal(client_type),
+                                db.literal(browser), db.literal(naive_utc(), type_=db.DateTime())).where(
+                                    User.id == user_id, User.active.is_(True), User.auth_version == version)
+                saved_id = db.session.scalar(db.insert(LoginEvent).from_select(
+                    ["user_id", "username", "display_name", "client_type", "browser", "created_at"], source
+                ).returning(LoginEvent.id))
+                db.session.commit()
                 session.clear()
+                if saved_id is None:
+                    flash("帳號設定已更新，請重新登入。", "error")
+                    return redirect(url_for("login", next=next_url))
                 session["user_id"] = user_id
                 session["auth_version"] = version
                 session["sid"] = secrets.token_urlsafe(32)
@@ -664,11 +677,12 @@ def create_app(config=None):
                 ).bindparams(db.bindparam("revoked_at", type_=db.DateTime()))
                 db.session.execute(revoke, {"token_hash": g.patrol_session_hash, "user_id": actor.id,
                                             "auth_version": actor.auth_version, "revoked_at": naive_utc()})
-                db.session.commit()
 
     @app.post("/logout")
     def logout():
         revoke_current_login()
+        if g.user:
+            db.session.commit()
         session.clear()
         return redirect(url_for("login"))
 
@@ -1400,6 +1414,11 @@ def create_app(config=None):
         db.session.commit()
         flash(f"已撤回「{binding.label}」的綁定申請。" if was_pending else f"已解除「{binding.label}」的綁定。", "success")
         return redirect(destination)
+
+    @app.get("/admin/login-records")
+    @admin_required
+    def login_records():
+        return login_records_page(local_dt(now_utc()).date(), parse_date, parse_id)
 
     @app.get("/admin/devices")
     @admin_required

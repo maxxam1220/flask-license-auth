@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% from '_ui.html' import icon, empty %}
+{% from '_report_pager.html' import report_pager %}
+{% set title = '登入紀錄' %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='report-layout.css') }}" media="screen">
+<link rel="stylesheet" href="{{ url_for('static', filename='login-records.css') }}" media="screen">
+{% endblock %}
+{% block body_class %}report-page{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><h1>登入紀錄</h1><p>顯示功能啟用後的成功登入，時間以台灣時間為準。</p></div>
+</div>
+<section class="panel filter-panel records-query-panel" data-records-query aria-label="篩選登入紀錄">
+  <button class="records-query-toggle" type="button" aria-expanded="true" aria-controls="login-query-fields" data-query-toggle hidden>
+    <span class="records-query-summary">
+      <span class="records-query-title">查詢條件 <small>{{ selected_user.display_name if selected_user else '全部人員' }}{% if filters.client_type %} · {{ client_labels[filters.client_type] }}{% endif %}</small></span>
+      <span class="records-query-dates"><time>{{ filters.date_from }}</time><span>至</span><time>{{ filters.date_to }}</time></span>
+    </span>
+    <span class="records-query-action"><span data-query-action>調整查詢</span>{{ icon('down') }}</span>
+  </button>
+  <div id="login-query-fields" data-query-fields>
+    <form class="filter-form records-filter-form" method="get" action="{{ url_for('login_records') }}" data-date-range>
+      <label>開始日期<input type="date" name="date_from" value="{{ filters.date_from }}" required></label>
+      <label>結束日期<input type="date" name="date_to" value="{{ filters.date_to }}" required></label>
+      <label>人員
+        <select name="user_id">
+          <option value="">全部人員</option>
+          {% for user in users %}<option value="{{ user.id }}"{% if filters.user_id == user.id %} selected{% endif %}>{{ user.display_name }}（{{ user.username }}）{% if not user.active %} · 已停用{% endif %}</option>{% endfor %}
+        </select>
+      </label>
+      <label>裝置類型
+        <select name="client_type">
+          <option value="">全部裝置</option>
+          {% for value, label in client_labels.items() %}<option value="{{ value }}"{% if filters.client_type == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <div class="records-filter-actions">
+        <button class="button button-primary" type="submit">查詢紀錄</button>
+        <a class="text-link" href="{{ url_for('login_records') }}">重設</a>
+      </div>
+    </form>
+  </div>
+</section>
+<section id="login-results" class="panel spaced" tabindex="-1" aria-labelledby="login-results-title">
+  <div class="section-heading"><h2 id="login-results-title">查詢結果</h2><span class="count-label">共 {{ pagination.total }} 筆</span></div>
+  {% if pagination.pages > 1 %}{{ report_pager('登入紀錄分頁（上方）', 'login_records', filters, pagination, 'login-results') }}{% endif %}
+  {% if events %}
+    <div class="table-scroll">
+      <table aria-labelledby="login-results-title">
+        <thead><tr><th scope="col">登入時間</th><th scope="col">人員／帳號</th><th scope="col">裝置類型</th><th scope="col">瀏覽器</th></tr></thead>
+        <tbody>
+          {% for event in events %}
+          <tr>
+            <td data-label="登入時間"><time class="tabular" datetime="{{ event.created_at.isoformat() }}Z">{{ event.created_at|localtime }}</time></td>
+            <td data-label="人員"><div><strong>{{ event.display_name }}</strong><small class="cell-hint">{{ event.username }}</small></div></td>
+            <td data-label="裝置">{{ client_labels[event.client_type] }}</td>
+            <td data-label="瀏覽器">{{ event.browser }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if pagination.pages > 1 %}{{ report_pager('登入紀錄分頁（下方）', 'login_records', filters, pagination, 'login-results') }}{% endif %}
+  {% else %}
+    {{ empty('這段時間沒有符合的登入紀錄', '可調整日期、人員或裝置類型再查詢。', 'clock') }}
+  {% endif %}
+</section>
+{% endblock %}

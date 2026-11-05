@@ -21,7 +21,7 @@
   </div>
   {% endif %}
   <div class="dashboard-heading-copy">
-    <div class="eyebrow">{{ '巡檢工作台' if is_patrol_admin else role_label(current_user) }}</div><h1>巡檢總覽</h1>
+    <h1>巡檢總覽</h1>
     <p>{{ '依分類與樓層查看進度，掌握每個巡檢時段。' if is_patrol_admin else '在兩階段點執行簽到，也可到指定的不定期點直接簽到。' if current_user.role == 'executor' else '依樓層查看負責點位與本期巡檢進度。' if viewer_category else '你的帳號尚未指派巡檢分類。' }}
       {% if is_patrol_admin or viewer_category %}
       <a id="today-ready" data-today-ready-entry class="text-link" href="{{ url_for('ready', category=selected_category if is_patrol_admin and selected_category else none, floor=selected_floor or none) }}">{{ ready_nav_label }} {{ icon('arrow') }}</a>

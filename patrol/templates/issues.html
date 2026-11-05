@@ -6,7 +6,7 @@
 {% set title='異常追蹤' %}
 {% set selected_status=filters.get('status','open') %}
 {% block content %}
-<div class="page-heading issue-page-heading"><div><div class="eyebrow">{{ '管理工作台' if current_user.role == 'admin' else '總務全組' if can_view_general_team else '我的回報' }}</div><h1>異常追蹤</h1><p>{{ '追蹤全站異常回報，確認處理後留下說明與結案紀錄。' if current_user.role == 'admin' else '可查看總務全組的異常與照片，並為自己回報的案件填寫說明及結案。' if can_view_general_team else '查看自己回報的異常，處理完成後可填寫說明並結案。' }}</p></div><span class="heading-icon">{{ icon('alert') }}</span></div>
+<div class="page-heading issue-page-heading"><div><h1>異常追蹤</h1><p>{{ '追蹤全站異常回報，確認處理後留下說明與結案紀錄。' if current_user.role == 'admin' else '可查看總務全組的異常與照片，並為自己回報的案件填寫說明及結案。' if can_view_general_team else '查看自己回報的異常，處理完成後可填寫說明並結案。' }}</p></div><span class="heading-icon">{{ icon('alert') }}</span></div>
 <section class="issue-overview {{ 'issue-overview-clear' if not open_total }}" aria-label="{{ '全站異常摘要' if current_user.role == 'admin' else '總務全組異常摘要' if can_view_general_team else '我的異常摘要' }}">
   <span class="issue-overview-icon">{{ icon('alert' if open_total else 'circle-check') }}</span>
   <div><span>{{ '全站目前未結案' if current_user.role == 'admin' else '總務目前未結案' if can_view_general_team else '我的回報尚未結案' }}</span><strong>{{ open_total }} <small>件異常</small></strong><p>跨日期持續追蹤；後續正常打卡不會自動結案。</p></div>

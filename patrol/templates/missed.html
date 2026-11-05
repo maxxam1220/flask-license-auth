@@ -7,7 +7,7 @@
 {% set query_count=namespace(value=0) %}
 {% for key in ['category','floor','frequency'] %}{% if filters.get(key,'') and (is_patrol_admin or key != 'category') %}{% set query_count.value=query_count.value + 1 %}{% endif %}{% endfor %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">巡檢追蹤</div><h1>漏打查詢</h1><p>查詢已到期但未完成的巡檢時段，掌握漏打總次數。</p></div><a class="button button-secondary" href="{{ url_for('missed_export', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), category=filters.get('category',''), floor=filters.get('floor',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
+<div class="page-heading"><div><h1>漏打查詢</h1><p>查詢已到期但未完成的巡檢時段，掌握漏打總次數。</p></div><a class="button button-secondary" href="{{ url_for('missed_export', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), category=filters.get('category',''), floor=filters.get('floor',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
 <section class="missed-stats" aria-label="所選條件漏打統計">
   <article class="stat-card"><span class="stat-label">已到期漏打總數</span><div class="stat-value {{ 'danger-text' if totals.missed }}">{{ totals.missed }}<small>次巡檢</small></div><span class="stat-icon {{ 'amber' if totals.missed else 'positive' }}">{{ icon('clock' if totals.missed else 'circle-check') }}</span></article>
   <article class="stat-card"><span class="stat-label">受影響點位</span><div class="stat-value">{{ totals.points }}<small>個點位</small></div><span class="stat-icon neutral">{{ icon('pin') }}</span></article>

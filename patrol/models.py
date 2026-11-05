@@ -334,6 +334,22 @@ class LoginAttempt(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow, index=True)
 
 
+class LoginEvent(db.Model):
+    __tablename__ = "patrol_login_events"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"), nullable=False)
+    username = db.Column(db.String(80), nullable=False)
+    display_name = db.Column(db.String(100), nullable=False)
+    client_type = db.Column(db.String(10), nullable=False)
+    browser = db.Column(db.String(40), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    __table_args__ = (
+        db.CheckConstraint("client_type IN ('mobile','tablet','desktop','unknown')", name="patrol_login_event_client_type"),
+        db.Index("patrol_login_events_time", "created_at", "id"),
+        db.Index("patrol_login_events_user_time", "user_id", "created_at", "id"),
+    )
+
+
 class RevokedSession(db.Model):
     __tablename__ = "patrol_revoked_sessions"
     token_hash = db.Column(db.String(64), primary_key=True)

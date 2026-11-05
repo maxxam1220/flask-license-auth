@@ -9,7 +9,7 @@
   {% endfor %}
 {%- endmacro %}
 {% block content %}
-<div class="page-heading"><div><div class="eyebrow">管理設定</div><h1>人員管理</h1><p id="role-guide">總務管理員與總務巡檢員權限相同。只有系統管理員可管理人員、點位及審核裝置。</p></div><span class="heading-icon">{{ icon('users') }}</span></div>
+<div class="page-heading"><div><h1>人員管理</h1><p id="role-guide">總務管理員與總務巡檢員權限相同。只有系統管理員可管理人員、點位及審核裝置。</p></div><span class="heading-icon">{{ icon('users') }}</span></div>
 <details class="panel disclosure create-disclosure"><summary><span>{{ icon('plus') }}新增人員</span>{{ icon('down') }}</summary>
   <form action="{{ url_for('create_user') }}" method="post" class="edit-form">{{ csrf() }}<div class="form-grid">
     <label>員工帳號<input name="username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9_.\-]{3,80}" title="3 至 80 個英數字、底線、句點或短橫線" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：staff001"><small>3 至 80 個英數字，可使用底線、句點、短橫線。</small></label>

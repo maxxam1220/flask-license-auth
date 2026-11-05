@@ -13,11 +13,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, case, exists, inspect, literal, select, text
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
-from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, PatrolExecution, Point, PointSchedule,
+from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, LoginEvent, PatrolExecution, Point, PointSchedule,
                     RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 10
+LATEST_VERSION = 11
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -117,6 +117,8 @@ def _upgrade_locked(connection) -> int:
             _add_missing_columns(connection, Inspection.__tablename__, [Inspection.__table__.c.executor_visit])
         if current < 10:
             _add_missing_columns(connection, User.__tablename__, [User.__table__.c.general_manager_title])
+        if current < 11:
+            LoginEvent.__table__.create(connection, checkfirst=True)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -421,9 +423,11 @@ def _validate_current(connection):
     inspector = inspect(connection)
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
-                                   "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked}
+                                   "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked,
+                                   LoginEvent.__tablename__}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
+    _validate_login_events(inspector)
     for table_name, required in {
         User.__tablename__: ("general_manager_title",),
         "patrol_points": ("category", "workflow_mode"),
@@ -508,3 +512,26 @@ def _validate_current(connection):
     user_checks = {check["name"] for check in inspector.get_check_constraints(User.__tablename__)}
     if "patrol_user_category_allowed" not in user_checks:
         raise SchemaMigrationError("Account patrol category validation is missing.")
+
+
+def _validate_login_events(inspector):
+    table = LoginEvent.__table__
+    actual = {column["name"]: column for column in inspector.get_columns(table.name)}
+    for expected in table.columns:
+        column = actual.get(expected.name)
+        if (not column or column["nullable"] or not isinstance(column["type"], type(expected.type))
+                or getattr(column["type"], "length", None) != getattr(expected.type, "length", None)):
+            raise SchemaMigrationError(f"Invalid login event column: {expected.name}.")
+    if inspector.get_pk_constraint(table.name)["constrained_columns"] != ["id"]:
+        raise SchemaMigrationError("Login event primary key is invalid.")
+    if not any(fk["constrained_columns"] == ["user_id"] and fk["referred_table"] == User.__tablename__
+               and fk["referred_columns"] == ["id"] for fk in inspector.get_foreign_keys(table.name)):
+        raise SchemaMigrationError("Login event account foreign key is missing.")
+    if "patrol_login_event_client_type" not in {check["name"] for check in inspector.get_check_constraints(table.name)}:
+        raise SchemaMigrationError("Login event device type check is missing.")
+    actual_indexes = {i["name"]: i for i in inspector.get_indexes(table.name)}
+    for expected in table.indexes:
+        index = actual_indexes.get(expected.name)
+        if (not index or index["unique"] or index["column_names"] != list(expected.columns.keys())
+                or any(key.endswith("_where") for key in index.get("dialect_options", {}))):
+            raise SchemaMigrationError(f"Missing or invalid login event index: {expected.name}.")

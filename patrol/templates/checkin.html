@@ -12,11 +12,13 @@
 <div class="checkin-wrap checkin-wrap-wide">
   <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>
   <div class="checkin-card{% if long_period %} cross-period-checkin{% endif %}">
-    <div class="checkin-topline"><span>{{ icon('qr') }}{{ category_label(point.category) if is_patrol_admin else '現場打卡' }}</span><span>{{ floor_label(point.floor) }}</span></div>
     <div class="checkin-point-icon">{{ icon('pin') }}</div>
-    <span class="eyebrow">{{ '本人已完成' if existing and personal else '此時段已有巡檢紀錄' if existing and point.frequency == 'daily2' else '此點已完成巡檢' if existing else '本期已達標 · 本人仍可巡檢' if long_period and first_reviewed and can_confirm and not execute else '兩階段 · 執行簽到' if paired and execute else '兩階段 · 現場巡檢' if paired else '不定期 · 直接簽到' if visit else '單段 · 現場巡檢' if spot else '確認巡檢位置' }}</span>
     <h1{% if point.code|length > 12 %} class="long-point-code"{% endif %}>{{ point.code }}</h1>
     <p class="checkin-location">{{ point.name }}</p>
+    <p class="checkin-place">{{ floor_label(point.floor) }}{% if is_patrol_admin %} · {{ category_label(point.category) }}{% endif %}</p>
+    {% if existing %}
+      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本時段' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
+    {% endif %}
     {% if form_error and waiting_for_execution %}<div class="flash flash-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<span>{{ form_error }}</span></div>{% endif %}
     {% if previous_period and (note or is_abnormal) and (waiting_for_execution or can_confirm) %}
     <div class="flash flash-warning" role="status"><span>草稿來自 {{ previous_period }}。請核對現場狀況與目前時段，再確認送出。照片需重新選擇。</span></div>
@@ -78,7 +80,6 @@
     </div>
     {% if form_error and not waiting_for_execution %}<div class="flash flash-error upload-form-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<div><strong>{{ form_error }}</strong>{% if not simple_signin and can_confirm and (note or is_abnormal or request.files.getlist('photos')|selectattr('filename')|list) %}<p>備註已保留；如有附照片，請重新選擇後再送出。</p>{% endif %}</div></div>{% endif %}
     {% if existing %}
-      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本時段' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本時段' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
       <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽 {{ icon('arrow') }}</a>
     {% elif not point.active %}
       <div class="flash flash-warning">此點位已停用，無法打卡。</div>
