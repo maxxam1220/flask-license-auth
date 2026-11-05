@@ -36,7 +36,7 @@
   </nav></div>
   <form method="get" class="filter-form">{% if show_deleted %}<input type="hidden" name="list" value="deleted">{% endif %}{% if selected_category %}<input type="hidden" name="category" value="{{ selected_category }}">{% endif %}
     <label>樓層<select name="floor"><option value="">全部樓層</option>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <button class="button button-primary">套用篩選</button><a class="text-link" href="{{ url_for('points', list='deleted' if show_deleted else none) }}">重設</a>
+    <button class="button button-primary" aria-label="套用篩選">套用</button><a class="text-link" href="{{ url_for('points', list='deleted' if show_deleted else none) }}">重設</a>
   </form>
 </section>
 {% if not show_deleted %}<details class="panel disclosure create-disclosure spaced"><summary><span>{{ icon('plus') }}新增巡檢點</span>{{ icon('down') }}</summary>

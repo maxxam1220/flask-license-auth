@@ -1,0 +1,19 @@
+/* Screen previews adapt to available space; printed labels retain their dimensions. */
+.print-page .qr-sheet {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.print-page .qr-label { min-width: 0; }
+.print-page .qr-label h2, .print-page .qr-label > p { overflow-wrap: anywhere; }
+.print-page .qr-label-header, .print-page .qr-floor, .print-page .qr-label-bottom {
+  font-size: max(14px, .875rem);
+}
+.print-page .qr-instruction { font-size: max(15px, .9375rem); }
+.print-page .qr-label-bottom { gap: .5rem 1rem; flex-wrap: wrap; }
+.print-page .filter-form > .text-link { min-height: 44px; min-width: 44px; font-size: max(14px, .875rem); }
+@media (max-width: 720px) {
+  .print-page .filter-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .print-page .filter-form > label { min-width: 0; grid-column: auto; }
+  .print-page .filter-form > .text-link { justify-self: end; }
+}

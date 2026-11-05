@@ -1,0 +1,18 @@
+/* Keep pending decisions and valid browsers visible; completed requests remain available. */
+.binding-review-empty { color: var(--muted); line-height: 1.6; }
+.binding-history { margin-top: 1.25rem; border-top: 1px solid var(--line); }
+.binding-history > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  min-height: 54px; padding: .75rem 0; list-style: none; cursor: pointer;
+  color: var(--ink); font-weight: 650; font-size: 1rem;
+}
+.binding-history > summary::-webkit-details-marker { display: none; }
+.binding-history > summary small {
+  display: block; margin-top: .2rem; color: var(--muted); font-weight: 400;
+  font-size: .875rem; line-height: 1.5;
+}
+.binding-history-count { display: flex; align-items: center; gap: .6rem; flex: none; white-space: nowrap; }
+.binding-history-count .icon { width: 18px; height: 18px; }
+.binding-history[open] > summary .icon { transform: rotate(180deg); }
+.binding-history > .table-scroll { margin-top: .5rem; }
+.binding-history > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; border-radius: 4px; }

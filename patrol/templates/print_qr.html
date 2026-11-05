@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, frequency, empty %}
 {% set title='列印 QR 標籤' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='qr-layout.css') }}" media="screen">{% endblock %}
 {% block body_class %}print-page{% endblock %}
 {% block content %}
 <div class="record-back-links no-print"><a class="back-link" href="{{ url_for('points', floor=selected_floor or none, category=selected_category or none) }}">{{ icon('back') }}返回巡檢點管理</a></div>

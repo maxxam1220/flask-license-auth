@@ -1,4 +1,11 @@
 /* The detail and receipt views share the same reading scale as the reports. */
+.checkin-wrap-wide .checkin-details > div {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline; gap: .35rem .75rem;
+}
+.checkin-wrap-wide .checkin-details > div > span { white-space: nowrap; }
+.checkin-wrap-wide .checkin-details strong { min-width: 0; text-align: end; overflow-wrap: anywhere; }
+
 .record-detail-wrap { max-width: 64rem; overflow-wrap: anywhere; }
 .detail-heading { align-items: center; gap: .4rem 1rem; }
 .detail-heading h1 { line-height: 1.25; }

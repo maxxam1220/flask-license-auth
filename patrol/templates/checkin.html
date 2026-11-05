@@ -9,6 +9,7 @@
 {% set personal = point.workflow_mode in ['spot','two_stage'] and not execute %}
 {% set needs_binding = device_state != 'approved' and (can_confirm or waiting_for_execution) %}
 {% set submit_label = '確認直接簽到' if visit else '確認執行簽到' if execute else '確認巡檢' if paired else '確認單段巡檢' if spot else '確認打卡' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
 <div class="checkin-wrap checkin-wrap-wide">
   <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>

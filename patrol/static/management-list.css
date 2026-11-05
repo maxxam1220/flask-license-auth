@@ -10,6 +10,17 @@
 }
 .user-management .compact-disclosure > summary { min-height: 44px; }
 .user-management .management-meta .badge { white-space: nowrap; }
+.point-filter-toolbar .filter-form {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end; gap: 8px; flex: 1 1 16rem;
+}
+.point-filter-toolbar .filter-form > label { min-width: 0; grid-column: auto; }
+.point-filter-toolbar .filter-form .button {
+  min-height: 44px; padding-inline: 12px; white-space: nowrap;
+}
+.point-filter-toolbar .filter-form .text-link {
+  min-width: 44px; min-height: 44px; justify-content: center; font-size: max(14px, .875rem);
+}
 @media (max-width: 720px) {
   .management-list > article:target { scroll-margin-block-start: 5rem; }
   .user-management .management-identity .muted,

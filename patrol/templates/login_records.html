@@ -43,7 +43,7 @@
   </div>
 </section>
 <section id="login-results" class="panel spaced" tabindex="-1" aria-labelledby="login-results-title">
-  <div class="section-heading"><h2 id="login-results-title">查詢結果</h2><span class="count-label">共 {{ pagination.total }} 筆</span></div>
+  <div class="section-heading report-result-heading"><h2 id="login-results-title">查詢結果</h2><span class="count-label report-result-count"><span>共 {{ pagination.total }} 筆</span>{% if pagination.pages > 1 %}<span class="record-range">第 {{ (pagination.page-1)*pagination.per_page+1 }}–{{ (pagination.page-1)*pagination.per_page+events|length }} 筆</span>{% endif %}</span></div>
   {% if pagination.pages > 1 %}{{ report_pager('登入紀錄分頁（上方）', 'login_records', filters, pagination, 'login-results') }}{% endif %}
   {% if events %}
     <div class="table-scroll">
