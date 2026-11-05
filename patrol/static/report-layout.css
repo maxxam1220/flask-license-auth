@@ -21,11 +21,23 @@
 .report-page .section-heading h2, .report-page .missed-point-summary > summary strong { font-size: 1.35rem; }
 .report-page .missed-count { font-size: 1.15em; }
 .report-page .missed-count, .report-page .missed-deadline { line-height: 1.45; }
-.record-range { margin: 0; color: var(--muted); font-size: var(--report-support); }
+.report-result-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
+.report-result-heading > div { display: contents; }
+.report-result-heading h2 { grid-column: 1; grid-row: 1; }
+.report-result-heading p { grid-column: 1 / -1; grid-row: 2; }
+.report-result-count { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 2px; text-align: end; }
+.record-range { margin: 0; color: var(--muted); font-size: var(--report-support); font-weight: 400; }
 .record-pagination { display: grid; grid-template-columns: 1fr auto 1fr; }
 .record-pagination > :first-child { justify-self: start; }
 .record-pagination > :last-child { justify-self: end; }
-.record-range + .record-pagination { margin: .4rem 0 .9rem; }
+.report-result-heading + .record-pagination { margin: .4rem 0 .9rem; }
+.report-page .issue-overview { gap: 12px; padding: 12px 16px; margin-bottom: 16px; }
+.report-page .issue-overview-icon { width: 32px; height: 32px; }
+.report-page .issue-overview > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.report-page .issue-overview > div > span,
+.report-page .issue-overview small, .report-page .issue-overview p { font-size: var(--report-support); }
+.report-page .issue-overview strong { font-size: 1.4rem; line-height: 1.45; }
+.report-page .issue-overview p { flex-basis: 100%; margin: 0; }
 .report-scope-line { display: flex; align-items: center; justify-content: space-between; gap: 0 18px; flex-wrap: wrap; }
 .report-scope-line p { margin: 0; }
 .report-scope-line .text-link { min-height: 44px; font-size: var(--report-body); }
@@ -146,6 +158,7 @@
   .report-page .section-heading { flex-wrap: wrap; gap: 4px 12px; margin-bottom: 11px; }
   .report-page .section-heading > div { flex: 1 1 12rem; }
   .report-page .section-heading > .count-label { align-self: flex-start; }
+  .report-page .issue-overview-icon { display: none; }
   .report-page .missed-stats { gap: 8px; }
   .report-page .missed-stats .stat-card { padding: 12px; }
   .report-page .missed-stats .stat-icon { display: none; }

@@ -20,6 +20,17 @@
    leave less room than a phone-width media query would suggest. */
 .binding-list-panel { container: binding-list / inline-size; }
 .binding-list-panel td > div { min-width: 0; overflow-wrap: anywhere; }
+.binding-help { padding: 0; }
+.binding-help summary {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  min-height: 52px; padding: 1rem; color: var(--ink); font-size: 1rem;
+  font-weight: 650; cursor: pointer; list-style: none;
+}
+.binding-help summary::-webkit-details-marker { display: none; }
+.binding-help summary > .icon { flex: none; }
+.binding-help details[open] > summary > .icon { transform: rotate(180deg); }
+.binding-help-content { padding: 0 1rem 1rem; border-top: 1px solid var(--line); }
+.binding-help-content .steps { margin-block: 1rem; }
 @container binding-list (max-width: 42rem) {
   .section-heading { flex-wrap: wrap; align-items: start; gap: .5rem; }
   .section-heading > div { flex: 1 1 15rem; }

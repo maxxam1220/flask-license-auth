@@ -35,10 +35,9 @@
 <section class="panel spaced field-report" aria-labelledby="field-report-title">
   <div class="section-heading"><h2 id="field-report-title">現場回報</h2></div>
   {% if record.note or record.photos %}
-    <h3>巡檢備註</h3>
-    {% if record.note %}<p class="record-note">{{ record.note }}</p>{% else %}<p class="field-report-empty">未填寫備註</p>{% endif %}
-    <div class="field-photo-heading"><h3>現場照片</h3><span>{{ record.photos|length }} 張</span></div>
+    {% if record.note %}<h3>巡檢備註</h3><p class="record-note">{{ record.note }}</p>{% endif %}
     {% if record.photos %}
+      <div class="field-photo-heading"><h3>現場照片</h3><span>{{ record.photos|length }} 張</span></div>
       <div class="record-photos">{% for photo in record.photos %}
         <a class="record-photo" href="{{ url_for('photo_file', photo_id=photo.id) }}" target="_blank" rel="noopener" aria-label="開啟第 {{ loop.index }} 張巡檢照片（新分頁）">
           <img src="{{ url_for('photo_file', photo_id=photo.id) }}" alt="{{ point_code(record) }} 第 {{ loop.index }} 張巡檢照片" loading="lazy">

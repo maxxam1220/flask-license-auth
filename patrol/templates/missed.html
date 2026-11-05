@@ -44,9 +44,8 @@
 </details>
 {% endif %}
 <section class="panel spaced" id="missed-results" tabindex="-1" aria-labelledby="missed-results-title">
-  <div class="section-heading"><div><h2 id="missed-results-title">漏打明細</h2><p>{{ filters.get('date_from','') }} 至 {{ filters.get('date_to','') }} · 依應完成日查詢</p></div><span class="count-label">共 {{ totals.missed }} 次</span></div>
+  <div class="section-heading report-result-heading"><div><h2 id="missed-results-title">漏打明細</h2><p>{{ filters.get('date_from','') }} 至 {{ filters.get('date_to','') }} · 依應完成日查詢</p></div><span class="count-label report-result-count"><span>共 {{ totals.missed }} 次</span>{% if pagination.pages > 1 %}<span class="record-range">第 {{ (pagination.page-1)*pagination.per_page+1 }}–{{ (pagination.page-1)*pagination.per_page+occurrences|length }} 筆</span>{% endif %}</span></div>
 {% if pagination.pages > 1 %}
-<p class="record-range">顯示第 {{ (pagination.page-1)*pagination.per_page+1 }}–{{ (pagination.page-1)*pagination.per_page+occurrences|length }} 筆</p>
 {{ report_pager('漏打明細分頁（上方）', 'missed', filters, pagination, 'missed-results') }}
 {% endif %}
   {% if occurrences %}<div class="table-scroll missed-table"><table><thead><tr><th scope="col">應完成日／期間</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">頻率／時段</th><th scope="col">到期時間</th></tr></thead><tbody>

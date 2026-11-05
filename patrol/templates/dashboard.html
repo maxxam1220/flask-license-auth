@@ -3,6 +3,7 @@
 {% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge %}
 {% set title='巡檢總覽' %}
 {% from '_scanner.html' import scanner_button %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-layout.css') }}" media="screen">{% endblock %}
 {% macro stage_badge(slot) %}
   {%- if slot.status == 'done' %}<span class="badge badge-done">兩階段已完成</span>
   {%- elif slot.status == 'not_due' %}<span class="badge badge-not_due">時段尚未開始</span>
@@ -64,9 +65,29 @@
   {% endfor %}
 </section>
 <div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · 僅計已到期時段</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
-<section class="panel floor-overview" aria-labelledby="floor-progress"><div class="section-heading"><div><h2 id="floor-progress" tabindex="-1">樓層進度</h2><p>{{ period_title if view == 'monthly' else week_label if view == 'weekly' else selected_date }} · {{ '同點同期間有一人完成即達標，其他巡檢員仍可登記。' if viewer_category == 'general' or (is_patrol_admin and selected_category in ['',none,'general']) else '同一點的每個時段，由一位人員完成即可' }}</p></div><a class="text-link" href="{{ url_for('dashboard', view=view, date=selected_date, category=selected_category, _anchor='patrol-points') }}">全部樓層 {{ icon('arrow') }}</a></div><p class="floor-scroll-hint">左右滑動，查看各樓層進度</p><div class="floor-grid" aria-label="選擇樓層" data-floor-navigation>{% for floor in floors %}<a {% if floor.total %}data-has-visits{% endif %} aria-label="{{ floor_label(floor.floor) }}，已完成 {{ floor.done }} 次，共需 {{ floor.total }} 次巡檢" aria-current="{{ 'page' if request.args.get('floor') == floor.floor|string else 'false' }}" class="floor-card {% if request.args.get('floor') == floor.floor|string %}is-selected{% endif %}" href="{{ url_for('dashboard', view=view, date=selected_date, floor=floor.floor, category=selected_category, _anchor='patrol-points') }}"><div class="floor-card-top"><span class="floor-number floor-number-label">{{ floor_label(floor.floor) }}</span><span class="floor-ratio"><strong>{{ floor.done }}</strong> / {{ floor.total }}</span></div><progress max="{{ floor.total if floor.total else 1 }}" value="{{ floor.done }}" aria-label="已完成 {{ floor.done }}／{{ floor.total }} 次"></progress><span class="floor-caption">{{ '無應巡次數' if not floor.total else ('全部完成' if floor.done == floor.total else '查看巡檢點') }}{{ icon('arrow') }}</span></a>{% endfor %}</div></section>
+<section class="panel floor-overview" aria-labelledby="floor-progress">
+  <div class="section-heading">
+    <div><h2 id="floor-progress" tabindex="-1">樓層進度</h2><p>{{ period_title if view == 'monthly' else week_label if view == 'weekly' else selected_date }}</p></div>
+    <a class="text-link" href="{{ url_for('dashboard', view=view, date=selected_date, category=selected_category, _anchor='patrol-points') }}">全部樓層 {{ icon('arrow') }}</a>
+  </div>
+  <p class="floor-scroll-hint">左右滑動，查看各樓層進度</p>
+  <div class="floor-grid" aria-label="選擇樓層" data-floor-navigation>
+    {% for floor in floors %}
+    <a {% if floor.total %}data-has-visits{% endif %} aria-label="{{ floor_label(floor.floor) }}，已完成 {{ floor.done }} 次，共需 {{ floor.total }} 次巡檢，{{ '無應巡次數' if not floor.total else ('全部完成' if floor.done == floor.total else '查看巡檢點') }}" aria-current="{{ 'page' if request.args.get('floor') == floor.floor|string else 'false' }}" class="floor-card {% if request.args.get('floor') == floor.floor|string %}is-selected{% endif %}" href="{{ url_for('dashboard', view=view, date=selected_date, floor=floor.floor, category=selected_category, _anchor='patrol-points') }}">
+      <div class="floor-card-top"><span class="floor-number floor-number-label">{{ floor_label(floor.floor) }}</span><span class="floor-ratio"><strong>{{ floor.done }}</strong> / {{ floor.total }}</span></div>
+      <progress max="{{ floor.total if floor.total else 1 }}" value="{{ floor.done }}" aria-label="已完成 {{ floor.done }}／{{ floor.total }} 次"></progress>
+    </a>
+    {% endfor %}
+  </div>
+</section>
 <section aria-labelledby="patrol-points"><div class="section-heading outside"><div><h2 id="patrol-points" tabindex="-1">{{ floor_label(request.args.get('floor')) if request.args.get('floor') else '全部樓層' }}巡檢點</h2>{% if view == 'daily' and cards|selectattr('point.frequency', 'equalto', 'daily2')|first is defined %}<p>每日兩次的點位：上午 00:00–11:59、下午 12:00–23:59。</p>{% endif %}</div><div class="patrol-point-tools"><span class="count-label">{{ cards|length }} 個點位</span>{% if request.args.get('floor') %}<a class="text-link" href="#floor-progress">變更樓層</a>{% endif %}</div></div>
-<p class="issue-legend">{{ icon('info') }}未結案異常跨日期持續追蹤，與本期巡檢進度分開顯示。</p>
+<details class="dashboard-guide">
+  <summary>進度與異常說明</summary>
+  <div>
+    <p>{{ '同點同期間有一人完成即達標，其他巡檢員仍可登記。' if viewer_category == 'general' or (is_patrol_admin and selected_category in ['',none,'general']) else '同一點的每個時段，由一位人員完成即可。' }}</p>
+    <p>未結案異常跨日期持續追蹤，與本期巡檢進度分開顯示。</p>
+  </div>
+</details>
 <div class="point-grid">{% for card in cards %}<article class="point-card {% if card.status == 'done' %}is-done{% endif %}">
   {% set done_count = card.slots|selectattr('status','equalto','done')|list|length %}
   {% set slot_count = card.slots|length %}

@@ -1,0 +1,20 @@
+/* Keep floor choices and point states prominent; supporting rules stay available on demand. */
+.floor-overview .floor-card { min-height: 64px; }
+.floor-overview .floor-card-top { margin-bottom: 9px; }
+.floor-overview .floor-card progress { display: block; margin-bottom: 0; }
+
+.dashboard-guide { margin: -4px 0 12px; color: var(--muted); }
+.dashboard-guide > summary {
+  width: fit-content;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 11px 4px;
+  font-size: .875rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.dashboard-guide > summary:hover { color: var(--teal); }
+.dashboard-guide > summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 4px; }
+.dashboard-guide > div { max-width: 60rem; padding: 4px 0 12px; }
+.dashboard-guide p { font-size: .875rem; line-height: 1.65; }
+.dashboard-guide p + p { margin-top: 6px; }
