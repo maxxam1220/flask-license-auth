@@ -94,6 +94,16 @@
   .table-scroll .record-point-cell { flex: 1 1 135px; }
   .records-table tbody td:nth-child(6) { grid-column: 1 / -1; }
   .records-table tbody td:last-child { grid-column: 1 / -1; }
+  /* Give multilingual staff names a full line instead of a narrow third. */
+  .records-table tbody > tr:not([hidden]) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .records-table tbody td:nth-child(3) { grid-column: 1; grid-row: 4; }
+  .records-table tbody td:nth-child(4) {
+    grid-column: 1 / -1; grid-row: 3; display: flex; align-items: baseline;
+    flex-wrap: wrap; gap: 3px 8px;
+  }
+  .records-table tbody td:nth-child(4)::before { margin: 0; flex: none; }
+  .records-table tbody td:nth-child(4) strong { min-width: 0; flex: 1 1 10em; }
+  .records-table tbody td:nth-child(5) { grid-column: 2; grid-row: 4; }
   .missed-table tbody td:last-child { grid-column: 1 / -1; }
   .missed-table td:last-child { display: flex; align-items: baseline; justify-content: flex-start; gap: 8px; }
   .missed-table td:last-child::before { flex: none; margin: 0; }

@@ -1,12 +1,13 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, csrf, status, empty %}
 {% set title = '綁定審核' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='management-list.css') }}">{% endblock %}
 {% block content %}
 <div class="page-heading">
   <div><h1>綁定審核</h1><p>核對員工與瀏覽器名稱，再處理綁定申請。</p></div>
   <span class="heading-icon">{{ icon('shield') }}</span>
 </div>
-<section class="panel">
+<section class="panel binding-list-panel">
   <div class="section-heading">
     <div><h2>瀏覽器申請與綁定紀錄</h2><p>每人可核准一個瀏覽器。待審核的申請排在最前面。</p></div>
     <span class="count-label">待審 {{ bindings|selectattr('status', 'equalto', 'pending')|list|length }} 筆</span>
@@ -18,15 +19,15 @@
       {% for binding in bindings %}
       {% set previous = approved_devices.get(binding.user_id) %}
       <tr>
-        <td data-label="申請人員"><strong>{{ binding.user.display_name }}</strong><small class="cell-hint">{{ binding.user.username }} · {{ role_label(binding.user) }}</small></td>
-        <td data-label="辨識名稱">
+        <td data-label="申請人員"><div><strong>{{ binding.user.display_name }}</strong><small class="cell-hint">{{ binding.user.username }} · {{ role_label(binding.user) }}</small></div></td>
+        <td data-label="辨識名稱"><div>
           <strong>{{ binding.label }}</strong>
           {% if binding.status == 'pending' %}
           <small class="cell-hint">{{ '將取代「' ~ previous.label ~ '」' if previous else '目前沒有已核准的瀏覽器' }}</small>
           {% endif %}
-        </td>
+        </div></td>
         <td data-label="狀態">{{ status(binding.status) }}</td>
-        <td data-label="申請時間">{{ binding.created_at|localtime }}</td>
+        <td data-label="申請時間"><time datetime="{{ binding.created_at.isoformat() }}Z">{{ binding.created_at|localtime }}</time></td>
         <td data-label="處理"><div class="table-actions">
           {% if binding.status == 'pending' %}
           <form action="{{ url_for('approve_device', binding_id=binding.id) }}" method="post"

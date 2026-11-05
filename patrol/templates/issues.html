@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from '_report_pager.html' import report_pager %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='report-layout.css') }}" media="screen">{% endblock %}
+{% block body_class %}report-page{% endblock %}
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, empty, frequency, slot_label, issue_status %}
 {% set title='異常追蹤' %}

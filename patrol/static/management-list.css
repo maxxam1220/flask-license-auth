@@ -15,3 +15,35 @@
   .user-management .management-identity .muted,
   .user-management .management-meta .badge { font-size: .875rem; }
 }
+
+/* Use the available content width: the desktop sidebar and browser zoom can
+   leave less room than a phone-width media query would suggest. */
+.binding-list-panel { container: binding-list / inline-size; }
+.binding-list-panel td > div { min-width: 0; overflow-wrap: anywhere; }
+@container binding-list (max-width: 42rem) {
+  .section-heading { flex-wrap: wrap; align-items: start; gap: .5rem; }
+  .section-heading > div { flex: 1 1 15rem; }
+  .section-heading > .count-label { white-space: nowrap; }
+  .table-scroll { overflow: visible; margin-inline: 0; }
+  .table-scroll table, .table-scroll tbody { display: block; width: 100%; min-width: 0; }
+  .table-scroll thead {
+    display: table-header-group; position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .table-scroll tr { display: block; padding-block: 1rem; border-bottom: 1px solid var(--line); }
+  .table-scroll tr:first-child { padding-top: 0; }
+  .table-scroll tr:last-child { padding-bottom: 0; border-bottom: 0; }
+  .table-scroll td {
+    display: grid; grid-template-columns: 5.75rem minmax(0, 1fr);
+    gap: .65rem; align-items: start; padding: .35rem 0;
+    text-align: left; border: 0; overflow-wrap: anywhere;
+  }
+  .table-scroll td::before {
+    content: attr(data-label); display: block; min-width: 0;
+    color: var(--muted); text-align: left; font-size: .875rem;
+  }
+  .table-scroll td > .badge { justify-self: start; }
+  .table-scroll .cell-hint { width: auto; margin-top: .25rem; }
+  .table-scroll .table-actions { justify-content: flex-start; flex-wrap: wrap; gap: .5rem; }
+  .table-scroll .table-actions .button, .table-scroll .text-button { min-height: 44px; }
+}
