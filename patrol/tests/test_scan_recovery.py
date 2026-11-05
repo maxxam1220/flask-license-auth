@@ -127,7 +127,7 @@ def test_repeated_self_revoke_only_audits_real_transition(application, seeded):
     login(client)
     binding = approve_browser(client, seeded["inspector"])
     for _ in range(2):
-        assert client.post(f"/devices/{binding.id}/revoke").status_code == 302
+        assert client.post(f"/devices/{binding.id}/revoke", data={"reviewed_status": "approved"}).status_code == 302
     db.session.refresh(binding)
     assert binding.status == "revoked"
     assert db.session.query(AuditLog).filter_by(action="device_self_revoked").count() == 1

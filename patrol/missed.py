@@ -171,12 +171,15 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
 
     instant = _utc(now)
     last_due_day = min(date_to, instant.astimezone(TAIPEI).date())
+    if date_from > last_due_day or frequency == "irregular":
+        return []
     # A scheduled completion survives same-period plan edits. Several qualifying
     # inspections by one or more people still satisfy just one team obligation.
     completed = {key[:4] for key in _completion_keys(completions)}
     executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
+    day_step = timedelta(days=7 if frequency == "weekly" else 1)
     for point in points:
         point_id = _value(point, "id")
         if point_id in seen_points:
@@ -187,7 +190,9 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         created_at = _value(point, "created_at")
         created_at = _utc(created_at) if created_at is not None else None
         timeline = schedule_timeline(point)
-        due_day = first_due_day
+        # A weekly/monthly filter can only match Sundays/month ends. Choose
+        # those dates before reading historical schedules for each point.
+        due_day = period_bounds(first_due_day, frequency)[1]
         while due_day <= last_due_day:
             for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True):
                 period_frequency, mode = snapshot["frequency"], snapshot["workflow_mode"]
@@ -216,7 +221,9 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
                     "period_key": period_key, "period_label": period_label, "slot": slot,
                     "due_date": due_day, "deadline": deadline, "missing_stage_label": missing_stage,
                 })
-            due_day += timedelta(days=1)
+            due_day += day_step
+            if frequency == "monthly":
+                due_day = period_bounds(due_day, frequency)[1]
     occurrences.sort(key=lambda row: (-row["deadline"].timestamp(), FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)),
                                       row["code"], row["point_id"], row["slot"]))
     return occurrences

@@ -7,6 +7,7 @@
 {% set paired = point.workflow_mode == 'two_stage' %}
 {% set spot = point.workflow_mode == 'spot' %}
 {% set personal = point.workflow_mode in ['spot','two_stage'] and not execute %}
+{% set needs_binding = device_state != 'approved' and (can_confirm or waiting_for_execution) %}
 {% set submit_label = '確認直接簽到' if visit else '確認執行簽到' if execute else '確認巡檢' if paired else '確認單段巡檢' if spot else '確認打卡' %}
 {% block content %}
 <div class="checkin-wrap checkin-wrap-wide">
@@ -35,6 +36,11 @@
       <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
       {% if not simple_signin %}<a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>{% endif %}
     </div>
+    {% elif needs_binding %}
+    <div class="checkin-quick-action">
+      <div class="callout"><div><strong>{{ '請等候系統管理員核准' if device_state == 'pending' else '請先完成瀏覽器綁定' }}</strong><p>只有已核准的手機瀏覽器可以提交打卡。</p></div></div>
+      <a class="button button-primary button-full" href="{{ url_for('devices', next=request.path) }}">{{ icon('phone') }}前往我的綁定</a>
+    </div>
     {% elif waiting_for_execution %}
     <div class="checkin-quick-action">
       <p role="status">尚未執行。請等總務執行人員簽到，再重新確認此點狀態。</p>
@@ -42,6 +48,8 @@
       <form method="post" action="{{ url_for('checkin', token=token) }}" id="handoff-recheck">
         {{ csrf() }}
         <input type="hidden" name="draft_point" value="{{ point.id }}">
+        <input type="hidden" name="point_revision" value="{{ point_revision }}">
+        <input type="hidden" name="frequency" value="{{ point.frequency }}">
         <input type="hidden" name="draft_day" value="{{ draft_day }}">
         <input type="hidden" name="draft_slot" value="{{ draft_slot }}">
         <input type="hidden" name="note" value="{{ note }}">
@@ -84,7 +92,7 @@
     {% elif not point.active %}
       <div class="flash flash-warning">此點位已停用，無法打卡。</div>
       <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽</a>
-    {% elif not can_confirm %}
+    {% elif not can_confirm and not needs_binding %}
       <a class="button button-secondary button-full" href="{{ progress_url }}">返回巡檢總覽 {{ icon('arrow') }}</a>
     {% elif device_state == 'approved' %}
       <form id="inspection-form" method="post" action="{{ url_for('confirm_checkin', token=request.view_args.get('token')) }}" enctype="multipart/form-data" data-submit-once data-inspection-form>
@@ -121,9 +129,6 @@
         {% endif %}{% if not simple_signin %}<button class="button button-primary button-full button-large" type="submit" data-loading-text="{{ '正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{{ submit_label }}</button>{% endif %}
       </form>
       <p class="checkin-footnote">{% if visit %}看到「直接簽到完成」後，即可前往下一點。{% elif execute %}簽到只記錄人員、點位與時間。看到「執行簽到完成」後，即可前往下一點。{% else %}附照片時請稍候，顯示「打卡成功」才表示紀錄與照片已儲存。<br>打卡時間以系統紀錄為準。{% endif %}</p>
-    {% else %}
-      <div class="callout"><div><strong>{{ '請等候系統管理員核准' if device_state == 'pending' else '請先完成瀏覽器綁定' }}</strong><p>只有已核准的手機瀏覽器可以提交打卡。</p></div></div>
-      <a class="button button-primary button-full" href="{{ url_for('devices', next=request.path) }}">{{ icon('phone') }}前往我的綁定</a>
     {% endif %}
   </div>
   <p class="checkin-outside-note">{% if existing %}{{ '本人本時段' if personal and point.frequency == 'daily2' else '本人當日' if personal else '本時段' if point.frequency == 'daily2' else '本期' }}已有完成紀錄，可繼續前往下一個巡檢點。{% elif can_confirm and not simple_signin %}離開前，請確認畫面顯示「打卡成功」。{% endif %}</p>

@@ -12,6 +12,14 @@
   {%- else %}<span class="badge badge-signin">未簽到</span>
   {%- endif %}
 {% endmacro %}
+{% macro point_issues(point_id, count) -%}
+  {% if count %}
+  <div class="point-issue-row">
+    {{ open_issue_badge(count, url_for('issues', point_id=point_id, category=(selected_category or none) if is_patrol_admin else none) if is_patrol_admin or can_view_general_team else '') }}
+    {% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point_id) }}">查看我回報的異常 {{ icon('arrow') }}</a>{% endif %}
+  </div>
+  {% endif %}
+{%- endmacro %}
 {% block content %}
 <div class="page-heading dashboard-heading">
   {% if can_scan %}
@@ -76,7 +84,7 @@
     </div>
   </div>
   <h3>{{ card.point.name }}</h3>
-  {% if card.open_issue_count %}<div class="point-issue-row">{{ open_issue_badge(card.open_issue_count, url_for('issues', point_id=card.point.id) if is_patrol_admin or can_view_general_team else '') }}{% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=card.point.id) }}">查看我回報的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
+  {{ point_issues(card.point.id, card.open_issue_count) }}
   <div class="point-meta">{% if card.point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif card.point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段</span>{% endif %}{{ icon('building') }}{{ floor_label(card.point.floor) }}<span>·</span>{{ frequency(card.point.frequency) }}{% if is_patrol_admin %}<span>·</span>{{ category_label(card.point.category) }}{% endif %}</div>
   {% if card.point.workflow_mode == 'two_stage' %}
   <div class="workflow-slots" aria-label="各時段作業進度">{% for slot in card.slots %}<div class="workflow-slot">
@@ -88,7 +96,7 @@
   <div class="point-card-bottom">{% if card.point.frequency == 'daily2' %}<span class="completion-mark {{ 'muted-mark' if card.status != 'done' }}">{{ icon('circle-check' if card.status == 'done' else 'clock') }}</span><span>{{ card.period_label }}<small>已完成 {{ done_count }} / {{ slot_count }} 次</small></span>{% elif card.latest %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>{{ reporter_name(card.latest) }}<small>{{ card.latest.created_at|localtime }}</small></span>{% elif card.status == 'done' %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>本期已完成<small>已由其他巡檢人員完成</small></span>{% else %}<span class="completion-mark muted-mark">{{ icon('clock') }}</span><span class="muted">{{ card.period_label }}<small>{{ '此日未列入巡檢' if card.status == 'not_due' else '本期已截止' if card.missed_count else '本期尚未完成' }}</small></span>{% endif %}</div>
 </article>{% else %}{{ empty('本期沒有應巡點位' if irregular_points else '尚無巡檢點', '可在下方查看不定期或免排程的點位。' if irregular_points else  '可更換日期、樓層或巡檢週期。' if is_patrol_admin else '可更換日期、樓層或巡檢週期。若尚未設置負責點位，請聯絡系統管理員。', 'pin') }}{% endfor %}</div></section>
 {% if irregular_points %}<section class="panel spaced" aria-labelledby="spot-points-title"><div class="section-heading"><div><h2 id="spot-points-title">不定期與免排程點位</h2><p>這些點位可依現場需要打卡，不列入團隊應巡及漏打。{{ '指定點位可直接簽到，每人每點每天一次。' if current_user.role == 'executor' else '指定的總務不定期點由巡檢員或執行人員直接登記，每人每天一次。' }}</p></div><span class="count-label">{{ irregular_points|length }} 個點位</span></div>
-<ul class="spot-point-list">{% for point in irregular_points %}<li><span class="point-code">{{ point.code }}</span><strong>{{ point.name }}</strong><span>{{ floor_label(point.floor) }}</span><span class="badge badge-neutral">{{ '兩階段' if point.workflow_mode == 'two_stage' else '直接簽到' if current_user.role == 'executor' else '單段' }} · {{ '舊制免排程' if point.legacy_unscheduled else '不定期' }}</span></li>{% endfor %}</ul>{% if current_user.role == 'executor' %}<a class="text-link" href="{{ url_for('records', stage='inspection') }}">查看我的直接簽到 {{ icon('arrow') }}</a>{% endif %}</section>{% endif %}
+<ul class="spot-point-list">{% for point in irregular_points %}<li><span class="point-code">{{ point.code }}</span><strong>{{ point.name }}</strong><span>{{ floor_label(point.floor) }}</span><span class="badge badge-neutral">{{ '兩階段' if point.workflow_mode == 'two_stage' else '直接簽到' if current_user.role == 'executor' else '單段' }} · {{ '舊制免排程' if point.legacy_unscheduled else '不定期' }}</span>{{ point_issues(point.id, open_issue_counts.get(point.id)) }}</li>{% endfor %}</ul>{% if current_user.role == 'executor' %}<a class="text-link" href="{{ url_for('records', stage='inspection') }}">查看我的直接簽到 {{ icon('arrow') }}</a>{% endif %}</section>{% endif %}
 {% macro activity_panel(items, stage, heading, caption) %}
   {% set list_url = url_for('records', stage=stage, category=selected_category or none, floor=selected_floor or none) %}
   {% if items %}<section class="panel recent-panel">

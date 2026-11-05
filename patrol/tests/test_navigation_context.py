@@ -5,6 +5,9 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from test_app import application, seeded, app_module, db, login, record, rendered_contexts  # noqa: F401
+from test_frontend_navigation import Anchors
+from test_inspector_issues import make_case
+from test_workflow_reports import point as general_point
 
 
 @pytest.mark.parametrize('view,frequency,start,end', [
@@ -62,3 +65,43 @@ def test_other_inspector_cannot_use_receipt_context_to_view_private_record(appli
     client = application.test_client()
     login(client)
     assert client.get(f'/checkins/{saved.id}').status_code == 403
+
+
+@pytest.mark.parametrize("day", ["2000-01-01", "2100-12-31"])
+def test_partial_boundary_week_links_to_valid_reports(application, seeded, day):
+    client = application.test_client()
+    login(client, "manager")
+    with rendered_contexts(application) as rendered:
+        assert client.get(f"/dashboard?date={day}&view=weekly&category=safety&floor=1").status_code == 200
+    for key in ("records_query_url", "missed_query_url"):
+        url = rendered[-1][1][key]
+        assert client.get(url).status_code == 200
+        query = parse_qs(urlsplit(url).query)
+        assert "2000-01-01" <= query["date_from"][0] <= day <= query["date_to"][0] <= "2100-12-31"
+        assert (query["category"], query["floor"], query["frequency"]) == (["safety"], ["1"], ["weekly"])
+
+
+def test_irregular_point_badge_leads_to_filtered_open_case_and_clears_after_resolution(application, seeded):
+    user = seeded["inspector"]
+    user.patrol_category = "general"
+    point = general_point("1F-SPOT", "spot", frequency="irregular")
+    case = make_case(user, point, 1)
+    case.frequency, case.workflow_mode, case.spot_request_id = "irregular", "spot", "a" * 64
+    case.personal_day = case.created_at.date()
+    # An older open report belongs to the department that previously owned the point.
+    older = make_case(seeded["colleague"], point, 2)
+    older.category = "safety"
+    db.session.commit()
+    client = application.test_client()
+    login(client, "manager")
+    path = "/dashboard?category=general"
+    def links():
+        html = client.get(path).text.split('class="spot-point-list"', 1)[1].split("</ul>", 1)[0]
+        return [a for a in Anchors(html).links if a.get("class") == "open-issue-badge"]
+    badge, = links()
+    assert "1 件" in badge["aria-label"]
+    with rendered_contexts(application) as rendered:
+        assert client.get(badge["href"]).status_code == 200
+    assert [row.id for row in rendered[-1][1]["records"]] == [case.id]
+    assert client.post(f"/issues/{case.id}/resolve", data={"expected_event_id": "0", "note": "現場已修復"}).status_code == 302
+    assert links() == []

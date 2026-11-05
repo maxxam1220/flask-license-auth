@@ -60,11 +60,32 @@ def test_filters_survive_pagination_and_identical_timestamps(application, seeded
     selected = f"{PATH}?date_from=2025-11-03&date_to=2025-11-03&user_id={worker.id}&client_type=tablet"
     assert [row.id for row in context(application, admin, selected)["events"]] == [r.id for r in rows[:0:-1]]
     next_link = next(a["href"] for a in Anchors(admin.get(selected).text).links if a.get("rel") == "next")
-    assert parse_qs(urlsplit(next_link).query) == parse_qs(urlsplit(selected + "&page=2").query)
+    assert parse_qs(urlsplit(next_link).query) == parse_qs(urlsplit(selected + f"&page=2&through_id={rows[-1].id}").query)
     assert urlsplit(next_link).fragment == "login-results"
     assert [row.id for row in context(application, admin, next_link)["events"]] == [rows[0].id]
     excess = admin.get(selected + "&page=300")
     assert excess.status_code == 302 and parse_qs(urlsplit(excess.location).query) == parse_qs(urlsplit(next_link).query)
-    for invalid in ("page=-1", "user_id=abc", "user_id=2147483647", "client_type=watch",
+    for invalid in ("page=-1", "user_id=abc", "user_id=2147483647", "client_type=watch", "through_id=-1",
                     "date_from=2024-01-01&date_to=2026-01-01", "date_from=2026-11-04&date_to=2026-11-01"):
         assert admin.get(PATH + "?" + invalid).status_code == 400
+
+
+def test_new_login_during_paging_does_not_repeat_previous_page(application, seeded):
+    staff = seeded["inspector"]
+    when = datetime(2026, 11, 2, 4)
+    existing = [event(staff, when) for _ in range(51)]
+    db.session.add_all(existing)
+    db.session.commit()
+    admin = open_as(application, seeded["manager"])
+    path = f"{PATH}?user_id={staff.id}&client_type=mobile"
+    next_link = next(a["href"] for a in Anchors(admin.get(path).text).links if a.get("rel") == "next")
+    # A new login in the same second while the administrator reads page one.
+    newest = event(staff, when)
+    db.session.add(newest)
+    db.session.commit()
+    second = context(application, admin, next_link)
+    assert [r.id for r in second["events"]] == [existing[0].id]
+    assert second["pagination"]["total"] == 51
+    previous = next(a["href"] for a in Anchors(admin.get(next_link).text).links if a.get("rel") == "prev")
+    assert [r.id for r in context(application, admin, previous)["events"]] == [r.id for r in existing[:0:-1]]
+    assert context(application, admin, path)["events"][0].id == newest.id

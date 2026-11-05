@@ -47,7 +47,7 @@ def test_replacement_request_is_distinct_from_first_binding_and_preserves_workin
     assert pending.status == "pending"
     assert 'id="inspection-form"' in phone.get(qr).text
     assert 'id="inspection-form"' not in desktop.get(qr).text
-    cancelled = desktop.post(f"/devices/{pending.id}/revoke", data={"next": qr}, follow_redirects=True)
+    cancelled = desktop.post(f"/devices/{pending.id}/revoke", data={"next": qr, "reviewed_status": "pending"}, follow_redirects=True)
     assert "已撤回「New Browser」的綁定申請" in cancelled.text
     assert original.status == "approved" and pending.status == "revoked"
     assert 'id="inspection-form"' in phone.get(qr).text

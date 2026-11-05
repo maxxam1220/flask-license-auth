@@ -42,12 +42,24 @@ def login_records_page(today, parse_date, parse_id):
         query = query.where(LoginEvent.client_type == client_type)
         filters["client_type"] = client_type
 
-    total = db.session.scalar(query.with_only_columns(db.func.count(LoginEvent.id)))
+    # Keep later sign-ins from shifting the offset between two pager clicks.
+    # The filter form starts a fresh query (no through_id).
+    through = request.args.get("through_id")
+    if through is not None:
+        through = parse_id(through)
+        query = query.where(LoginEvent.id <= through)
+    total, newest_id = db.session.execute(query.with_only_columns(
+        db.func.count(LoginEvent.id), db.func.max(LoginEvent.id))).one()
+    if newest_id is not None:
+        filters["through_id"] = newest_id
+    elif through is not None:
+        filters["through_id"] = through
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     if page > pages:
         return redirect(url_for("login_records", page=pages, _anchor="login-results", **filters))
-    events = db.session.scalars(query.order_by(LoginEvent.created_at.desc(), LoginEvent.id.desc())
-                                .limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)).all()
+    events = (db.session.scalars(query.where(LoginEvent.id <= newest_id)
+                                .order_by(LoginEvent.created_at.desc(), LoginEvent.id.desc())
+                                .limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE)).all() if total else [])
     return render_template("login_records.html", events=events, users=users, filters=filters,
                            selected_user=selected, client_labels=CLIENT_LABELS,
                            pagination=dict(total=total, page=page, pages=pages, per_page=PAGE_SIZE))

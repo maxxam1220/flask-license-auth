@@ -72,6 +72,17 @@ def test_weekly_not_duplicated_when_adjacent_date_ranges_are_combined():
     assert [row["period_key"] for row in full] == ["2026-11-09", "2026-11-02"]
 
 
+def test_filtered_due_dates_match_full_results_across_partial_week_leap_day_and_plan_change():
+    start = date(2024, 2, 3)
+    item = point("monthly", schedule_start=start, created_at=datetime(2024, 2, 3),
+                 schedules=[schedule("2024-02-03", "monthly"), schedule("2024-03-06", "weekly", id=2)])
+    options = dict(begin="2024-02-05", end="2024-03-17", now=local("2024-03-18", 0))
+    rows = missed([item], **options)
+    assert [r["due_date"] for r in rows] == [date(2024, 3, 17), date(2024, 3, 10), date(2024, 2, 29)]
+    for frequency in ("weekly", "monthly", "irregular"):
+        assert missed([item], **options, frequency=frequency) == [r for r in rows if r["frequency"] == frequency]
+
+
 def test_any_employee_completion_satisfies_key_even_after_relocation():
     moved = point("daily2", floor=2, category="general", schedules=[schedule("2026-01-01", "daily2", floor=2, category="general")])
     completed = SimpleNamespace(point_id=1, frequency="daily2", period_key="2026-11-03", slot="am",

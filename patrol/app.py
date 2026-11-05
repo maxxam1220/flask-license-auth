@@ -704,11 +704,14 @@ def create_app(config=None):
             else:
                 g.user.set_password(password)
                 g.user.auth_version += 1
+                # Keep the version we wrote while holding the account lock.
+                # A later admin reset must invalidate even this pending response.
+                changed_version = g.user.auth_version
                 g.user.must_change_password = False
                 audit("change_password", g.user.id)
                 db.session.commit()
                 session.pop("after_password", None)
-                session["auth_version"] = g.user.auth_version
+                session["auth_version"] = changed_version
                 session["sid"] = signed_session_nonce()
                 session["csrf_token"] = secrets.token_urlsafe(32)
                 flash("密碼已更新。", "success")
@@ -764,7 +767,7 @@ def create_app(config=None):
         floor_filter, category_filter = scope_filters()
         executor = g.user.role == "executor"
         team_view = can_view_general_team(g.user)
-        issue_counts = {} if executor else open_issue_counts(category=scope)
+        issue_counts = {} if executor else open_issue_counts(category=category_filter or scope)
         frequencies = VIEW_FREQUENCIES[view]
         # Attribute a completed team slot exactly once to the first inspection's
         # snapshot, even if later inspectors used a renamed or relocated point.
@@ -905,21 +908,22 @@ def create_app(config=None):
                 executions = executions.where(PatrolExecution.point_floor == int(floor_filter))
             recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
         current_binding, approved_elsewhere = binding_overview()
+        # A boundary week can begin or end outside the date picker's range.
+        first_date, last_date = date(2000, 1, 1), date(2100, 12, 31)
+        report_filters = dict(date_from=max(first_date, period_day).isoformat(),
+                              date_to=min(last_date, period_end).isoformat(), category=category_filter,
+                              floor=floor_filter, frequency="daily_all" if view == "daily" else view)
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
-                               previous_period=max(previous_period, date(2000, 1, 1)) if period_day > date(2000, 1, 1) else None,
-                               following_period=following_period if following_period <= date(2100, 12, 31) else None,
+                               previous_period=max(previous_period, first_date) if period_day > first_date else None,
+                               following_period=following_period if following_period <= last_date else None,
                                current_period=period_day <= today <= period_end,
                                missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, device_state=current_binding.status if current_binding else "none",
                                approved_elsewhere=approved_elsewhere, irregular_points=irregular_points, spot_points=irregular_points,
                                recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
-                               missed_query_url=url_for("missed", date_from=period_day.isoformat(),
-                                   date_to=period_end.isoformat(), category=category_filter, floor=floor_filter,
-                                   frequency="daily_all" if view == "daily" else view),
-                               records_query_url=url_for("records", date_from=period_day.isoformat(),
-                                   date_to=period_end.isoformat(), category=category_filter, floor=floor_filter,
-                                   frequency="daily_all" if view == "daily" else view), week_label=period_label, period_title=period_label)
+                               missed_query_url=url_for("missed", **report_filters),
+                               records_query_url=url_for("records", **report_filters), week_label=period_label, period_title=period_label)
 
     def get_point(token, lock=False):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", token):
@@ -1034,16 +1038,28 @@ def create_app(config=None):
                                point_open_issue_count=(open_issue_counts([point.id], category=patrol_scope(g.user)).get(point.id, 0)
                                                        if g.user.role != "executor" else 0), form_error=error), status
 
+    def changed_checkin_settings(point, *, require_location=False):
+        if request.form.get("frequency") != point.frequency:
+            return "點位巡檢頻率已更新，或此表單已過期。請確認最新設定後重新送出；照片需重新選擇。"
+        revision = request.form.get("point_revision")
+        if require_location and not revision:
+            return "草稿的點位資料已過期。請核對現場位置，再確認打卡。"
+        if revision is not None and revision != checkin_location_revision(point):
+            return "點位名稱、樓層、編號或分類已更新。請重新核對現場位置，再確認打卡。"
+        return None
+
     @app.route("/c/<token>", methods=["GET", "POST"])
     @login_required
     def checkin(token):
         # POST carries unsaved notes back to the same point when checking whether
         # the executor has signed. Only /confirm can create attendance records.
         point = get_point(token)
-        if request.method == "POST" and (request.form.get("draft_point") != str(point.id) or
-                                         point.workflow_mode != "two_stage" or g.user.role != "inspector"
-                                         or device_status() != "approved"):
-            return redirect(url_for("checkin", token=token))
+        if request.method == "POST":
+            if (request.form.get("draft_point") != str(point.id) or point.workflow_mode != "two_stage"
+                    or g.user.role != "inspector" or device_status() != "approved"):
+                return redirect(url_for("checkin", token=token))
+            if error := changed_checkin_settings(point, require_location=True):
+                return checkin_form(point, token, error, 409)
         return checkin_form(point, token)
 
     def existing_checkin_response(record, token, note, abnormal, uploads):
@@ -1094,11 +1110,8 @@ def create_app(config=None):
         confirmed_day = request.form.get("personal_day")
         if request.form.get("workflow_mode", "standard") != mode:
             return form_error("打卡方式已變更，請依目前顯示的流程重新確認。", 409)
-        if request.form.get("frequency") != point.frequency:
-            return form_error("點位巡檢頻率已更新，或此表單已過期。請確認最新設定後重新送出；照片需重新選擇。", 409)
-        confirmed_location = request.form.get("point_revision")
-        if confirmed_location is not None and confirmed_location != checkin_location_revision(point):
-            return form_error("點位名稱、樓層、編號或分類已更新。請重新核對現場位置，再確認打卡。", 409)
+        if error := changed_checkin_settings(point):
+            return form_error(error, 409)
         if (((point.frequency == "daily2" or mode != "standard") and (not submitted_slot or not submitted_period))
                 or (submitted_slot is not None and submitted_slot != slot)
                 or (submitted_period is not None and submitted_period != key)):
@@ -1408,6 +1421,12 @@ def create_app(config=None):
         if binding.status not in ("approved", "pending"):
             flash("這筆綁定已經處理，請查看目前狀態。", "info")
             return redirect(destination)
+        # Withdrawing a pending request is not consent to disconnect a phone
+        # that an administrator has since approved. Include pre-update tabs.
+        if request.form.getlist("reviewed_status") != [binding.status]:
+            db.session.rollback()
+            return render_template("error.html", code=409, message="綁定狀態已更新，尚未撤回或解除。請先查看最新綁定狀態。",
+                                   recovery_url=destination, recovery_label="查看最新綁定"), 409
         was_pending = binding.status == "pending"
         binding.status = "revoked"
         audit("device_self_revoked", binding.id)
@@ -1695,6 +1714,10 @@ def create_app(config=None):
         if frequency not in ("", "daily", "daily2", "weekly", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         # Read historical schedules, not the point's current classification.
+        filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
+                   "floor": floor, "frequency": frequency}
+        if begin > today or frequency == "irregular":
+            return [], filters
         scope = patrol_scope(g.user)
         points = historical_points(scope)
         first_period = min(begin.replace(day=1), begin - timedelta(days=begin.weekday()))
@@ -1713,8 +1736,6 @@ def create_app(config=None):
         rows = calculate_missed(points, completions, begin, end, instant,
                                 category=category, floor=int(floor) if floor else None, frequency=frequency,
                                 executions=executions, two_stage_only=g.user.role == "executor")
-        filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
-                   "floor": floor, "frequency": frequency}
         return rows, filters
 
     @app.get("/missed")
@@ -2077,6 +2098,8 @@ def create_app(config=None):
         user = lock_admin_users(user_id)[user_id]
         if not user:
             abort(404)
+        if user.id == g.user.id:
+            abort(403, description="變更自己的密碼請使用「變更密碼」，並輸入目前密碼。")
         if conflict := check_management_state(user, url_for("users")):
             return conflict
         password = request.form.get("password", "")

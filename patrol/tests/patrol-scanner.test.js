@@ -239,6 +239,29 @@ test('does not start a camera during an in-flight form submission', async () => 
   assert.deepEqual(s.destinations, []);
 });
 
+test('rescanning while waiting for the next execution preserves the carried check-in draft', async () => {
+  for (const [name, value] of [['note', '上一時段的現場備註'], ['is_abnormal', 'on']]) {
+    let scanned = '/c/point';
+    const form = post({ type: 'hidden', name: 'draft_point', value: '12' },
+                      { type: 'hidden', name, value });
+    form.id = 'handoff-recheck';
+    const s = simulate({ forms: [form], pathname: '/c/point/confirm', detect: () => [qr(scanned)] });
+    s.click(s.start);
+    await nextTurn();
+    assert.deepEqual(s.destinations, []);
+    assert.equal(s.keep.focused, true);
+    assert.equal(s.discard.hidden, true);
+    s.click(s.keep);
+    scanned = '/c/next';
+    s.click(s.start);
+    await nextTurn();
+    assert.deepEqual(s.destinations, []);
+    assert.equal(s.discard.hidden, false);
+    s.click(s.discard);
+    assert.deepEqual(s.destinations, ['/c/next']);
+  }
+});
+
 test('rejects untrusted, malformed, non-QR and ambiguous readings and keeps scanning', async () => {
   const invalid = ['https://elsewhere.test/c/t', '//patrol.example.test/c/t', 'http://patrol.example.test/c/t',
     origin + ':8443/c/t', 'https://x@patrol.example.test/c/t', 'https://%70atrol.example.test/c/t', origin + '/a/../c/t', '/c/%61',

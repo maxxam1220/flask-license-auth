@@ -4,6 +4,8 @@ from html import unescape
 from io import BytesIO
 import re
 
+import pytest
+
 import app as patrol
 from models import DeviceBinding, Inspection, PatrolExecution, db
 from test_app import FIXED_NOW, application
@@ -68,6 +70,60 @@ def test_recheck_revalidates_login_csrf_and_binding(application, monkeypatch):
     signed_out = application.test_client().post(qr, data=fields)
     assert signed_out.location.startswith("/login?next=")
     assert "local" not in signed_out.location and not db.session.query(Inspection).count()
+
+
+def test_scan_before_execution_can_start_and_follow_device_approval(application):
+    executor, inspector, _, admin, qr, _, _ = team(application)
+    with inspector.session_transaction() as session:
+        user_id = session["user_id"]
+    binding = db.session.scalar(db.select(DeviceBinding).where(DeviceBinding.user_id == user_id))
+    binding.status = "revoked"
+    db.session.commit()
+    for wanted in ("請先完成瀏覽器綁定", "請等候系統管理員核准"):
+        page = inspector.get(qr)
+        assert wanted in page.text and "重新確認簽到狀態" not in page.text
+        assert 'id="inspection-form"' not in page.text
+        link = re.search(r'href="(/devices\?next=[^"]+)"', page.text)
+        assert link and f'name="next" value="{qr}"' in inspector.get(unescape(link[1])).text
+        if binding.status == "revoked":
+            pending = inspector.post("/devices/request", data={"label": "fixture", "next": qr})
+            assert pending.status_code == 302
+            binding = db.session.scalar(db.select(DeviceBinding).where(DeviceBinding.user_id == user_id,
+                                                                        DeviceBinding.status == "pending"))
+    assert inspector.post(qr + "/confirm", data={}).status_code == 403
+    assert admin.post(f"/admin/devices/{binding.id}/approve").status_code == 302
+    assert "重新確認簽到狀態" in inspector.get(qr).text
+    assert executor.post(qr + "/confirm", data=payload(executor, qr)).status_code == 302
+    assert inspector.post(qr + "/confirm", data=payload(inspector, qr)).status_code == 302
+
+
+@pytest.mark.parametrize(("changes", "warning"), [
+    ({"code": "2F-G42", "floor": "2", "name": "二樓倉庫"}, "點位名稱、樓層、編號或分類已更新"),
+    ({"frequency": "weekly"}, "點位巡檢頻率已更新"),
+])
+def test_recheck_warns_before_carrying_draft_to_changed_point(application, monkeypatch, changes, warning):
+    now = FIXED_NOW - timedelta(minutes=1)
+    monkeypatch.setattr(patrol, "now_utc", lambda: now)
+    executor, inspector, _, admin, qr, _, _ = team(application)
+    assert executor.post(qr + "/confirm", data=payload(executor, qr)).status_code == 302
+    fields = payload(inspector, qr)
+    now += timedelta(minutes=1)
+    stale = inspector.post(qr + "/confirm", data=fields | {"note": "上午一樓門鎖異常", "is_abnormal": "on"})
+    carried = form_fields(stale.text, "handoff-recheck")
+    point = db.session.scalar(db.select(patrol.Point).where(patrol.Point.qr_token == qr[3:]))
+    settings = dict(code=point.code, floor=str(point.floor), name=point.name, category="general",
+                    frequency=point.frequency, workflow_mode="two_stage", active="on") | changes
+    assert admin.post(f"/admin/points/{point.id}/update", data=settings).status_code == 302
+    assert executor.post(qr + "/confirm", data=payload(executor, qr)).status_code == 302
+    review = inspector.post(qr, data=carried)
+    assert review.status_code == 409 and warning in review.text
+    assert "上午一樓門鎖異常" in review.text and settings["name"] in review.text
+    assert db.session.query(Inspection).count() == 0
+    current = form_fields(review.text, "inspection-form")
+    assert inspector.post(qr + "/confirm", data=current | {"note": "已重新核對現場"}).status_code == 302
+    record = db.session.scalars(db.select(Inspection)).one()
+    assert record.point_floor == int(settings["floor"]) and record.frequency == settings["frequency"]
+    assert record.note == "已重新核對現場"
 
 
 def test_rescanned_receipt_separates_patrol_actions_from_record_search(application):

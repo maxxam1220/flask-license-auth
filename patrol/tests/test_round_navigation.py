@@ -32,7 +32,7 @@ def test_another_login_does_not_evict_the_browsers_working_or_pending_binding(ap
     assert original.label in shared.get("/devices").text
     if first_state == "approved":
         assert 'id="inspection-form"' in shared.get(path).text
-    shared.post(f"/devices/{original.id}/revoke")
+    shared.post(f"/devices/{original.id}/revoke", data={"reviewed_status": first_state})
     shared.post("/logout")
     login(shared, "colleague")
     assert 'action="/devices/request"' in shared.get("/devices").text

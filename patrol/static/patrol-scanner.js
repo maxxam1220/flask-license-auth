@@ -83,7 +83,11 @@
     if (status.textContent !== text) status.textContent = text;
   }
 
-  function edited(field) {
+  function edited(field, form) {
+    // A waiting two-stage check-in carries the previous report in hidden inputs.
+    if (form.id === 'handoff-recheck' && field.type === 'hidden' && !field.disabled) {
+      return (field.name === 'note' && Boolean(field.value)) || (field.name === 'is_abnormal' && field.value === 'on');
+    }
     if (!field.name || field.disabled || ['hidden', 'submit', 'button', 'reset', 'image'].includes(field.type)) return false;
     if (field.type === 'file') return field.files.length > 0;
     // Failed check-ins and issue actions can return populated fields as HTML defaults.
@@ -104,7 +108,7 @@
 
   function hasDraft() {
     return Array.from(document.forms).some(form => form.method.toLowerCase() === 'post' &&
-      Array.from(form.elements).some(edited));
+      Array.from(form.elements).some(field => edited(field, form)));
   }
 
   function clearDestination() {
