@@ -27,6 +27,8 @@ from sqlalchemy.orm import joinedload, selectinload
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from account_roles import ACCOUNT_CHOICES, ACCOUNT_ROLE_LABELS, account_role_choice, role_label
+
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
 from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execution_in_slot, execution_review_status,
                               new_execution, personal_inspection_in_slot)
@@ -77,6 +79,8 @@ def management_state(item):
                   item.workflow_mode, item.active, item.qr_token, item.deleted_at.isoformat() if item.deleted_at else None)
     else:
         values = (item.id, item.display_name, item.role, item.patrol_category, item.active, item.auth_version)
+        if item.general_manager_title:
+            values += ("general_manager",)
     return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
 
 
@@ -295,13 +299,8 @@ def create_app(config=None):
     @app.context_processor
     def common_context():
         user = g.get("user")
-        def role_label(account):
-            if account and account.role == "admin":
-                return "系統管理員"
-            if account and account.role == "executor" and patrol_scope(account):
-                return "總務執行人員"
-            return {"safety": "職安巡檢員", "general": "總務巡檢員"}.get(patrol_scope(account), "尚未指派")
         return {"current_user": user, "role_label": role_label, "is_patrol_admin": bool(user and user.role == "admin"),
+                "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
                 "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
                 "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
@@ -418,7 +417,7 @@ def create_app(config=None):
         @login_required
         def wrapped(*args, **kwargs):
             if g.user.role != "admin":
-                abort(403, description="此功能僅限管理員使用。")
+                abort(403, description="此功能僅限系統管理員使用。")
             return fn(*args, **kwargs)
         return wrapped
 
@@ -442,7 +441,7 @@ def create_app(config=None):
     def lock_current_admin():
         user = lock_current_user()
         if user.role != "admin":
-            abort(403, description="管理員權限已更新，請重新登入後再試。")
+            abort(403, description="系統管理員權限已更新，請重新登入後再試。")
         return user
 
     def lock_admin_users(*target_ids):
@@ -455,7 +454,7 @@ def create_app(config=None):
         if (not actor or not actor.active or actor.auth_version != session.get("auth_version")
                 or actor.must_change_password or actor.role != "admin"
                 or db.session.scalar(select(session_revoked()))):
-            abort(403, description="管理員權限或帳號狀態已更新，請重新登入後再試。")
+            abort(403, description="系統管理員權限或帳號狀態已更新，請重新登入後再試。")
         return locked
 
     def device_binding():
@@ -946,7 +945,7 @@ def create_app(config=None):
             period = "本週期" if point.frequency in ("weekly", "monthly") else "本時段"
             return "execute", first is None, f"{period}已登記執行，不需重複簽到。" if first else ""
         if g.user.role != "inspector" or patrol_scope(g.user) != "general":
-            return "inspect", False, "管理員僅可管理此點，兩段打卡須由對應角色完成。"
+            return "inspect", False, "系統管理員僅可管理此點，兩段打卡須由對應角色完成。"
         if not first:
             return "inspect", False, "尚未執行，請等總務執行人員先刷同一點位。"
         if first.user_id == g.user.id:
@@ -1039,7 +1038,7 @@ def create_app(config=None):
             # A concurrent completion won. Do not present its receipt as proof
             # that this form's separate observations or photos were saved.
             prefix = "你今天在這個點位的時段已有紀錄" if personal else "這個點位本期已有紀錄"
-            flash(prefix + "，本次填寫的回報內容未追加。若現場有新的異常，請聯絡管理員處理。", "warning")
+            flash(prefix + "，本次填寫的回報內容未追加。若現場有新的異常，請聯絡系統管理員處理。", "warning")
             return redirect(url_for("checkin", token=token))
         if g.user.role == "executor":
             flash("你今天已在此點登記。", "info")
@@ -1063,7 +1062,7 @@ def create_app(config=None):
         lock_current_user()
         binding = device_binding()
         if not binding or binding.status != "approved":
-            abort(403, description="此瀏覽器尚未核准，請先申請綁定並由管理員核准。")
+            abort(403, description="此瀏覽器尚未核准，請先申請綁定並由系統管理員核准。")
         point = get_point(token, lock=True)
         if point.workflow_mode in ("spot", "two_stage") and db.engine.dialect.name == "sqlite":
             # SQLite ignores FOR UPDATE; serialize stage and personal attendance checks.
@@ -1138,7 +1137,7 @@ def create_app(config=None):
                 db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
             used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
             if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
-                return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡管理員，或移除照片後重新確認送出。", 409)
+                return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡系統管理員，或移除照片後重新確認送出。", 409)
         final_instant = now_utc()
         if (period_for(point, final_instant)[0] != key or slot_for(point, final_instant) != slot or
                 (mode in ("spot", "two_stage") and local_dt(final_instant).date() != day)):
@@ -1283,7 +1282,7 @@ def create_app(config=None):
     @login_required
     def issues():
         if g.user.role == "executor":
-            abort(403, description="異常追蹤由巡檢員與管理員處理。")
+            abort(403, description="異常追蹤由巡檢員與系統管理員處理。")
         floor, category = scope_filters()
         state = request.args.get("status", "open")
         if state not in ("open", "resolved", "all"):
@@ -1373,7 +1372,7 @@ def create_app(config=None):
             abort(400, description="請填寫 1 至 100 字的裝置名稱。")
         pending = db.session.scalar(select(db.func.count(DeviceBinding.id)).where(DeviceBinding.user_id == g.user.id, DeviceBinding.status == "pending"))
         if pending >= 3:
-            abort(400, description="已有三筆待審核申請，請先聯絡管理員處理。")
+            abort(400, description="已有三筆待審核申請，請先聯絡系統管理員處理。")
         token = secrets.token_urlsafe(32)
         binding = DeviceBinding(user_id=g.user.id, token_hash=hash_device_token(token), label=label, status="pending")
         db.session.add(binding)
@@ -1381,7 +1380,7 @@ def create_app(config=None):
         db.session.commit()
         response = redirect(devices_url(destination))
         response.set_cookie(DEVICE_COOKIE, token, max_age=365 * 86400, httponly=True, secure=app.config["COOKIE_SECURE"], samesite="Lax", path="/")
-        flash("申請已送出，請管理員核准後再打卡。", "success")
+        flash("申請已送出，請系統管理員核准後再打卡。", "success")
         return response
 
     @app.post("/devices/<int:binding_id>/revoke")
@@ -1998,17 +1997,10 @@ def create_app(config=None):
         return render_template("users.html", users=db.session.scalars(select(User).order_by(User.id)).all())
 
     def submitted_role():
-        choice = request.form.get("role", "")
-        if choice == "admin":
-            return "admin", None
-        if choice == "general_executor":
-            return "executor", "general"
-        if choice in ("safety", "general"):
-            return "inspector", choice
-        abort(400, description="請指定管理員、職安巡檢員、總務執行人員或總務巡檢員。")
-
-    def choice_label(role, category):
-        return "general_executor" if role == "executor" else category or role
+        selections = request.form.getlist("role")
+        if len(selections) != 1 or selections[0] not in ACCOUNT_CHOICES:
+            abort(400, description="請從人員角色清單選擇一個角色。")
+        return ACCOUNT_CHOICES[selections[0]]
 
     @app.post("/admin/users/create")
     @admin_required
@@ -2017,13 +2009,14 @@ def create_app(config=None):
         username = request.form.get("username", "").strip().lower()
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
-        role, category = submitted_role()
+        choice = submitted_role()
         if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not 12 <= len(password) <= 256:
             abort(400, description="請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與至少 12 字元的密碼。")
-        user = User(username=username, display_name=name, role=role, patrol_category=category, must_change_password=True)
+        user = User(username=username, display_name=name, role=choice.role, patrol_category=choice.category,
+                    general_manager_title=choice.manager_title, must_change_password=True)
         user.set_password(password)
         db.session.add(user)
-        audit("user_created", username, choice_label(role, category))
+        audit("user_created", username, account_role_choice(user))
         try:
             db.session.commit()
         except IntegrityError:
@@ -2041,19 +2034,20 @@ def create_app(config=None):
         if conflict := check_management_state(user, url_for("users")):
             return conflict
         name = request.form.get("display_name", "").strip()
-        role, category = submitted_role()
+        choice = submitted_role()
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
         if not valid_label(name):
             abort(400)
-        if user.id == g.user.id and (role != "admin" or not active):
-            abort(400, description="不能停用自己或移除自己的管理員權限。")
-        previous = choice_label(user.role, user.patrol_category)
-        if user.role != role or user.patrol_category != category or user.active != active:
+        if user.id == g.user.id and (choice.role != "admin" or not active):
+            abort(400, description="不能停用自己或移除自己的系統管理員權限。")
+        previous = account_role_choice(user) or user.role
+        if user.role != choice.role or user.patrol_category != choice.category or user.active != active:
             user.auth_version += 1
-        user.display_name, user.role, user.patrol_category, user.active = name, role, category, active
+        user.display_name, user.role, user.patrol_category, user.active = name, choice.role, choice.category, active
+        user.general_manager_title = choice.manager_title
         if not active:
             db.session.execute(db.update(DeviceBinding).where(DeviceBinding.user_id == user.id, DeviceBinding.status.in_(["approved", "pending"])).values(status="revoked"))
-        audit("user_updated", user.username, f"{previous} -> {choice_label(role, category)}")
+        audit("user_updated", user.username, f"{previous} -> {account_role_choice(user)}")
         db.session.commit()
         flash("帳號設定已更新。", "success")
         return redirect(url_for("users", _anchor=f"user-{user.id}"))

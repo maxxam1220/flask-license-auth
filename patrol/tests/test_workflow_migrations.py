@@ -386,3 +386,47 @@ def test_v9_marks_only_new_executor_visits_and_retains_every_historical_row(engi
     for change in ({"frequency": "daily"}, {"note": "異常說明"}, {"is_abnormal": True}):
         with pytest.raises(IntegrityError), engine.begin() as conn:
             conn.execute(Inspection.__table__.insert().values(**(values | change), spot_request_id="bad-visit", executor_visit=True))
+
+
+@pytest.fixture
+def v9(engine, v8):
+    with engine.begin() as conn:
+        migrations._add_missing_columns(conn, Inspection.__tablename__, [Inspection.__table__.c.executor_visit])
+        conn.exec_driver_sql("INSERT INTO patrol_schema_versions(version) VALUES(9)")
+        conn.exec_driver_sql("UPDATE patrol_users SET patrol_category='general' WHERE id=19 AND role='inspector'")
+        metadata = MetaData()
+        metadata.reflect(conn)
+        assert "general_manager_title" not in metadata.tables["patrol_users"].c
+        return metadata
+
+
+def test_v10_preserves_v9_accounts_history_and_titles_on_rerun(engine, v9):
+    with engine.connect() as conn:
+        before = snapshot(conn, v9)
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.begin() as conn:
+        after = snapshot(conn, v9)
+        assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
+        assert before == after
+        assert set(conn.scalars(select(User.general_manager_title))) == {False}
+        # A previous worker may still create an account while the new one starts.
+        users = v9.tables["patrol_users"]
+        conn.execute(users.insert().values(id=20, username="older-client", display_name="Older client", role="inspector",
+                     patrol_category="general", password_hash="fixture-hash", active=True, must_change_password=False,
+                     auth_version=1, created_at=datetime(2026, 11, 5)))
+        conn.execute(User.__table__.update().where(User.id == 19).values(general_manager_title=True))
+    assert upgrade_schema(engine) == LATEST_VERSION
+    with engine.connect() as conn:
+        assert conn.execute(select(User.id, User.role, User.patrol_category, User.general_manager_title)
+                            .where(User.id.in_((19, 20))).order_by(User.id)).all() == [
+            (19, "inspector", "general", True), (20, "inspector", "general", False)]
+        assert conn.exec_driver_sql("SELECT COUNT(*) FROM patrol_schema_versions WHERE version=10").scalar_one() == 1
+
+
+def test_v10_refuses_existing_title_column_with_unsafe_default(engine, v9):
+    with engine.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE patrol_users ADD COLUMN general_manager_title BOOLEAN NOT NULL DEFAULT TRUE")
+    with pytest.raises(migrations.SchemaMigrationError, match="general_manager_title"):
+        upgrade_schema(engine)
+    with engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT MAX(version) FROM patrol_schema_versions").scalar_one() == 9

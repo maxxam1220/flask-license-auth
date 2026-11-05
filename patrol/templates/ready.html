@@ -35,6 +35,6 @@
 </form>
 {% include '_today_ready.html' %}
 {% else %}
-<section class="panel">{{ empty('等待指派巡檢分類', '請聯絡管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
+<section class="panel">{{ empty('等待指派巡檢分類', '請聯絡系統管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
 {% endif %}
 {% endblock %}

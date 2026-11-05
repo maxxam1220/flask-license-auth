@@ -526,6 +526,8 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 
 @media print{body,.app-content,.main-content{background:#fff;margin:0;padding:0;max-width:none;min-height:0}.sidebar,.mobile-header,.mobile-nav,.no-print,.page-footer,.demo-banner,.skip-link,.flash-stack,.confirm-dialog,.floor-scroll-hint{display:none!important}.qr-sheet{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6mm;max-width:none;margin:0}.qr-label{border:1px solid #7b8874;padding:4mm;border-radius:3mm;box-shadow:none;break-inside:avoid;page-break-inside:avoid}.qr-label h2{font-size:25pt;color:#000}.qr-label>p{font-size:14pt;color:#000}.qr-label img{width:48mm;height:48mm;margin:5mm auto}.qr-label-header{font-size:9pt}.qr-label-bottom{font-size:8pt}.qr-instruction{font-size:10pt;color:#000}.qr-floor{font-size:11pt}@page{size:A4;margin:12mm}}
 .mobile-account small { display: block; margin-top: 3px; font-weight: 400; }
+.mobile-menu .mobile-account { color: var(--ink); font-weight: 650; font-size: 1rem; line-height: 1.4; }
+.mobile-account small { color: var(--muted); font-size: .875rem; }
 .archive-guide, .assignment-note { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0 16px; color: #495f52; font-size: 13px; line-height: 1.65; }
 .archive-guide .icon, .assignment-note .icon { width: 17px; height: 17px; margin-top: 3px; }
 .archive-row, .archive-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -792,6 +794,11 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .sidebar-bottom { padding-top: 12px; }
   .account { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px 10px; padding-top: 12px; }
   .account-name { line-height: 1.35; }
+  .account-display-name {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .account-name small { color: #bed4ca; }
   .account-actions { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 6px; }
   .account-actions .icon-button { width: 100%; min-height: 40px; padding: 5px 2px; gap: 4px; font: inherit; font-size: .875rem; color: #e0eded; background: #21424d; }
   .account-actions .icon-button:is(:hover, :focus-visible, [aria-current=page]) { background: #325865; color: white; }

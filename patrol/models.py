@@ -50,6 +50,8 @@ class User(db.Model):
     # NULL means unassigned; no patrol scope is inferred from names or roles.
     patrol_category = db.Column(db.String(20), db.CheckConstraint(
         "patrol_category IN ('safety', 'general')", name="patrol_user_category_allowed"), nullable=True)
+    # Display title for a general inspector. Access checks use role and patrol_category.
+    general_manager_title = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     active = db.Column(db.Boolean, nullable=False, default=True)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     auth_version = db.Column(db.Integer, nullable=False, default=1)

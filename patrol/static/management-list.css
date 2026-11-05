@@ -4,6 +4,14 @@
   outline-offset: 2px;
   scroll-margin-block-start: 1rem;
 }
+.user-management .compact-disclosure {
+  margin-top: .8rem;
+  padding-top: .25rem;
+}
+.user-management .compact-disclosure > summary { min-height: 44px; }
+.user-management .management-meta .badge { white-space: nowrap; }
 @media (max-width: 720px) {
   .management-list > article:target { scroll-margin-block-start: 5rem; }
+  .user-management .management-identity .muted,
+  .user-management .management-meta .badge { font-size: .875rem; }
 }

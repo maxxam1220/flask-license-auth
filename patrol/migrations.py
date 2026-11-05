@@ -17,7 +17,7 @@ from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Pa
                     RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 9
+LATEST_VERSION = 10
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -115,6 +115,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v7_to_v8(connection)
         if current < 9:
             _add_missing_columns(connection, Inspection.__tablename__, [Inspection.__table__.c.executor_visit])
+        if current < 10:
+            _add_missing_columns(connection, User.__tablename__, [User.__table__.c.general_manager_title])
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -423,6 +425,7 @@ def _validate_current(connection):
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     for table_name, required in {
+        User.__tablename__: ("general_manager_title",),
         "patrol_points": ("category", "workflow_mode"),
         "patrol_point_schedules": ("category", "workflow_mode", "legacy_unscheduled"),
         "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled",
@@ -437,10 +440,11 @@ def _validate_current(connection):
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
             raise SchemaMigrationError(f"Required non-null columns are missing in {table_name}.")
-        if table_name == Inspection.__tablename__:
-            visit = columns["executor_visit"]
-            if not isinstance(visit["type"], db.Boolean) or _compact(str(visit["default"])) not in ("false", "0"):
-                raise SchemaMigrationError("Executor visit history requires a boolean column with a false default.")
+        for name in ("general_manager_title", "executor_visit"):
+            if name in required:
+                column = columns[name]
+                if not isinstance(column["type"], db.Boolean) or _compact(str(column["default"])) not in ("false", "0"):
+                    raise SchemaMigrationError(f"Expected a boolean {table_name}.{name} with a false default.")
     revoked_columns = {column["name"]: column["type"] for column in inspector.get_columns(revoked)}
     if (inspector.get_pk_constraint(revoked)["constrained_columns"] != ["token_hash"]
             or getattr(revoked_columns["token_hash"], "length", None) != 64

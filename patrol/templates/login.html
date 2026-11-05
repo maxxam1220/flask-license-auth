@@ -32,7 +32,7 @@
     <section class="login-panel" aria-labelledby="signin-heading">
       <div class="login-card">
         <h1 id="signin-heading">登入巡檢系統</h1>
-        <p class="signin-instruction">請輸入管理員提供的帳號與密碼。</p>
+        <p class="signin-instruction">請使用系統管理員提供的帳密。</p>
         {% include '_flashes.html' %}
         <form method="post" action="{{ url_for('login') }}" class="form-stack">
           {{ csrf() }}
@@ -46,7 +46,7 @@
           <button class="button button-primary button-full" type="submit">登入 {{ icon('arrow') }}</button>
         </form>
         <div class="login-help">{{ icon('phone') }}<p><strong>首次使用手機</strong>登入後申請瀏覽器綁定，核准即可打卡。</p></div>
-        <p class="login-footnote">忘記密碼或需要新帳號？請聯繫管理員。</p>
+        <p class="login-footnote">帳密問題請聯繫系統管理員。</p>
       </div>
     </section>
   </div>

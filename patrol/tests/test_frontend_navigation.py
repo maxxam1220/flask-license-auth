@@ -123,7 +123,7 @@ def test_admin_role_selects_require_explicit_assignment_and_keep_self_locked(app
     source = response.get_data(as_text=True)
     selects = re.findall(r'<select name="role"([^>]*)>(.*?)</select>', source, re.S)
     assert selects and all('required' in attrs for attrs, _ in selects)
-    assert all(set(re.findall(r'<option value="([^"]+)"', options)) == {'safety', 'general', 'general_executor', 'admin'} for _, options in selects)
+    assert all(set(re.findall(r'<option value="([^"]+)"', options)) == {'safety', 'general', 'general_manager', 'general_executor', 'admin'} for _, options in selects)
     assert 'value="" selected disabled>請選擇角色' in source
     assert 'value="" selected disabled>尚未指派，請選擇角色' in source
     assert any('disabled' in attrs and 'value="admin" selected' in options for attrs, options in selects)

@@ -36,7 +36,7 @@
   <div class="sidebar-bottom">
     <div class="account">
       <span class="avatar" aria-hidden="true">{{ current_user.display_name[:1] }}</span>
-      <span class="account-name">{{ current_user.display_name }}<small>{{ role_label(current_user) }}</small></span>
+      <span class="account-name"><span class="account-display-name" title="{{ current_user.display_name }}">{{ current_user.display_name }}</span><small>{{ role_label(current_user) }}</small></span>
       <div class="account-actions"><a class="icon-button" href="{{ url_for('change_password') }}" aria-current="{{ 'page' if request.endpoint == 'change_password' else 'false' }}">{{ icon('key') }}變更密碼</a><form action="{{ url_for('logout') }}" method="post">{{ csrf() }}<button class="icon-button" type="submit">{{ icon('logout') }}登出</button></form></div>
     </div>
   </div>

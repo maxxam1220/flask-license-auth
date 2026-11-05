@@ -14,7 +14,7 @@
     {% if current_issue_state %}<a href="#issue-treatment-title">{{ issue_status(record) }}{{ icon('down') }}<span class="sr-only">前往本筆異常處理</span></a>{% else %}{{ issue_status(record) }}{% endif %}
   </div>
 </div>
-{% if can_view_general_team and record.user_id != current_user.id %}<p class="team-readonly-note">{{ icon('info') }}<span>正在查閱總務同事的回報。{% if current_issue_state %}異常由回報人或管理員處理。{% endif %}</span></p>{% endif %}
+{% if can_view_general_team and record.user_id != current_user.id %}<p class="team-readonly-note">{{ icon('info') }}<span>正在查閱總務同事的回報。{% if current_issue_state %}異常由回報人或系統管理員處理。{% endif %}</span></p>{% endif %}
 <section class="panel" aria-label="巡檢資料">
   <div class="record-facts">
     <div><span>巡檢人員</span><strong>{{ reporter_name(record) }}</strong></div>
@@ -69,8 +69,8 @@
           <div class="form-actions"><button class="button button-danger" data-loading-text="正在重新開啟…">{{ icon('alert') }}儲存原因並重新開啟</button></div>
         </form>
       </details>
-    {% else %}<p class="issue-staff-note">此筆異常已結案。如需重新開啟，請聯絡管理員。</p>{% endif %}
-  {% elif current_issue_state == 'open' %}<p class="issue-staff-note">此異常尚未結案，由回報人或管理員填寫處理說明並結案。</p>{% endif %}
+    {% else %}<p class="issue-staff-note">此筆異常已結案。如需重新開啟，請聯絡系統管理員。</p>{% endif %}
+  {% elif current_issue_state == 'open' %}<p class="issue-staff-note">此異常尚未結案，由回報人或系統管理員填寫處理說明並結案。</p>{% endif %}
 </section>
 {% endif %}
 {% if current_issue_state %}
