@@ -111,6 +111,20 @@
       Array.from(form.elements).some(field => edited(field, form)));
   }
 
+  async function navigateToPoint(path) {
+    // The offline helper may route to the generic shell; never follow another origin.
+    try {
+      const route = window.PatrolOffline?.route;
+      const destination = typeof route === 'function' ? await route(path) : path;
+      const url = new URL(destination || path, location.origin);
+      if (url.origin !== location.origin) return;
+      location.assign(url.pathname + url.search + url.hash);
+    } catch {
+      // Normal confirmation remains available if the optional helper is unavailable.
+      location.assign(path);
+    }
+  }
+
   function clearDestination() {
     pendingPath = null;
     if (draftActions) draftActions.hidden = true;
@@ -218,7 +232,8 @@
               stopCamera();
               if (draftActions && keep && discard) {
                 // Validation errors render the same check-in at its POST URL.
-                const samePoint = location.pathname === path || location.pathname === path + '/confirm';
+                const samePoint = location.pathname === path || location.pathname === path + '/confirm' ||
+                  document.querySelector('[data-offline-checkin]')?.dataset.pointPath === path;
                 discard.hidden = samePoint;
                 draftActions.hidden = false;
                 if (samePoint) {
@@ -236,7 +251,7 @@
               return;
             }
             dismiss();
-            location.assign(path);
+            await navigateToPoint(path);
             return;
           }
           if (paths.size > 1) message('畫面中有多個巡檢點。請靠近要打卡的點位，一次只掃一張。', 'Scan one QR code at a time.');
@@ -262,11 +277,11 @@
   retry.addEventListener('click', begin);
   close.addEventListener('click', dismiss);
   keep?.addEventListener('click', dismiss);
-  discard?.addEventListener('click', () => {
+  discard?.addEventListener('click', async () => {
     if (!pendingPath || !dialog.open || document.hidden) return;
     const path = pendingPath;
     dismiss();
-    location.assign(path);
+    await navigateToPoint(path);
   });
   dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
   dialog.addEventListener('close', () => {

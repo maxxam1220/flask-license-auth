@@ -19,7 +19,8 @@
   <div class="record-facts">
     <div><span>點位編號</span><strong>{{ point_code(record) }}</strong></div>
     <div><span>巡檢人員</span><strong>{{ reporter_name(record) }}</strong></div>
-    <div><span>打卡時間</span><strong>{{ record.created_at|localtime }}</strong></div>
+    <div><span>{{ '手機記錄時間' if record.offline_submission else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
+    {% if record.offline_submission %}<div><span>離線補傳收件</span><strong>{{ record.offline_submission.received_at|localtime }}</strong></div>{% endif %}
     <div><span>樓層</span><strong>{{ record_floor(record) }}</strong></div>
     {% if is_patrol_admin %}<div><span>巡檢分類</span><strong>{{ category_label(record.category) }}</strong></div>{% endif %}
     {% if record.workflow_mode == 'spot' %}<div><span>作業方式</span><strong>單段巡檢</strong></div>{% endif %}
@@ -31,7 +32,7 @@
     {% endif %}
   </div>
 </section>
-{% if record.execution %}<section class="panel spaced"><div class="section-heading"><div><h2>兩階段作業紀錄</h2><p>{{ '這兩筆打卡屬於同一週。' if long_period and record.frequency == 'weekly' else '這兩筆打卡屬於同一個月。' if long_period else '這筆巡檢對應的執行簽到。' }}</p></div></div><ol class="stage-trail"><li><span>1</span><div><strong>執行簽到 · {{ record.execution.user_name }}</strong><small>{{ record.execution.created_at|localtime }}</small></div></li><li><span>2</span><div><strong>完成巡檢 · {{ reporter_name(record) }}</strong><small>{{ record.created_at|localtime }}</small></div></li></ol></section>{% endif %}
+{% if record.execution %}<section class="panel spaced"><div class="section-heading"><div><h2>兩階段作業紀錄</h2><p>{{ '這兩筆打卡屬於同一週。' if long_period and record.frequency == 'weekly' else '這兩筆打卡屬於同一個月。' if long_period else '這筆巡檢對應的執行簽到。' }}</p></div></div><ol class="stage-trail"><li><span>1</span><div><strong>執行簽到 · {{ record.execution.user_name }}</strong><small>{{ record.execution.created_at|localtime }}{% if record.execution.offline_submission %}（手機記錄）<br>補傳收件 {{ record.execution.offline_submission.received_at|localtime }}{% endif %}</small></div></li><li><span>2</span><div><strong>完成巡檢 · {{ reporter_name(record) }}</strong><small>{{ record.created_at|localtime }}{% if record.offline_submission %}（手機記錄）<br>補傳收件 {{ record.offline_submission.received_at|localtime }}{% endif %}</small></div></li></ol></section>{% endif %}
 <section class="panel spaced field-report" aria-labelledby="field-report-title">
   <div class="section-heading"><h2 id="field-report-title">現場回報</h2></div>
   {% if record.note or record.photos %}

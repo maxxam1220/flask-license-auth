@@ -13,11 +13,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, case, exists, inspect, literal, select, text
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
-from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, LoginEvent, PatrolExecution, Point, PointSchedule,
+from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
                     RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 11
+LATEST_VERSION = 12
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -119,6 +119,8 @@ def _upgrade_locked(connection) -> int:
             _add_missing_columns(connection, User.__tablename__, [User.__table__.c.general_manager_title])
         if current < 11:
             LoginEvent.__table__.create(connection, checkfirst=True)
+        if current < 12:
+            OfflineSubmission.__table__.create(connection, checkfirst=True)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -424,10 +426,11 @@ def _validate_current(connection):
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
                                    "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked,
-                                   LoginEvent.__tablename__}
+                                   LoginEvent.__tablename__, OfflineSubmission.__tablename__}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     _validate_login_events(inspector)
+    _validate_offline_submissions(inspector)
     for table_name, required in {
         User.__tablename__: ("general_manager_title",),
         "patrol_points": ("category", "workflow_mode"),
@@ -535,3 +538,39 @@ def _validate_login_events(inspector):
         if (not index or index["unique"] or index["column_names"] != list(expected.columns.keys())
                 or any(key.endswith("_where") for key in index.get("dialect_options", {}))):
             raise SchemaMigrationError(f"Missing or invalid login event index: {expected.name}.")
+
+
+def _validate_offline_submissions(inspector):
+    table = OfflineSubmission.__table__
+    actual = {column["name"]: column for column in inspector.get_columns(table.name)}
+    for expected in table.columns:
+        column = actual.get(expected.name)
+        if (not column or bool(column["nullable"]) != bool(expected.nullable)
+                or not isinstance(column["type"], type(expected.type))
+                or getattr(column["type"], "length", None) != getattr(expected.type, "length", None)):
+            raise SchemaMigrationError(f"Invalid offline submission column: {expected.name}.")
+    if inspector.get_pk_constraint(table.name)["constrained_columns"] != ["id"]:
+        raise SchemaMigrationError("Offline submission primary key is invalid.")
+    foreign_keys = inspector.get_foreign_keys(table.name)
+    for field, target in (("user_id", "patrol_users"), ("binding_id", "patrol_device_bindings"),
+                          ("inspection_id", "patrol_inspections"), ("execution_id", "patrol_executions")):
+        if not any(fk["constrained_columns"] == [field] and fk["referred_table"] == target
+                   and fk["referred_columns"] == ["id"] for fk in foreign_keys):
+            raise SchemaMigrationError(f"Offline submission foreign key is missing: {field}.")
+    unique = {item["name"]: item["column_names"] for item in inspector.get_unique_constraints(table.name)}
+    checks = {item["name"]: item["sqltext"] for item in inspector.get_check_constraints(table.name)}
+    for constraint in table.constraints:
+        if isinstance(constraint, UniqueConstraint) and unique.get(constraint.name) != list(constraint.columns.keys()):
+            raise SchemaMigrationError(f"Offline submission uniqueness is invalid: {constraint.name}.")
+        if isinstance(constraint, CheckConstraint):
+            # PostgreSQL reflection may wrap boolean terms in parentheses and
+            # add a text cast. Ignore only those formatting differences.
+            normalize = lambda value: re.sub(r"::text|[()\s]", "", str(value).lower())
+            if normalize(checks.get(constraint.name, "")) != normalize(constraint.sqltext):
+                raise SchemaMigrationError(f"Offline submission check is invalid: {constraint.name}.")
+    indexes = {item["name"]: item for item in inspector.get_indexes(table.name)}
+    for expected in table.indexes:
+        index = indexes.get(expected.name)
+        if (not index or index["unique"] or index["column_names"] != list(expected.columns.keys())
+                or any(key.endswith("_where") for key in index.get("dialect_options", {}))):
+            raise SchemaMigrationError(f"Missing or invalid offline submission index: {expected.name}.")

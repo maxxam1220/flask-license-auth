@@ -138,6 +138,7 @@ class PatrolExecution(db.Model):
     point = db.relationship(Point)
     inspections = db.relationship("Inspection", back_populates="execution", order_by="Inspection.created_at, Inspection.id",
                                   foreign_keys="Inspection.execution_id", viewonly=True)
+    offline_submission = db.relationship("OfflineSubmission", back_populates="execution", uselist=False, lazy="selectin")
     __table_args__ = (
         db.CheckConstraint("category = 'general'", name="patrol_execution_general"),
         db.CheckConstraint(EXECUTION_SLOT_RULE, name="patrol_execution_valid_slot"),
@@ -179,6 +180,7 @@ class Inspection(db.Model):
     execution = db.relationship(PatrolExecution, back_populates="inspections", foreign_keys=[execution_id])
     photos = db.relationship("InspectionPhoto", back_populates="inspection", lazy="select", cascade="all, delete-orphan")
     issue = db.relationship("InspectionIssue", back_populates="inspection", uselist=False, lazy="select")
+    offline_submission = db.relationship("OfflineSubmission", back_populates="inspection", uselist=False, lazy="selectin")
     __table_args__ = (
         db.Index("patrol_one_standard_per_slot", "point_id", "frequency", "period_key", "slot", unique=True,
                  sqlite_where=db.text("workflow_mode = 'standard'"), postgresql_where=db.text("workflow_mode = 'standard'")),
@@ -205,6 +207,37 @@ class Inspection(db.Model):
                  sqlite_where=db.text("spot_request_id IS NOT NULL"), postgresql_where=db.text("spot_request_id IS NOT NULL")),
         db.Index("patrol_execution_reviews", "execution_id",
                  sqlite_where=db.text("execution_id IS NOT NULL"), postgresql_where=db.text("execution_id IS NOT NULL")),
+    )
+
+
+class OfflineSubmission(db.Model):
+    """One accepted offline visit, committed atomically with its original receipt.
+
+    Pending/rejected phone drafts never create rows here. The server receipt
+    timestamp is separate from the phone's claimed observation timestamp; old
+    online receipts retain their original schema and have no submission row.
+    """
+    __tablename__ = "patrol_offline_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("patrol_users.id"), nullable=False)
+    binding_id = db.Column(db.Integer, db.ForeignKey("patrol_device_bindings.id"), nullable=False)
+    client_id = db.Column(db.String(36), nullable=False)
+    payload_hash = db.Column(db.String(64), nullable=False)
+    observed_at = db.Column(db.DateTime, nullable=False)
+    received_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    inspection_id = db.Column(db.Integer, db.ForeignKey("patrol_inspections.id"))
+    execution_id = db.Column(db.Integer, db.ForeignKey("patrol_executions.id"))
+    inspection = db.relationship(Inspection, back_populates="offline_submission")
+    execution = db.relationship(PatrolExecution, back_populates="offline_submission")
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "client_id", name="patrol_offline_client_once"),
+        db.UniqueConstraint("inspection_id", name="patrol_offline_inspection_once"),
+        db.UniqueConstraint("execution_id", name="patrol_offline_execution_once"),
+        db.CheckConstraint("(inspection_id IS NOT NULL AND execution_id IS NULL) OR "
+                           "(inspection_id IS NULL AND execution_id IS NOT NULL)", name="patrol_offline_one_result"),
+        db.CheckConstraint("length(client_id) = 36", name="patrol_offline_client_length"),
+        db.CheckConstraint("length(payload_hash) = 64", name="patrol_offline_payload_hash_length"),
+        db.Index("patrol_offline_user_received", "user_id", "received_at", "id"),
     )
 
 

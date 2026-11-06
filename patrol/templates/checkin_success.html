@@ -28,8 +28,10 @@
     <div><span>{{ '簽到人員' if visit else '執行人員' if executed else '巡檢人員' }}</span><strong>{{ reporter_name(record) }}</strong></div>
     {% if long_period %}<div class="receipt-period"><span>{{ '週巡' if record.frequency == 'weekly' else '月巡' }}期間</span><strong><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></strong></div>{% endif %}
     {% if record.frequency == 'daily2' %}<div><span>巡檢次數</span><strong>{{ slot_label(record.slot) }}</strong></div>{% endif %}
-    <div><span>{{ '執行時間' if executed else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
+    <div><span>{{ '手機記錄時間' if record.offline_submission else '執行時間' if executed else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
+    {% if record.offline_submission %}<div><span>離線補傳收件</span><strong>{{ record.offline_submission.received_at|localtime }}</strong></div>{% endif %}
     {% if long_period and not executed and record.execution %}<div><span>執行簽到</span><strong>{{ record.execution.created_at|localtime }}</strong></div>{% endif %}
+    {% if not executed and record.execution and record.execution.offline_submission %}<div><span>執行離線補傳</span><strong>手機記錄 {{ record.execution.created_at|localtime }}<br>收件 {{ record.execution.offline_submission.received_at|localtime }}</strong></div>{% endif %}
     {% if executed %}<div><span>第二階段</span><strong class="badge receipt-stage-status {{ 'badge-done' if phase_status == 'done' else 'badge-missed' if phase_status == 'expired' else 'badge-neutral' if phase_status == 'unknown' else 'badge-review' }}">{{ '已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢（可跨日接續）' if long_period else '待巡檢' }}</strong></div>
     {% elif not visit %}<div><span>回報狀態</span>{{ issue_status(record) }}</div><div><span>現場照片</span><strong>{{ record.photos|length }} 張已儲存</strong></div>{% endif %}
   </div>

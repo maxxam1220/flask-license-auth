@@ -65,7 +65,7 @@
 {{ report_pager('紀錄分頁（上方）', 'records', page_filters, pagination, 'record-results') }}
 {% endif %}
 {% if results %}<div class="table-scroll"><table class="records-table"><thead><tr><th scope="col">{{ '執行時間' if executing else '打卡時間' }}</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">{{ '簽到人員' if visits else '執行人員' if executing else '人員' if can_filter_people else '巡檢人員' }}</th><th scope="col">頻率／次數</th><th scope="col">{{ '登記方式' if visits else '巡檢進度' if executing else '回報內容' }}</th><th scope="col">詳情</th></tr></thead><tbody>{% for record in results %}<tr>
-<td data-label="{{ '執行時間' if executing else '打卡時間' }}" class="tabular">{{ record.created_at|localtime }}</td>
+<td data-label="{{ '執行時間' if executing else '打卡時間' }}" class="tabular">{{ record.created_at|localtime }}{% if record.offline_submission %}<small class="cell-hint">離線補傳 · 手機記錄時間<br>收件 {{ record.offline_submission.received_at|localtime }}</small>{% endif %}</td>
 <td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ point_code(record) }}</span><strong>{{ point_name(record) }}</strong></div></td>
 <td data-label="{{ '分類／樓層' if is_patrol_admin else '樓層' }}"><div>{% if is_patrol_admin %}{{ category_label(record.category) }}<small class="cell-hint">{{ record_floor(record) }}</small>{% else %}{{ record_floor(record) }}{% endif %}</div></td>
 <td data-label="{{ '簽到人員' if visits else '執行人員' if executing else '人員' if can_filter_people else '巡檢人員' }}"><strong>{{ reporter_name(record) }}</strong></td>

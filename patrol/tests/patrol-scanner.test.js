@@ -34,7 +34,10 @@ function simulate(options = {}) {
     async play() {}, pause() {} });
   const hooks = { start, close, retry, status, video, keep, discard, 'draft-actions': draft,
     'status-zh': status, 'status-en': englishStatus };
-  const lookup = selector => hooks[selector.match(/^\[data-qr-([\w-]+)\]$/)[1]];
+  const lookup = selector => {
+    const match = selector.match(/^\[data-qr-([\w-]+)\]$/);
+    return match ? hooks[match[1]] || null : null;
+  };
   const dialog = element({ open: false, querySelector: lookup, showModal() { this.open = true; },
     close() { this.open = false; this.dispatchEvent(new Event('close')); } });
   hooks.dialog = dialog;
@@ -49,7 +52,8 @@ function simulate(options = {}) {
   const document = element({
     hidden: false, currentScript: { src: origin + '/static/patrol-scanner.js?v=1' },
     forms: options.forms || [],
-    querySelector: selector => selector === 'form[data-submitting="true"]' ? (options.submitting ? {} : null) : lookup(selector),
+    querySelector: selector => selector === 'form[data-submitting="true"]' ? (options.submitting ? {} : null) :
+      selector === '[data-offline-checkin]' ? options.offlineForm || null : lookup(selector),
     querySelectorAll: selector => { assert.equal(selector, '[data-qr-start]'); return starts; },
     head: { append(script) {
       requests.push(script.src);
@@ -70,6 +74,7 @@ function simulate(options = {}) {
     }
   });
   const window = element({
+    PatrolOffline: options.route ? { route: options.route } : undefined,
     document, URL, location: { origin, pathname: options.pathname || '/dashboard', assign(value) { destinations.push(value); } },
     navigator: { mediaDevices: options.unsupported ? undefined : {
       getUserMedia(configuration) {
@@ -145,6 +150,62 @@ const selectOne = (selectedIndex, explicitDefault = -1) => ({
   name: 'frequency', type: 'select-one', selectedIndex, size: 0, options: [0, 1].map(index => ({
     defaultSelected: index === explicitDefault, matches: () => false
   }))
+});
+
+test('offline confirmation keeps same-point notes and photos and asks before routing elsewhere', async () => {
+  let scanned = '/c/current';
+  const routed = [];
+  const offlineForm = post(field('note', '離線草稿'), { type: 'file', name: 'photos', files: [{}] });
+  offlineForm.dataset = { pointPath: '/c/current' };
+  const s = simulate({ pathname: '/offline', offlineForm, forms: [offlineForm], detect: () => [qr(scanned)],
+    route: async path => { routed.push(path); return '/offline?point=' + path.slice(3); } });
+  s.click(s.start);
+  await nextTurn();
+  assert.equal(s.draft.hidden, false);
+  assert.equal(s.discard.hidden, true);
+  assert.match(s.status.textContent, /同一個點位/);
+  s.click(s.discard);
+  await nextTurn();
+  assert.deepEqual(routed, []);
+  s.click(s.keep);
+  scanned = '/c/next';
+  s.click(s.start);
+  await nextTurn();
+  assert.equal(s.discard.hidden, false);
+  assert.deepEqual(routed, []);
+  s.click(s.discard);
+  s.click(s.discard);
+  await nextTurn();
+  assert.deepEqual(routed, ['/c/next']);
+  assert.deepEqual(s.destinations, ['/offline?point=next']);
+  assert.equal(offlineForm.elements[0].value, '離線草稿');
+  assert.equal(offlineForm.elements[1].files.length, 1);
+});
+
+test('offline routing waits for its destination after stopping the camera', async () => {
+  const routeResult = delayed();
+  const routed = [];
+  const s = simulate({ detect: () => [qr('/c/next')], route: path => { routed.push(path); return routeResult.promise; } });
+  s.click(s.start);
+  await nextTurn();
+  assert.equal(s.dialog.open, false);
+  assert.equal(s.track.stopped, true);
+  assert.deepEqual(routed, ['/c/next']);
+  assert.deepEqual(s.destinations, []);
+  routeResult.resolve('/offline?point=next');
+  await nextTurn();
+  assert.deepEqual(s.destinations, ['/offline?point=next']);
+});
+
+test('an unavailable offline helper preserves normal navigation and cannot redirect to another origin', async () => {
+  const failed = simulate({ detect: () => [qr('/c/next')], route: async () => { throw new Error('storage'); } });
+  failed.click(failed.start);
+  await nextTurn();
+  assert.deepEqual(failed.destinations, ['/c/next']);
+  const untrusted = simulate({ detect: () => [qr('/c/next')], route: async () => 'https://elsewhere.test/offline?point=next' });
+  untrusted.click(untrusted.start);
+  await nextTurn();
+  assert.deepEqual(untrusted.destinations, []);
 });
 
 for (const [kind, input] of [

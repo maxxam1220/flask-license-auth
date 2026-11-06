@@ -317,7 +317,7 @@ def create_app(config=None):
     def configure_scanner(sender, template, context, **extra):
         # Grant camera access only to rendered work pages that actually offer scanning.
         viewer = g.get("user")
-        can_scan = bool(viewer and not viewer.must_change_password
+        can_scan = template.name == "offline.html" or bool(viewer and not viewer.must_change_password
                         and (viewer.role == "admin" or patrol_scope(viewer))
                         and template.name in {
                             "dashboard.html", "ready.html", "checkin.html", "checkin_success.html", "records.html",
@@ -346,6 +346,11 @@ def create_app(config=None):
         # An expired protected submission has no authority to write. Recover its
         # safe GET confirmation page before checking the now-missing CSRF secret;
         # the sign-in form itself retains its normal CSRF protection.
+        if request.path.startswith("/api/offline/"):
+            if not g.user:
+                return {"ok": False, "code": "login_required", "message": "請連網登入原帳號後再同步；暫存仍保留。", "retryable": False}, 401
+            if g.user.must_change_password:
+                return {"ok": False, "code": "password_required", "message": "請先完成密碼變更；暫存仍保留。", "retryable": False}, 403
         if not g.user and request.method == "POST":
             if request.endpoint == "logout":
                 # A second open tab may still show the previous logout button.
@@ -361,7 +366,7 @@ def create_app(config=None):
                     flash("登入表單已過期，請重新輸入密碼後再登入。", "error")
                     return render_template("login.html", next=safe_next(request.form.get("next") or request.args.get("next"))), 400
                 abort(400, description="表單已過期，請重新載入頁面後再試。")
-        if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz"):
+        if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz", "offline_page", "offline_worker"):
             if (request.method == "GET" and request.endpoint not in (None, "login")
                     and (request.endpoint == "checkin" or not session.get("after_password")
                          or session["after_password"] == url_for("dashboard"))):
@@ -1705,25 +1710,41 @@ def create_app(config=None):
         return "'" + value if value.lstrip().startswith(("=", "+", "-", "@", "＝", "＋", "－", "＠")) else value
 
     def write_record_csv(writer, query, filters):
+        offline_condition = (PatrolExecution.offline_submission.has() if filters["stage"] == "execution" else
+                             db.or_(Inspection.offline_submission.has(), Inspection.execution.has(PatrolExecution.offline_submission.has())))
+        has_offline = db.session.scalar(select(query.order_by(None).where(offline_condition).exists()))
+        offline_header = ["打卡時間來源", "伺服器收件時間（台北）", "對應執行時間來源", "執行收件時間（台北）"] if has_offline else []
+
+        def offline_fields(row):
+            if not has_offline:
+                return []
+            submission = row.offline_submission
+            execution = row.execution if isinstance(row, Inspection) else None
+            first = execution.offline_submission if execution else None
+            return ["手機離線記錄時間" if submission else "伺服器時間",
+                    format_localtime(submission.received_at) if submission else "",
+                    ("手機離線記錄時間" if first else "伺服器時間") if execution else "",
+                    format_localtime(first.received_at) if first else ""]
+
         if filters["stage"] == "execution":
             instant = now_utc()
-            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "巡檢狀態"])
+            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "巡檢狀態"] + offline_header)
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
                 writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                                 category_label(row.category), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]])
+                                 category_label(row.category), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]] + offline_fields(row))
         elif g.user.role == "executor":
-            writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"])
+            writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"] + offline_header)
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
-                                 format_localtime(row.created_at)])
+                                 format_localtime(row.created_at)] + offline_fields(row))
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
             header = ["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"]
-            writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []))
+            writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []) + offline_header)
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
@@ -1744,7 +1765,7 @@ def create_app(config=None):
                     fields.extend([mode_label,
                                    csv_text(row.execution.user_name) if row.execution else "",
                                    format_localtime(row.execution.created_at) if row.execution else ""])
-                writer.writerow(fields)
+                writer.writerow(fields + offline_fields(row))
 
     @app.get("/records/export")
     @login_required
@@ -2216,6 +2237,8 @@ def create_app(config=None):
         # Bare HTTP exceptions carry English framework text; the template
         # supplies a localized fallback while preserving our route messages.
         message = None if error.description == type(error).description else error.description
+        if request.path.startswith("/api/offline/"):
+            return {"ok": False, "code": "request_rejected", "message": message or "同步未完成，暫存仍保留；請重新連線後再試。", "retryable": error.code in (429,)}, error.code
         if request.endpoint == "confirm_checkin" and g.get("user") and error.code in (400, 413):
             # The multipart parser may already have rejected the body. Recover
             # by GET from the matched route; never parse or replay the old form.
@@ -2332,6 +2355,12 @@ def create_app(config=None):
 
     from catalog import register_catalog_commands
     register_catalog_commands(app)
+    from offline import register_offline
+    register_offline(app, now=lambda: now_utc(), local_dt=local_dt, naive_utc=naive_utc,
+                     period_for=period_for, timezone_local=TAIPEI, csrf_token=csrf_token,
+                     device_binding=device_binding, lock_current_user=lock_current_user,
+                     executor_can_scan=executor_can_scan, point_revision=checkin_location_revision,
+                     inspection_in_slot=inspection_in_slot, audit=audit)
     return app
 
 
