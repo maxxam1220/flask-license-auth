@@ -27,7 +27,7 @@
     {% if long_period %}
       <div><span>{{ '週巡期間' if record.frequency == 'weekly' else '月巡期間' }}</span><strong>{{ long_period.start|localdate }} 至 {{ long_period.end|localdate }}</strong></div>
     {% else %}
-      <div><span>巡檢時段</span><strong>{{ slot_label(record.slot) if record.frequency == 'daily2' else '不限時段' }}</strong></div>
+      <div><span>{{ '巡檢次數' if record.frequency == 'daily2' else '巡檢時間' }}</span><strong>{{ slot_label(record.slot) if record.frequency == 'daily2' else '不限時段' }}</strong></div>
     {% endif %}
   </div>
 </section>

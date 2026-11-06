@@ -36,7 +36,7 @@ def test_two_rounds_show_which_stage_is_open_and_count_finished_slots(applicatio
     monkeypatch.setattr(app_module, "now_utc", lambda: now)
     card, badges = point_card(inspector, "1F-G00")
     assert badges == [("badge-signin", "未簽到")]
-    assert "時段尚未開始" in card
+    assert "尚未開始" in card
     direct_card, direct_badges = point_card(inspector, "1F-G01")
     assert direct_badges == [("badge-todo", "待巡檢")] and "未簽到" not in direct_card
 
@@ -47,13 +47,13 @@ def test_two_rounds_show_which_stage_is_open_and_count_finished_slots(applicatio
     visit(colleague, paired)
     partial = [("badge-partial", "部分完成 1/2")]
     card, badges = point_card(inspector, "1F-G00")
-    assert badges == partial and "已完成 1 / 2 次" in card and "時段尚未開始" in card
+    assert badges == partial and "已完成 1 / 2 次" in card and "尚未開始" in card
     visit(inspector, direct)
     assert point_card(inspector, "1F-G01")[1] == partial
 
     now = now.replace(hour=4)  # New slot at exactly 12:00.
     card, badges = point_card(inspector, "1F-G00")
-    assert badges == partial and "未簽到" in card and "時段尚未開始" not in card
+    assert badges == partial and "未簽到" in card and "尚未開始" not in card
     visit(executor, paired)
     card, badges = point_card(inspector, "1F-G00")
     assert badges == partial and "已簽到、待巡檢" in card

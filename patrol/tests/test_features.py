@@ -250,7 +250,7 @@ def test_notes_abnormal_photos_are_atomic_private_and_exported_safely(applicatio
     output = client.get("/records/export?category=safety&floor=11&abnormal=1").get_data(as_text=True)
     exported = list(csv.reader(io.StringIO(output.lstrip("\ufeff"))))
     assert len(exported) == 2 and exported[1][1] == "1M"
-    assert exported[1][7:12] == ["職安", "下午", "是", "'=HYPERLINK(\"test\")\n現場異常", "2"]
+    assert exported[1][7:12] == ["職安", "第 2 次", "是", "'=HYPERLINK(\"test\")\n現場異常", "2"]
     assert len(list(csv.reader(io.StringIO(client.get("/records/export?abnormal=0").get_data(as_text=True))))) == 1
 
 

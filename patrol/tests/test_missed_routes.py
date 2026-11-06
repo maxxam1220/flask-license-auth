@@ -214,7 +214,7 @@ def test_restored_inactive_point_edits_keep_only_overdue_slots_in_original_depar
     assert exported.status_code == 200 and b'Private general office' not in exported.data
     csv_rows = list(csv.reader(io.StringIO(exported.data.decode('utf-8-sig'))))[1:]
     assert [(row[0], row[3], row[4], row[5], row[7]) for row in csv_rows] == [
-        ('2026-11-03', '1M', old_code, old_name, '上午') for _ in expected_slots]
+        ('2026-11-03', '1M', old_code, old_name, '第 1 次') for _ in expected_slots]
     with rendered_contexts(application) as contexts:
         admin.get('/missed?date_from=2026-11-03&date_to=2026-11-04&floor=2&category=general')
     assert contexts[-1][1]['occurrences'] == []

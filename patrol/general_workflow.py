@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import select
 
+from daily_rounds import daily2_anytime
 from models import Inspection, PatrolExecution, db
 from missed import TAIPEI, period_bounds
 
@@ -22,7 +23,7 @@ def execution_deadline(frequency, period_key, slot):
         start, end = period_bounds(day, frequency)
         if start != day or day.isoformat() != period_key:
             return None
-        if slot == "am":
+        if slot == "am" and not daily2_anytime(day):
             return datetime.combine(day, time(12), TAIPEI)
         return datetime.combine(end + timedelta(days=1), time.min, TAIPEI)
     except (TypeError, ValueError, OverflowError):

@@ -1,8 +1,9 @@
-"""Today's outstanding, actionable patrol stops in the current Taipei time slot."""
+"""Today's outstanding, actionable patrol stops and each actor's next round."""
 from datetime import timezone
 
 from sqlalchemy import select
 
+from daily_rounds import daily2_anytime, next_daily2_slot
 from missed import period_bounds, schedule_timeline, slot_plans
 from models import Inspection, PatrolExecution, db
 from patrol_access import can_access_category
@@ -26,9 +27,10 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
         if point.frequency == "irregular" or (executor and point.workflow_mode != "two_stage"):
             continue
         view = point.frequency if point.frequency in ("monthly", "weekly") else "daily"
+        anytime = point.frequency == "daily2" and daily2_anytime(today)
         current_slot = current_half if point.frequency == "daily2" else "any"
         for plan, slot, deadline in slot_plans(point, today, schedule_timeline(point), view=view):
-            if slot != current_slot or (plan["frequency"], plan["workflow_mode"], plan["category"]) != (
+            if (not anytime and slot != current_slot) or (plan["frequency"], plan["workflow_mode"], plan["category"]) != (
                     point.frequency, point.workflow_mode, point.category):
                 continue
             created_at = point.created_at
@@ -38,7 +40,8 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
                 continue
             period_key = period_ranges[point.frequency][0].isoformat()
             candidates[point.id, point.frequency, period_key, slot] = point
-            break
+            if not anytime:
+                break
     if not candidates:
         return []
 
@@ -67,8 +70,34 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
         executions = {tuple(row[:4]): row.user_id for row in db.session.execute(stages)}
 
     result = []
+    selected_rounds = {}
+    completed_rounds, executed_rounds, reviewable_rounds = {}, {}, {}
+    for point_id, frequency, period_key, slot in completed:
+        completed_rounds.setdefault((point_id, frequency, period_key), set()).add(slot)
+    for (point_id, frequency, period_key, slot), executor_id in executions.items():
+        executed_rounds.setdefault((point_id, frequency, period_key), set()).add(slot)
+        if executor_id != user.id:
+            reviewable_rounds.setdefault((point_id, frequency, period_key), set()).add(slot)
     for key, point in candidates.items():
-        if key in completed:
+        if point.frequency != "daily2" or not daily2_anytime(today) or point.id in selected_rounds:
+            continue
+        prefix = key[:3]
+        if executor:
+            selected_rounds[point.id] = next_daily2_slot(executed_rounds.get(prefix, ()))
+        elif user.role == "inspector" and point.workflow_mode != "standard":
+            used = personal_slots.get(point.id, ())
+            available = reviewable_rounds.get(prefix, ()) if point.workflow_mode == "two_stage" else ("am", "pm")
+            selected_rounds[point.id] = next_daily2_slot(used, available) or next_daily2_slot(used)
+        else:
+            used = completed_rounds.get(prefix, ())
+            available = executed_rounds.get(prefix, ()) if point.workflow_mode == "two_stage" else ("am", "pm")
+            selected_rounds[point.id] = next_daily2_slot(used, available) or next_daily2_slot(used)
+    for key, point in candidates.items():
+        anytime = point.id in selected_rounds
+        if anytime:
+            if key[3] != selected_rounds[point.id] or {"am", "pm"} <= completed_rounds.get(key[:3], set()):
+                continue
+        elif key in completed:
             continue
         slots = personal_slots.get(point.id)
         if point.workflow_mode != "standard" and slots and (key[3] == "any" or "any" in slots or key[3] in slots):
@@ -85,6 +114,8 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
                 status, label = "review", "已簽到待巡檢"
         else:
             status, label = "inspect", "待巡檢"
+        if anytime:
+            label = ("第 1 次" if key[3] == "am" else "第 2 次") + " · " + label
         result.append(dict(id=point.id, floor=point.floor, code=point.code, name=point.name,
                            frequency=point.frequency, period_end=period_ranges[point.frequency][1],
                            status_key=status, status_label=label))

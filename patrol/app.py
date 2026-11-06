@@ -40,6 +40,7 @@ from missed import period_bounds
 from images import PhotoValidationError, process_uploads
 from patrol_access import can_access_category, can_read_inspection, can_view_execution_records, can_view_general_team, patrol_scope
 from ready_patrol import ready_patrol_points
+from daily_rounds import daily2_anytime, next_daily2_slot
 from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -112,7 +113,7 @@ def slot_for(point, instant):
 
 
 def slot_label(slot):
-    return {"am": "上午", "pm": "下午", "any": "不限時段"}.get(slot, "不限時段")
+    return {"am": "第 1 次", "pm": "第 2 次", "any": "不限時段"}.get(slot, "不限時段")
 
 
 def frequency_label(frequency):
@@ -736,7 +737,7 @@ def create_app(config=None):
         return dict(selected_floor=floor, selected_category=category,
                     ready_points=ready_patrol_points(points, g.user, local_now, floor, category),
                     ready_date=local_now.date(), ready_as_of=local_now,
-                    ready_slot_label=slot_label("am" if local_now.hour < 12 else "pm"))
+                    ready_slot_label="不限時段")
 
     @app.get("/ready")
     @login_required
@@ -843,8 +844,7 @@ def create_app(config=None):
                     # Do not create an obligation for a slot that had already
                     # ended when the point was introduced. Existing inspection
                     # snapshots still count, even for inconsistent legacy dates.
-                    slot_deadline = (datetime.combine(period_day, time(12), TAIPEI) if slot == "am" else
-                                     datetime.combine(period_end + timedelta(days=1), time.min, TAIPEI))
+                    slot_deadline = execution_deadline(group_frequency, period_day.isoformat(), slot)
                     if not record and point.created_at and slot_deadline <= local_dt(point.created_at):
                         continue
                     # A classification/floor edit cannot create another obligation
@@ -853,7 +853,8 @@ def create_app(config=None):
                         continue
                     if not scheduled_slot and not record:
                         continue
-                    future_slot = group_frequency == "daily2" and selected == today and slot == "pm" and local_dt(instant).hour < 12
+                    future_slot = (group_frequency == "daily2" and not daily2_anytime(period_day)
+                                   and selected == today and slot == "pm" and local_dt(instant).hour < 12)
                     status = "done" if record else ("pending" if due and not future_slot else "not_due")
                     visible = record if record and g.user.role == "admin" else None
                     if record and g.user.role == "inspector":
@@ -957,13 +958,59 @@ def create_app(config=None):
             return personal_inspection_in_slot(point, g.user, day, slot)
         return inspection_in_slot(point, key, slot)
 
+    def confirmation_slot(point, instant):
+        """Choose the actor's next round only when opening a fresh confirmation form.
+
+        The stored am/pm keys remain stable for historical receipts and execution
+        links; from the cutover they identify round one/two, not clock windows.
+        A submitted form must keep its signed round instead of selecting again.
+        """
+        day = local_dt(instant).date()
+        if point.frequency != "daily2" or not daily2_anytime(day):
+            return slot_for(point, instant)
+        key = day.isoformat()
+        available = ("am", "pm")
+        if point.workflow_mode == "two_stage" and g.user.role == "executor":
+            used = db.session.scalars(select(PatrolExecution.slot).where(
+                PatrolExecution.point_id == point.id, PatrolExecution.frequency == point.frequency,
+                PatrolExecution.period_key == key)).all()
+        elif point.workflow_mode in ("spot", "two_stage"):
+            used = db.session.scalars(select(Inspection.slot).where(
+                Inspection.point_id == point.id, Inspection.user_id == g.user.id,
+                Inspection.personal_day == day)).all()
+            if point.workflow_mode == "two_stage":
+                available = db.session.scalars(select(PatrolExecution.slot).where(
+                    PatrolExecution.point_id == point.id, PatrolExecution.frequency == point.frequency,
+                    PatrolExecution.period_key == key, PatrolExecution.user_id != g.user.id)).all()
+        else:
+            used = db.session.scalars(select(Inspection.slot).where(
+                Inspection.point_id == point.id, Inspection.frequency == point.frequency,
+                Inspection.period_key == key, Inspection.legacy_unscheduled.is_(False),
+                Inspection.executor_visit.is_(False))).all()
+        # If no execution is ready, show the next unfilled round as waiting.
+        # Both complete: retain the final round so the existing receipt is shown.
+        return next_daily2_slot(used, available) or next_daily2_slot(used) or "pm"
+
+    def daily_round_ticket(point, key, slot, day, *, validate=False):
+        """Bind confirmation to one displayed round, including across concurrent tabs."""
+        signer = URLSafeSerializer(app.secret_key, salt="patrol-daily-round-v1")
+        scope = [g.user.id, g.user.auth_version, point.id, key, slot, day.isoformat(),
+                 point.frequency, point.workflow_mode, g.user.role, checkin_location_revision(point)]
+        if not validate:
+            return signer.dumps(scope)
+        value = request.form.get("round_ticket", "")
+        try:
+            return len(value) <= 2048 and signer.loads(value) == scope
+        except BadData:
+            return False
+
     def checkin_stage(point, first):
         if point.workflow_mode != "two_stage":
             if g.user.role == "executor":
                 return "visit", executor_can_scan(point), ""
             return "inspect", g.user.role in ("inspector", "admin"), ""
         if g.user.role == "executor":
-            period = "本週期" if point.frequency in ("weekly", "monthly") else "本時段"
+            period = "本週期" if point.frequency in ("weekly", "monthly") else "本次"
             return "execute", first is None, f"{period}已登記執行，不需重複簽到。" if first else ""
         if g.user.role != "inspector" or patrol_scope(g.user) != "general":
             return "inspect", False, "系統管理員僅可管理此點，兩段打卡須由對應角色完成。"
@@ -992,7 +1039,8 @@ def create_app(config=None):
         instant = now_utc()
         day = local_dt(instant).date()
         key, start, end = period_for(point, instant)
-        slot = slot_for(point, instant)
+        slot = confirmation_slot(point, instant)
+        flexible_daily2 = point.frequency == "daily2" and daily2_anytime(day)
         # Preserve the origin of an unsent report even through repeated read-only
         # handoff checks. The final submit always uses the newly displayed slot.
         report_day = request.form.get("draft_day") or request.form.get("personal_day", "")
@@ -1032,6 +1080,8 @@ def create_app(config=None):
                                first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
                                execution_time=first.created_at if first else None,
                                personal_day=day.isoformat(),
+                               flexible_daily2=flexible_daily2,
+                               round_ticket=daily_round_ticket(point, key, slot, day) if flexible_daily2 else "",
                                spot_ticket=spot_ticket(point, key, slot, day) if point.workflow_mode == "spot" else "",
                                point_revision=checkin_location_revision(point),
                                progress_url=url_for("dashboard", view=progress_view(point.frequency),
@@ -1070,13 +1120,13 @@ def create_app(config=None):
         if note or abnormal or any(upload.filename for upload in uploads):
             # A concurrent completion won. Do not present its receipt as proof
             # that this form's separate observations or photos were saved.
-            prefix = "你今天在這個點位的時段已有紀錄" if personal else "這個點位本期已有紀錄"
+            prefix = "你今天在這個點位的本次巡檢已有紀錄" if personal else "這個點位本次已有紀錄"
             flash(prefix + "，本次填寫的回報內容未追加。若現場有新的異常，請聯絡系統管理員處理。", "warning")
             return redirect(url_for("checkin", token=token))
         if g.user.role == "executor":
             flash("你今天已在此點登記。", "info")
         else:
-            flash("你已完成本日此時段的巡檢，以下是你的紀錄。" if personal else "這個巡檢點本期已完成，沒有新增重複紀錄。", "info")
+            flash("你已完成本日這一次巡檢，以下是你的紀錄。" if personal else "這個巡檢點本次已完成，沒有新增重複紀錄。", "info")
         if can_read_inspection(g.user, record):
             return redirect(url_for("checkin_success", record_id=record.id))
         return redirect(url_for("checkin", token=token))
@@ -1097,7 +1147,7 @@ def create_app(config=None):
         if not binding or binding.status != "approved":
             abort(403, description="此瀏覽器尚未核准，請先申請綁定並由系統管理員核准。")
         point = get_point(token, lock=True)
-        if point.workflow_mode in ("spot", "two_stage") and db.engine.dialect.name == "sqlite":
+        if (point.workflow_mode in ("spot", "two_stage") or point.frequency == "daily2") and db.engine.dialect.name == "sqlite":
             # SQLite ignores FOR UPDATE; serialize stage and personal attendance checks.
             db.session.execute(db.update(Point).where(Point.id == point.id).values(id=Point.id))
             point = get_point(token, lock=True)
@@ -1105,6 +1155,7 @@ def create_app(config=None):
         day = local_dt(instant).date()
         key, _, _ = period_for(point, instant)
         slot = slot_for(point, instant)
+        flexible_daily2 = point.frequency == "daily2" and daily2_anytime(day)
         submitted_slot, submitted_period = request.form.get("slot"), request.form.get("period_key")
         def form_error(message, status=400):
             db.session.rollback()
@@ -1115,10 +1166,17 @@ def create_app(config=None):
             return form_error("打卡方式已變更，請依目前顯示的流程重新確認。", 409)
         if error := changed_checkin_settings(point):
             return form_error(error, 409)
+        if flexible_daily2:
+            # Never assign the next free round here: a double click or retry of
+            # round one must only resolve to round one's original receipt.
+            if (submitted_slot not in ("am", "pm") or submitted_period != key
+                    or not daily_round_ticket(point, key, submitted_slot, day, validate=True)):
+                return form_error("打卡日期、次數或表單已變更，請重新掃描並確認本次打卡。", 409)
+            slot = submitted_slot
         if (((point.frequency == "daily2" or mode != "standard") and (not submitted_slot or not submitted_period))
                 or (submitted_slot is not None and submitted_slot != slot)
                 or (submitted_period is not None and submitted_period != key)):
-            return form_error("巡檢日期或時段已變更，請確認目前時段後重新送出。照片需重新選擇。", 409)
+            return form_error("巡檢日期或次數已變更，請重新確認後送出。照片需重新選擇。", 409)
         # HTML forms send CRLF for the single newline counted by a textarea.
         note = request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n").strip()
         abnormal = request.form.get("is_abnormal", "") in ("on", "1", "true", "yes")
@@ -1135,7 +1193,7 @@ def create_app(config=None):
                 return form_error("直接簽到只記錄人員、點位與時間。")
             return form_error("執行登記不接受巡檢回報內容；備註、照片及異常請於巡檢階段填寫。")
         own_execution = stage == "execute" and first is not None and first.user_id == g.user.id
-        requires_day = mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly"))
+        requires_day = flexible_daily2 or (mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly")))
         if requires_day and confirmed_day != day.isoformat():
             # A delayed retry may read the actor's original shared execution
             # receipt. A stale form must never create a new day's attendance.
@@ -1169,9 +1227,9 @@ def create_app(config=None):
             if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
                 return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡系統管理員，或移除照片後重新確認送出。", 409)
         final_instant = now_utc()
-        if (period_for(point, final_instant)[0] != key or slot_for(point, final_instant) != slot or
+        if (period_for(point, final_instant)[0] != key or (not flexible_daily2 and slot_for(point, final_instant) != slot) or
                 (mode in ("spot", "two_stage") and local_dt(final_instant).date() != day)):
-            message = "處理期間巡檢日期或時段已變更，請重新確認後送出。"
+            message = "處理期間巡檢日期或次數已變更，請重新確認後送出。"
             return form_error(message + ("照片需重新選擇。" if photos else ""), 409)
         if stage == "execute":
             first = new_execution(point, g.user, binding, key, slot, final_instant)
@@ -1229,6 +1287,7 @@ def create_app(config=None):
         reviewed = execution_reviewed(record)
         instant = now_utc()
         return render_template("checkin_success.html", record=record, stage="execute", finalized=reviewed,
+                               flexible_daily2=record.frequency == "daily2" and daily2_anytime(record.period_key),
                                review_status=execution_review_status(record.frequency, record.period_key, record.slot, reviewed, instant),
                                long_period=handoff_period(record.frequency, record.period_key),
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="execution"),
@@ -1241,6 +1300,7 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         require_inspection_access(record)
         return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
+                               flexible_daily2=record.frequency == "daily2" and daily2_anytime(record.period_key),
                                long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="inspection"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
@@ -1643,7 +1703,7 @@ def create_app(config=None):
     def write_record_csv(writer, query, filters):
         if filters["stage"] == "execution":
             instant = now_utc()
-            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "巡檢狀態"])
+            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "巡檢狀態"])
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
@@ -1658,7 +1718,7 @@ def create_app(config=None):
                                  format_localtime(row.created_at)])
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
-            header = ["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "時段", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"]
+            header = ["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"]
             writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []))
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
@@ -1770,7 +1830,7 @@ def create_app(config=None):
         output = io.StringIO(newline="")
         writer = csv.writer(output)
         has_stages = any(row["workflow_mode"] == "two_stage" for row in rows)
-        writer.writerow(["應完成日期", "巡檢期間", "分類", "樓層", "點位編號", "點位名稱", "巡檢頻率", "時段", "到期時間（台北）", "漏打次數"]
+        writer.writerow(["應完成日期", "巡檢期間", "分類", "樓層", "點位編號", "點位名稱", "巡檢頻率", "次數", "到期時間（台北）", "漏打次數"]
                         + (["缺少階段"] if has_stages else []))
         for row in rows:
             writer.writerow([row["due_date"].isoformat(), row["period_label"], category_label(row["category"]),
@@ -1841,9 +1901,13 @@ def create_app(config=None):
     def protect_pending_execution(point):
         if point.workflow_mode == "two_stage":
             instant = now_utc()
-            first = execution_in_slot(point, period_for(point, instant)[0], slot_for(point, instant))
-            if first and not execution_reviewed(first):
-                abort(409, description="本時段已執行、尚未巡檢。請完成巡檢或待時段結束後，再調整點位流程或停用。")
+            key = period_for(point, instant)[0]
+            flexible_daily2 = point.frequency == "daily2" and daily2_anytime(key)
+            slots = ("am", "pm") if flexible_daily2 else (slot_for(point, instant),)
+            for slot in slots:
+                first = execution_in_slot(point, key, slot)
+                if first and not execution_reviewed(first):
+                    abort(409, description="已有執行、尚未巡檢。請完成巡檢或待本期結束後，再調整點位流程或停用。")
 
     def execution_reviewed(first):
         return db.session.scalar(select(Inspection.id).where(Inspection.execution_id == first.id).limit(1)) is not None

@@ -31,7 +31,7 @@ def test_recheck_handoff_carries_unsent_report_through_noon_without_writing(appl
     note = '查看「設備 A」\n閥門 <1> & 照片'
     stale = inspector.post(qr + "/confirm", data=first_shift | {
         "note": note, "is_abnormal": "on", "photos": (BytesIO(b"synthetic-original-photo"), "check.png")})
-    assert stale.status_code == 409 and "草稿來自 2026-11-03 上午" in stale.text
+    assert stale.status_code == 409 and "草稿來自 2026-11-03 第 1 次" in stale.text
     assert "照片需重新選擇" in stale.text and 'id="inspection-form"' not in stale.text
     carried = form_fields(stale.text, "handoff-recheck")
     assert carried["note"] == note and carried["is_abnormal"] == "on"
@@ -43,7 +43,7 @@ def test_recheck_handoff_carries_unsent_report_through_noon_without_writing(appl
     assert db.session.query(Inspection).count() == 0
     executor.post(qr + "/confirm", data=payload(executor, qr))
     ready = inspector.post(qr, data=carried)
-    assert ready.status_code == 200 and "草稿來自 2026-11-03 上午" in ready.text
+    assert ready.status_code == 200 and "草稿來自 2026-11-03 第 1 次" in ready.text
     assert note in unescape(ready.text) and 'name="is_abnormal" value="on" checked' in ready.text
     assert db.session.query(Inspection).count() == 0
     current = form_fields(ready.text, "inspection-form")

@@ -7,12 +7,12 @@
 {% set query_count=namespace(value=0) %}
 {% for key in ['category','floor','frequency'] %}{% if filters.get(key,'') and (is_patrol_admin or key != 'category') %}{% set query_count.value=query_count.value + 1 %}{% endif %}{% endfor %}
 {% block content %}
-<div class="page-heading"><div><h1>漏打查詢</h1><p>查詢已到期但未完成的巡檢時段，掌握漏打總次數。</p></div><a class="button button-secondary" href="{{ url_for('missed_export', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), category=filters.get('category',''), floor=filters.get('floor',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
+<div class="page-heading"><div><h1>漏打查詢</h1><p>查詢已到期但未完成的巡檢，掌握漏打總次數。</p></div><a class="button button-secondary" href="{{ url_for('missed_export', date_from=filters.get('date_from',''), date_to=filters.get('date_to',''), category=filters.get('category',''), floor=filters.get('floor',''), frequency=filters.get('frequency','')) }}">{{ icon('download') }}匯出 CSV</a></div>
 <section class="missed-stats" aria-label="所選條件漏打統計">
   <article class="stat-card"><span class="stat-label">已到期漏打總數</span><div class="stat-value {{ 'danger-text' if totals.missed }}">{{ totals.missed }}<small>次巡檢</small></div><span class="stat-icon {{ 'amber' if totals.missed else 'positive' }}">{{ icon('clock' if totals.missed else 'circle-check') }}</span></article>
   <article class="stat-card"><span class="stat-label">受影響點位</span><div class="stat-value">{{ totals.points }}<small>個點位</small></div><span class="stat-icon neutral">{{ icon('pin') }}</span></article>
 </section>
-<div class="missed-scope-note report-scope-line"><p>同一點位按時段計次，只計已到期的時段。</p>{% if occurrences %}<a class="text-link" href="#missed-results">查看漏打明細 {{ icon('down') }}</a>{% endif %}</div>
+<div class="missed-scope-note report-scope-line"><p>同一點位按應完成次數計算，只計已到期的巡檢。</p>{% if occurrences %}<a class="text-link" href="#missed-results">查看漏打明細 {{ icon('down') }}</a>{% endif %}</div>
 <section class="panel filter-panel records-query-panel" data-records-query>
   <button class="records-query-toggle" type="button" aria-expanded="true" aria-controls="missed-query-fields" data-query-toggle hidden>
     <span class="records-query-summary"><span class="records-query-title">查詢條件 <small>{{ '已套用 ' ~ query_count.value ~ ' 項' if query_count.value else '全部分類與樓層' if is_patrol_admin else '全部樓層與頻率' }}</small></span><span class="records-query-dates"><span>應完成日</span><time datetime="{{ filters.get('date_from','') }}">{{ filters.get('date_from','') }}</time><span>至</span><time datetime="{{ filters.get('date_to','') }}">{{ filters.get('date_to','') }}</time></span></span>
@@ -33,7 +33,7 @@
     <div class="records-filter-actions"><button class="button button-primary">查詢漏打</button><a class="text-link" href="{{ url_for('missed') }}">重設</a></div>
   </form></div>
 </section>
-<details class="missed-rules"><summary>{{ icon('info') }}漏打次數與到期時間如何計算？{{ icon('down') }}</summary><ul><li>每日一次：當日為應完成日，隔日 00:00 到期。</li><li>每日兩次：上午與下午各一次，當日分別於 12:00、隔日 00:00 到期。</li><li>每週一次：週日為應完成日，隔週一 00:00 到期。</li><li>每月一次：該月最後一日為應完成日，次月 1 日 00:00 到期。</li><li>不定期：不設應完成日，不列入漏打。</li></ul><p>總數涵蓋所選條件的全部結果，依當時的點位設定計算。{% if is_patrol_admin or viewer_category == 'general' %}總務兩階段點每時段最多計一次漏打。{% endif %}</p></details>
+<details class="missed-rules"><summary>{{ icon('info') }}漏打次數與到期時間如何計算？{{ icon('down') }}</summary><ul><li>每日一次：當日為應完成日，隔日 00:00 到期。</li><li>每日兩次：當日可隨時完成兩次，未完成次數於隔日 00:00 到期。</li><li>每週一次：週日為應完成日，隔週一 00:00 到期。</li><li>每月一次：該月最後一日為應完成日，次月 1 日 00:00 到期。</li><li>不定期：不設應完成日，不列入漏打。</li></ul><p>總數涵蓋所選條件的全部結果，依當時的點位設定計算；2026/11/06 前的紀錄保留原到期規則。{% if is_patrol_admin or viewer_category == 'general' %}總務兩階段點每次最多計一次漏打。{% endif %}</p></details>
 {% if point_summaries %}
 <details class="panel disclosure missed-point-summary spaced" open data-responsive-summary>
   <summary><span><strong>依點位彙總</strong><small>{{ totals.points }} 個點位 · 查看各點漏打次數</small></span>{{ icon('down') }}</summary>
@@ -48,15 +48,15 @@
 {% if pagination.pages > 1 %}
 {{ report_pager('漏打明細分頁（上方）', 'missed', filters, pagination, 'missed-results') }}
 {% endif %}
-  {% if occurrences %}<div class="table-scroll missed-table"><table><thead><tr><th scope="col">應完成日／期間</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">頻率／時段</th><th scope="col">到期時間</th></tr></thead><tbody>
+  {% if occurrences %}<div class="table-scroll missed-table"><table><thead><tr><th scope="col">應完成日／期間</th><th scope="col">巡檢點</th><th scope="col">{{ '分類／樓層' if is_patrol_admin else '樓層' }}</th><th scope="col">頻率／次數</th><th scope="col">到期時間</th></tr></thead><tbody>
   {% for item in occurrences %}<tr>
     <td data-label="應完成日"><div><strong>{{ item.due_date }}</strong>{% if item.frequency in ['weekly','monthly'] %}<small class="cell-hint">{{ item.period_label }}</small>{% endif %}</div></td>
     <td data-label="巡檢點"><div class="record-point-cell"><span class="point-code">{{ item.code }}</span><strong>{{ item.name }}</strong></div></td>
     <td data-label="{{ '分類／樓層' if is_patrol_admin else '樓層' }}"><div>{% if is_patrol_admin %}{{ category_label(item.category) }}<small class="cell-hint">{{ floor_label(item.floor) }}</small>{% else %}{{ floor_label(item.floor) }}{% endif %}</div></td>
-    <td data-label="頻率／時段"><div><span class="badge badge-neutral">{{ frequency(item.frequency) }}</span>{% if item.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(item.slot) }}</small>{% endif %}</div></td>
+    <td data-label="頻率／次數"><div><span class="badge badge-neutral">{{ frequency(item.frequency) }}</span>{% if item.frequency == 'daily2' %}<small class="cell-hint">{{ slot_label(item.slot) }}</small>{% endif %}</div></td>
     <td data-label="到期時間"><div><time class="missed-deadline">{{ item.deadline|localtime }}</time>{% if item.workflow_mode == 'two_stage' %}<small class="cell-hint stage-gap">{{ item.missing_stage_label }}</small>{% endif %}</div></td>
   </tr>{% endfor %}
-  </tbody></table></div>{% else %}{{ empty('所選條件沒有已到期的漏打','目前沒有符合的漏打時段。仍在巡檢時間內的點位，可至總覽查看進度。','circle-check') }}<div class="empty-actions"><a class="button button-secondary" href="{{ url_for('dashboard', category=filters.get('category','')) }}">返回巡檢總覽 {{ icon('arrow') }}</a></div>{% endif %}
+  </tbody></table></div>{% else %}{{ empty('所選條件沒有已到期的漏打','目前沒有符合的漏打紀錄。仍在巡檢時間內的點位，可至總覽查看進度。','circle-check') }}<div class="empty-actions"><a class="button button-secondary" href="{{ url_for('dashboard', category=filters.get('category','')) }}">返回巡檢總覽 {{ icon('arrow') }}</a></div>{% endif %}
 </section>
 {% if pagination.pages > 1 %}{{ report_pager('漏打明細分頁（下方）', 'missed', filters, pagination, 'missed-results') }}{% endif %}
 {% endblock %}

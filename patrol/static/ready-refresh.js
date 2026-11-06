@@ -1,4 +1,4 @@
-/* Refresh this shift's list in place, keeping the current filters and focus. */
+/* Refresh today's list in place, keeping the current filters and focus. */
 (() => {
   let panel = document.querySelector('[data-ready-panel]');
   if (!panel || !window.fetch || !window.AbortController) return;
@@ -28,8 +28,8 @@
     const stamp = Date.parse(panel.querySelector('.ready-asof time')?.dateTime);
     if (!Number.isFinite(stamp)) return;
     // Base the boundary on server Taipei time, independent of the phone's clock or zone.
-    const halfDay = 12 * 3600000;
-    const remaining = halfDay - ((stamp + 8 * 3600000) % halfDay);
+    const day = 24 * 3600000;
+    const remaining = day - ((stamp + 8 * 3600000) % day);
     shiftTimer = setTimeout(() => refreshIfVisible(0), remaining + 250);
   }
   async function refresh(manual) {

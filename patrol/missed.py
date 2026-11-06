@@ -2,7 +2,8 @@
 
 The selected dates mean *due dates*: a daily slot is due on its patrol day,
 a weekly slot on Sunday, and a monthly slot on the last Taipei calendar day.
-At the exclusive deadline (noon or the following midnight) it becomes overdue.
+At the exclusive deadline it becomes overdue. Both daily rounds now end at
+midnight; dates before the policy change retain their original noon deadline.
 
 Callers must preload point.schedules and supply completions for every user,
 starting at the earliest overlapping week or month start. Ordinary schedule
@@ -16,6 +17,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from domain import CATEGORY_OPTIONS, FLOOR_ORDER
+from daily_rounds import daily2_anytime
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "weekly": ("weekly",), "monthly": ("monthly",)}
@@ -101,7 +103,8 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
         # A later snapshot cannot tell which team or plan owned an earlier gap.
         return
     next_midnight = datetime.combine(day + timedelta(days=1), time.min, TAIPEI)
-    for morning, deadline in ((True, datetime.combine(day, time(12), TAIPEI)), (False, next_midnight)):
+    first_deadline = next_midnight if daily2_anytime(day) else datetime.combine(day, time(12), TAIPEI)
+    for morning, deadline in ((True, first_deadline), (False, next_midnight)):
         index = last
         # Rewind any workflow change after (or exactly at) this expiry. Ordinary
         # renames made later the same day cannot override the pre-change snapshot.

@@ -6,7 +6,7 @@
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-layout.css') }}" media="screen">{% endblock %}
 {% macro stage_badge(slot) %}
   {%- if slot.status == 'done' %}<span class="badge badge-done">兩階段已完成</span>
-  {%- elif slot.status == 'not_due' %}<span class="badge badge-not_due">時段尚未開始</span>
+  {%- elif slot.status == 'not_due' %}<span class="badge badge-not_due">尚未開始</span>
   {%- elif slot.stage_status == 'expired_unreviewed' %}<span class="badge badge-missed">已到期、未巡檢</span>
   {%- elif slot.stage_status == 'expired_unexecuted' %}<span class="badge badge-missed">已到期、未簽到</span>
   {%- elif slot.stage_status == 'awaiting_inspection' %}<span class="badge badge-review">已簽到、待巡檢</span>
@@ -31,7 +31,7 @@
   {% endif %}
   <div class="dashboard-heading-copy">
     <h1>巡檢總覽</h1>
-    <p>{{ '依分類與樓層查看進度，掌握每個巡檢時段。' if is_patrol_admin else '在兩階段點執行簽到，也可到指定的不定期點直接簽到。' if current_user.role == 'executor' else '依樓層查看負責點位與本期巡檢進度。' if viewer_category else '你的帳號尚未指派巡檢分類。' }}
+    <p>{{ '依分類與樓層查看進度，掌握每次巡檢進度。' if is_patrol_admin else '在兩階段點執行簽到，也可到指定的不定期點直接簽到。' if current_user.role == 'executor' else '依樓層查看負責點位與本期巡檢進度。' if viewer_category else '你的帳號尚未指派巡檢分類。' }}
       {% if is_patrol_admin or viewer_category %}
       <a id="today-ready" data-today-ready-entry class="text-link" href="{{ url_for('ready', category=selected_category if is_patrol_admin and selected_category else none, floor=selected_floor or none) }}">{{ ready_nav_label }} {{ icon('arrow') }}</a>
       {% endif %}
@@ -64,7 +64,7 @@
   <article class="stat-card"><span class="stat-label">{{ label }}</span><div class="stat-value{% if tone %} {{ tone }}{% endif %}">{{ value }}<small>次</small></div><span class="stat-icon {{ accent }}">{{ icon(symbol) }}</span></article>
   {% endfor %}
 </section>
-<div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · 僅計已到期時段</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
+<div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · 僅計已到期次數</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
 <section class="panel floor-overview" aria-labelledby="floor-progress">
   <div class="section-heading">
     <div><h2 id="floor-progress" tabindex="-1">樓層進度</h2><p>{{ period_title if view == 'monthly' else week_label if view == 'weekly' else selected_date }}</p></div>
@@ -80,11 +80,11 @@
     {% endfor %}
   </div>
 </section>
-<section aria-labelledby="patrol-points"><div class="section-heading outside"><div><h2 id="patrol-points" tabindex="-1">{{ floor_label(request.args.get('floor')) if request.args.get('floor') else '全部樓層' }}巡檢點</h2>{% if view == 'daily' and cards|selectattr('point.frequency', 'equalto', 'daily2')|first is defined %}<p>每日兩次的點位：上午 00:00–11:59、下午 12:00–23:59。</p>{% endif %}</div><div class="patrol-point-tools"><span class="count-label">{{ cards|length }} 個點位</span>{% if request.args.get('floor') %}<a class="text-link" href="#floor-progress">變更樓層</a>{% endif %}</div></div>
+<section aria-labelledby="patrol-points"><div class="section-heading outside"><div><h2 id="patrol-points" tabindex="-1">{{ floor_label(request.args.get('floor')) if request.args.get('floor') else '全部樓層' }}巡檢點</h2>{% if view == 'daily' and cards|selectattr('point.frequency', 'equalto', 'daily2')|first is defined %}<p>每日兩次的點位：依第 1 次、第 2 次查看完成進度。</p>{% endif %}</div><div class="patrol-point-tools"><span class="count-label">{{ cards|length }} 個點位</span>{% if request.args.get('floor') %}<a class="text-link" href="#floor-progress">變更樓層</a>{% endif %}</div></div>
 <details class="dashboard-guide">
   <summary>進度與異常說明</summary>
   <div>
-    <p>{{ '同點同期間有一人完成即達標，其他巡檢員仍可登記。' if viewer_category == 'general' or (is_patrol_admin and selected_category in ['',none,'general']) else '同一點的每個時段，由一位人員完成即可。' }}</p>
+    <p>{{ '同點同期間有一人完成即達標，其他巡檢員仍可登記。' if viewer_category == 'general' or (is_patrol_admin and selected_category in ['',none,'general']) else '同一點的每次巡檢，由一位人員完成即可。' }}</p>
     <p>未結案異常跨日期持續追蹤，與本期巡檢進度分開顯示。</p>
   </div>
 </details>
@@ -108,11 +108,11 @@
   {{ point_issues(card.point.id, card.open_issue_count) }}
   <div class="point-meta">{% if card.point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif card.point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段</span>{% endif %}{{ icon('building') }}{{ floor_label(card.point.floor) }}<span>·</span>{{ frequency(card.point.frequency) }}{% if is_patrol_admin %}<span>·</span>{{ category_label(card.point.category) }}{% endif %}</div>
   {% if card.point.workflow_mode == 'two_stage' %}
-  <div class="workflow-slots" aria-label="各時段作業進度">{% for slot in card.slots %}<div class="workflow-slot">
+  <div class="workflow-slots" aria-label="各次作業進度">{% for slot in card.slots %}<div class="workflow-slot">
     <span class="workflow-slot-label">{{ slot.label if card.point.frequency == 'daily2' else '本月' if card.point.frequency == 'monthly' else '本週' if card.point.frequency == 'weekly' else '本日' }}</span>
     <div>{{ stage_badge(slot) }}{% if slot.executed_at %}<small>執行時間 {{ slot.executed_at|localtime }}</small>{% endif %}</div>
   </div>{% endfor %}</div>
-  {% elif card.point.frequency == 'daily2' %}<div class="slot-grid" aria-label="上午及下午巡檢狀態">{% for slot in card.slots %}<div class="slot-card slot-{{ 'missed' if slot.expired else slot.status }}"><div><strong>{{ slot.label }}</strong><span>{{ '已完成' if slot.status == 'done' else '尚未開始' if slot.status in ['not_due','upcoming'] else '已到期、未巡檢' if slot.expired else '待巡檢' }}</span></div>{% if slot.record %}<small>{{ reporter_name(slot.record) }} · {{ slot.record.created_at|shorttime }}</small>{% else %}<small>{{ '00:00–11:59' if slot.key == 'am' else '12:00–23:59' }}</small>{% endif %}</div>{% endfor %}</div>{% endif %}
+  {% elif card.point.frequency == 'daily2' %}<div class="slot-grid" aria-label="第 1 次及第 2 次巡檢狀態">{% for slot in card.slots %}<div class="slot-card slot-{{ 'missed' if slot.expired else slot.status }}"><div><strong>{{ slot.label }}</strong><span>{{ '已完成' if slot.status == 'done' else '尚未開始' if slot.status in ['not_due','upcoming'] else '已到期、未巡檢' if slot.expired else '待巡檢' }}</span></div>{% if slot.record %}<small>{{ reporter_name(slot.record) }} · {{ slot.record.created_at|shorttime }}</small>{% else %}<small>{{ card.period_label }}</small>{% endif %}</div>{% endfor %}</div>{% endif %}
   </div>
   <div class="point-card-bottom">{% if card.point.frequency == 'daily2' %}<span class="completion-mark {{ 'muted-mark' if card.status != 'done' }}">{{ icon('circle-check' if card.status == 'done' else 'clock') }}</span><span>{{ card.period_label }}<small>已完成 {{ done_count }} / {{ slot_count }} 次</small></span>{% elif card.latest %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>{{ reporter_name(card.latest) }}<small>{{ card.latest.created_at|localtime }}</small></span>{% elif card.status == 'done' %}<span class="completion-mark">{{ icon('circle-check') }}</span><span>本期已完成<small>已由其他巡檢人員完成</small></span>{% else %}<span class="completion-mark muted-mark">{{ icon('clock') }}</span><span class="muted">{{ card.period_label }}<small>{{ '此日未列入巡檢' if card.status == 'not_due' else '本期已截止' if card.missed_count else '本期尚未完成' }}</small></span>{% endif %}</div>
 </article>{% else %}{{ empty('本期沒有應巡點位' if irregular_points else '尚無巡檢點', '可在下方查看不定期或免排程的點位。' if irregular_points else  '可更換日期、樓層或巡檢週期。' if is_patrol_admin else '可更換日期、樓層或巡檢週期。若尚未設置負責點位，請聯絡系統管理員。', 'pin') }}{% endfor %}</div></section>
