@@ -35,19 +35,30 @@
     const listeners = new Set();
     const tabId = uuid();
     let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false };
-    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '';
+    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', privacyHold = false;
     const requests = new Set();
     const abortRequests = () => { for (const controller of requests) controller.abort(); };
     let channel;
     if (options.broadcast !== false && env.BroadcastChannel) {
       channel = new env.BroadcastChannel('patrol-offline-state-v1');
-      channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; abortRequests(); } refresh().catch(() => {}); };
+      channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; abortRequests(); hidePrivateState(); } refresh().catch(() => {}); };
     }
     function announce() {
       for (const fn of listeners) { try { fn(state); } catch (_) { /* One UI subscriber cannot interrupt persistence. */ } }
       if (env.dispatchEvent && env.CustomEvent) env.dispatchEvent(new env.CustomEvent('patrol:offline-state', { detail: state }));
     }
-    function broadcast(type = 'change') { channel?.postMessage({ type }); }
+    function broadcast(type = 'change') { try { channel?.postMessage({ type }); } catch (_) { /* A closed tab cannot undo a durable write. */ } }
+    function storageError(error) {
+      return typeof error?.code === 'string' ? error : fault('storage', error?.name === 'QuotaExceededError' ?
+        '手機儲存空間不足，這筆尚未保存。請先補傳既有紀錄；原表單與照片仍保留。' :
+        '手機離線儲存暫時無法使用；已保存的資料不會刪除，請重試。');
+    }
+    function hidePrivateState(storageUnavailable = false) {
+      state = { ...state, locked: true, prepared: false, identity: null, owner: null, queue: [], receipts: [], pending: 0, blocked: 0,
+        day: '', captureUntil: '', syncUntil: '', storageUnavailable: Boolean(storageUnavailable && !privacyHold),
+        sync: { ...syncState, current: '', running: syncing }, message };
+      announce();
+    }
     function database() {
       if (!idb) return Promise.reject(fault('storage', '此瀏覽器無法使用離線儲存，請在線上打卡。'));
       if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
@@ -56,7 +67,7 @@
           const db = request.result;
           for (const name of STORES) db.createObjectStore(name, { keyPath: name === 'meta' ? 'key' : name === 'manifests' ? 'owner' : 'client_id' });
         };
-        request.onsuccess = () => { const db = request.result; db.onversionchange = () => db.close(); resolve(db); };
+        request.onsuccess = () => { const db = request.result; db.onversionchange = () => { db.close(); dbPromise = null; }; resolve(db); };
         request.onerror = () => { dbPromise = null; reject(fault('storage', '無法開啟手機儲存空間，請檢查瀏覽器設定或改用線上打卡。')); };
         request.onblocked = () => { dbPromise = null; reject(fault('storage', '請關閉其他舊版巡檢分頁，再重試。')); };
       });
@@ -65,10 +76,10 @@
     async function transaction(names, mode, work) {
       const db = await database();
       return new Promise((resolve, reject) => {
-        const tx = db.transaction(names, mode); let result, failure;
+        let tx, result, failure;
+        try { tx = db.transaction(names, mode); } catch (error) { reject(storageError(error)); return; }
         tx.oncomplete = () => resolve(result);
-        tx.onabort = () => reject(failure || fault('storage', tx.error?.name === 'QuotaExceededError' ?
-          '手機儲存空間不足，這筆尚未保存。請先補傳既有紀錄；原表單與照片仍保留。' : '離線資料未能保存，原表單與照片仍保留，請重試。'));
+        tx.onabort = () => reject(storageError(failure || tx.error));
         tx.onerror = () => { /* onabort is authoritative; partial writes are never reported saved. */ };
         const done = value => { result = value; };
         const fail = error => { failure = error; tx.abort(); };
@@ -86,7 +97,7 @@
     }
     function current(data) {
       const active = data.meta.find(item => item.key === 'active');
-      const manifest = active && !active.locked ? data.manifests.find(item => item.owner === active.owner) : null;
+      const manifest = active && !active.locked && !privacyHold ? data.manifests.find(item => item.owner === active.owner) : null;
       return { active, manifest };
     }
     const fresh = manifest => Boolean(manifest && now() + manifest.offset_ms < Date.parse(manifest.capture_until) &&
@@ -100,29 +111,36 @@
       day: row.day, observed_at: row.observed_at, status: row.status, error: row.error || '', retryable: row.retryable,
       note: row.note, is_abnormal: row.is_abnormal, photo_count: row.photos?.length || 0, attempts: row.attempts || 0 });
     async function refresh() {
-      const snapshot = await transaction(STORES, 'readonly', (tx, done) => readAll(tx, done));
+      let snapshot;
+      try { snapshot = await transaction(STORES, 'readonly', (tx, done) => readAll(tx, done)); }
+      catch (error) { hidePrivateState(true); throw error; }
       const { active, manifest } = current(snapshot);
       const owned = manifest ? snapshot.queue.filter(row => row.owner === manifest.owner || row.user_id === manifest.identity.id)
         .sort((a, b) => a.created_ms - b.created_ms || (a.sequence || 0) - (b.sequence || 0) || a.client_id.localeCompare(b.client_id)) : [];
       const queue = owned.map(row => row.owner === manifest.owner ? summary(row) : { ...summary(row), stale_owner: true, status: 'blocked', retryable: false,
         error: '原登入版本或手機綁定已變更。此筆保留供處理，不會使用新授權補傳；請聯絡管理員。' });
-      state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), identity: manifest?.identity || null,
+      state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), storageUnavailable: false, identity: manifest?.identity || null,
         owner: manifest?.owner || null, revision: active?.revision || 0, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
         online: navigator.onLine !== false, pending: queue.length, blocked: queue.filter(row => row.status === 'blocked').length,
         queue, receipts: manifest ? snapshot.receipts.filter(row => row.owner === manifest.owner).map(row => ({ ...row, photos: undefined })) : [],
-        sync: { ...syncState, running: syncing }, message };
+        sync: { ...syncState, current: manifest ? syncState.current : '', running: syncing }, message };
       announce(); return state;
     }
     async function lock(reason = '', expected = null) {
-      const applied = await transaction(['meta', 'manifests'], 'readwrite', (tx, done) => {
+      const hideAndStop = () => { privacyHold = true; epoch++; cancelled = true; abortRequests(); hidePrivateState(); };
+      // An explicit logout hides data and cancels requests before waiting on
+      // storage. A failed lock remains private in this tab until preparation.
+      if (!expected) hideAndStop();
+      let applied;
+      try { applied = await transaction(['meta', 'manifests'], 'readwrite', (tx, done, fail) => {
         const store = tx.objectStore('meta'), request = store.get('active');
-        request.onsuccess = () => {
+        request.onsuccess = () => { try {
           if ((expected?.owner && request.result?.owner !== expected.owner) ||
               (expected?.revision !== undefined && (request.result?.revision || 0) !== expected.revision)) return done(false);
           store.put({ key: 'active', locked: true, owner: null, revision: (request.result?.revision || 0) + 1 });
-          tx.objectStore('manifests').clear(); done(true); };
-      });
-      if (applied) { epoch++; abortRequests(); message = reason; cancelled = true; broadcast('lock'); }
+          tx.objectStore('manifests').clear(); done(true); } catch (error) { fail(error); } };
+      }); } catch (error) { if (expected) hideAndStop(); throw error; }
+      if (applied) { message = reason; if (expected) hideAndStop(); else hidePrivateState(); broadcast('lock'); }
       return refresh();
     }
     async function network(url, init = {}, timeout = connectTimeout) {
@@ -173,12 +191,16 @@
       const manifest = { ...json, offset_ms: offsetMs, prepared_ms: receivedMs };
       await transaction(['meta', 'manifests'], 'readwrite', (tx, done, fail) => {
         const store = tx.objectStore('meta'), request = store.get('active');
-        request.onsuccess = () => {
+        request.onsuccess = () => { try {
           if ((request.result?.revision || 0) !== revision) return fail(fault('owner', '帳號狀態已變更，請重新準備。'));
           tx.objectStore('manifests').put(manifest);
           store.put({ key: 'active', owner: manifest.owner, locked: false, revision: revision + 1 }); done(true);
-        };
+        } catch (error) { fail(error); } };
       });
+      // Logout can begin after this write transaction starts. Its memory
+      // privacy hold must survive even if the following lock write fails.
+      if (startEpoch !== epoch) throw fault('owner', '帳號狀態已變更，請重新登入後準備離線資料。');
+      privacyHold = false;
       message = '今日離線資料已備妥。未上傳的紀錄只保留在這支手機。';
       if (!syncing) syncState = {};
       broadcast(); return refresh();
@@ -195,7 +217,8 @@
     async function enqueue(input) {
       const photos = Array.from(input.photos || []); validatePhotos(photos);
       const note = String(input.note || '').replace(/\r\n?/g, '\n').trim();
-      if (note.length > 2000) throw fault('note', '巡檢備註最多 2,000 字。');
+      if (Array.from(note).length > 2000) throw fault('note', '巡檢備註最多 2,000 字。');
+      if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ud800-\udfff]/u.test(note)) throw fault('note', '巡檢備註含無法儲存的字元，請移除特殊控制字元後重試。');
       const client_id = uuid(), captured_device_at = new Date(now()).toISOString();
       const saved = await transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
         const { manifest } = current(data);
@@ -230,7 +253,11 @@
       }));
       message = '已暫存此手機，尚未上傳。請保持頁面開啟，連線後按「同步待傳紀錄」。';
       if (!syncing) syncState = {};
-      broadcast(); await refresh(); return saved;
+      broadcast();
+      // The transaction has committed. A later display read must not turn a
+      // durable save into a reported failure or encourage a duplicate retry.
+      try { await refresh(); } catch (_) { /* refresh already hides unreadable private state. */ }
+      return saved;
     }
     async function remove(client_id, confirmation) {
       if (confirmation !== true) throw fault('confirm', '刪除本機紀錄需要明確確認。');
@@ -245,20 +272,23 @@
       message = '已刪除這筆尚未確認的本機資料。'; syncState = {}; broadcast(); return refresh();
     }
     async function lease(owner, release = false) {
-      return transaction(['meta'], 'readwrite', (tx, done) => {
+      return transaction(['meta'], 'readwrite', (tx, done, fail) => {
         const store = tx.objectStore('meta'), request = store.get('sync');
-        request.onsuccess = () => {
+        request.onsuccess = () => { try {
           const previous = request.result;
           if (release) { if (previous?.tab === tabId) store.delete('sync'); done(true); }
           else if (!previous || previous.until < now() || previous.tab === tabId) { store.put({ key: 'sync', tab: tabId, owner, until: now() + uploadTimeout + 15000 }); done(true); }
           else done(false);
-        };
+        } catch (error) { fail(error); } };
       });
     }
     async function ownedEntry(client_id, owner, mutation) {
       return transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
         const { manifest } = current(data), row = data.queue.find(item => item.client_id === client_id);
-        if (!manifest || manifest.owner !== owner || row?.owner !== owner) return fail(fault('owner', '帳號已變更，已停止補傳。'));
+        if (!manifest || manifest.owner !== owner || (row && row.owner !== owner)) return fail(fault('owner', '帳號已變更，已停止補傳。'));
+        // A suspended tab may resume after another tab acquired its expired
+        // lease and acknowledged this UUID. A missing row is not an auth loss.
+        if (!row) return done(null);
         if (mutation) mutation(tx, row); done(row);
       }));
     }
@@ -270,7 +300,7 @@
       syncing = true; cancelled = false; const started = now();
       let owner, revision, leaseHeld = false; const startEpoch = epoch;
       syncState = { total: state.pending, processed: 0, saved: 0, failed: 0, elapsed: 0, current: '', phase: 'checking', cancelled: false };
-      const ticker = timers.setInterval(() => { syncState.elapsed = Math.floor((now() - started) / 1000); state = { ...state, sync: { ...syncState, running: syncing } }; announce(); }, 1000);
+      const ticker = timers.setInterval(() => { syncState.elapsed = Math.floor((now() - started) / 1000); state = { ...state, sync: { ...syncState, current: state.locked ? '' : syncState.current, running: syncing } }; announce(); }, 1000);
       try {
         await refresh();
         owner = state.owner; revision = state.revision;
@@ -292,6 +322,7 @@
           if (cancelled || epoch !== startEpoch) break;
           if (!await lease(owner)) break;
           const row = await ownedEntry(id, owner, (tx, item) => { item.status = 'pending'; item.attempts++; tx.objectStore('queue').put(item); });
+          if (!row) { syncState.processed++; continue; }
           syncState.current = row.code; syncState.phase = 'uploading'; await refresh();
           if (cancelled || epoch !== startEpoch) break;
           const Form = options.FormData || env.FormData, body = new Form();
@@ -303,16 +334,16 @@
             const acknowledged = response.ok && json?.ok === true && ['saved', 'already_synced'].includes(json.status) && json.client_id === id;
             if (acknowledged) {
               // ACK is durable together with removal. Losing this transaction safely retries the same UUID.
-              await transaction(['queue', 'receipts'], 'readwrite', (tx, done) => {
+              await transaction(['queue', 'receipts'], 'readwrite', (tx, done, fail) => {
                 const request = tx.objectStore('queue').get(id);
-                request.onsuccess = () => {
+                request.onsuccess = () => { try {
                   if (request.result?.owner === owner) {
                     tx.objectStore('receipts').put({ client_id: id, owner, token: row.token, slot: row.slot, day: row.day,
                       code: row.code, name: row.name, stage: row.stage, observed_at: row.observed_at, ack: json, received_ms: now() });
                     tx.objectStore('queue').delete(id);
                   }
                   done(true);
-                };
+                } catch (error) { fail(error); } };
               });
               syncState.saved++;
             } else {
@@ -342,8 +373,11 @@
       }
       finally {
         syncing = false; syncState.cancelled = cancelled; syncState.phase = 'idle'; timers.clearInterval(ticker);
-        if (leaseHeld) await lease(owner, true);
-        broadcast(); await refresh();
+        try { if (leaseHeld) await lease(owner, true); }
+        catch (_) { message = '補傳已停止，但手機儲存狀態暫時無法讀取；請重試。未收到確認的資料仍保留。'; syncState.errorCode = 'storage'; }
+        broadcast();
+        try { await refresh(); }
+        catch (_) { syncState.errorCode = 'storage'; hidePrivateState(true); }
       }
       return state;
     }
@@ -386,14 +420,28 @@
     const text = (hook, value) => all(hook).forEach(el => { el.textContent = value; });
     const query = new URLSearchParams(location.search);
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
-      pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress;
+      pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
+      navigationAllowed = false, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false;
     const form = one('checkin'), photosInput = form?.elements.namedItem('photos');
+    core.allowNavigation = () => { navigationAllowed = true; };
+    const draftPresent = target => target && !target.hasAttribute('data-offline-stored') && (
+      target.elements.namedItem('note')?.value || target.elements.namedItem('is_abnormal')?.checked ||
+      target.elements.namedItem('photos')?.files.length || target.dataset.offlineSaving === 'true' ||
+      target === form && target.dataset.submitting === 'true');
+    const hasDraft = () => draftPresent(form) || draftPresent(document.getElementById('inspection-form'));
+    for (const event of ['input', 'change']) document.getElementById('inspection-form')?.addEventListener(event, event => { delete event.currentTarget.dataset.offlineStored; });
+    window.addEventListener('beforeunload', event => {
+      const normal = document.getElementById('inspection-form');
+      if (navigationAllowed || normal?.dataset.submitting === 'true' && normal.dataset.offlineSaving !== 'true' || !hasDraft()) return;
+      event.preventDefault(); event.returnValue = '';
+    });
     const slotText = slot => slot === 'am' ? '第 1 次' : slot === 'pm' ? '第 2 次' : '本次';
     const stageText = stage => ({ execute: '執行簽到', inspect: '巡檢', visit: '直接簽到' }[stage] || '巡檢');
     const timeText = iso => { try { return new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); } catch { return iso; } };
     const reportError = error => { text('status', error.message || '操作未完成，原有資料仍保留。'); if (one('status')) one('status').dataset.state = 'error'; one('status')?.focus(); };
     async function showPoint() {
       const run = ++pointGeneration, section = one('point'); if (!section) return;
+      if (latestState?.storageUnavailable) { section.hidden = true; if (one('save')) one('save').disabled = true; return; }
       const point = selectedToken ? await core.getPoint(selectedToken) : null;
       if (run !== pointGeneration) return;
       section.hidden = !selectedToken;
@@ -414,11 +462,13 @@
       text('stage', point ? stageText(point.stage) : '');
       text('round', roundLabel);
       if (form) form.dataset.pointPath = '/c/' + selectedToken;
-      if (one('fields')) one('fields').disabled = !eligible;
-      if (one('save')) one('save').disabled = !eligible;
+      const saving = form?.dataset.submitting === 'true';
+      if (one('fields')) one('fields').disabled = !eligible || saving;
+      if (one('save')) one('save').disabled = !eligible || saving;
       if (one('report-fields')) { one('report-fields').hidden = !point || point.stage !== 'inspect'; for (const field of one('report-fields').querySelectorAll('input,textarea')) field.disabled = point?.stage !== 'inspect'; }
     }
     function render(state) {
+      latestState = state;
       text('count', state.pending ? String(state.pending) : '');
       text('network', !state.online ? '離線' : state.sync?.running ? '補傳中' : state.pending ? '待補傳' : state.prepared ? '已備妥' : '離線準備');
       if (normalProgress && !normalProgress.saving) {
@@ -428,8 +478,10 @@
         normalProgress.cancel.disabled = !state.sync?.running;
       }
       if (!shell) return;
-      if (viewOwner && viewOwner !== state.owner) { selectedToken = null; selectedOwner = null; selectedSnapshot = null; form?.reset(); resetPhotos(); if (one('saved')) one('saved').hidden = true; }
-      viewOwner = state.owner;
+      if (!state.storageUnavailable) {
+        if (viewOwner && viewOwner !== state.owner) { selectedToken = null; selectedOwner = null; selectedSnapshot = null; form?.reset(); resetPhotos(); if (one('saved')) one('saved').hidden = true; }
+        viewOwner = state.owner;
+      }
       text('account', state.identity ? `${state.identity.name} · ${state.identity.role_label || stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : '尚未解鎖離線資料');
       text('validity', state.prepared ? `可暫存至 ${timeText(state.captureUntil)}；補傳期限 ${timeText(state.syncUntil)}` : state.locked ? '請先連線登入原帳號，並準備今日資料。' : '今日資料已到期。待補傳紀錄仍保留，請連線補傳。');
       text('status', state.message || (!state.online ? '目前離線。暫存不等於打卡完成，請連線後補傳。' : state.prepared ? '今日離線資料已備妥。' : '請先準備今日離線資料。'));
@@ -438,7 +490,7 @@
       text('queue-summary', state.sync?.running ? `正在處理 ${state.sync.processed}/${state.sync.total} 筆 · 已確認 ${state.sync.saved} 筆 · ${state.sync.elapsed} 秒` : `${state.pending} 筆待補傳${state.blocked ? `，其中 ${state.blocked} 筆需處理` : ''}`);
       if (one('sync')) one('sync').disabled = state.locked || !state.pending || state.sync?.running;
       if (one('cancel-sync')) one('cancel-sync').hidden = !state.sync?.running;
-      if (one('prepare')) one('prepare').disabled = !state.online || state.sync?.running;
+      if (one('prepare')) one('prepare').disabled = preparing || !state.online || state.sync?.running;
       if (one('login')) one('login').hidden = !state.locked;
       if (one('empty')) one('empty').hidden = state.pending > 0;
       if (savedClientId && one('saved')) {
@@ -473,41 +525,108 @@
       showPoint().catch(reportError);
     }
     core.subscribe(render);
-    function resetPhotos() { previewURLs.forEach(url => URL.revokeObjectURL(url)); previewURLs = []; one('photo-previews')?.replaceChildren(); }
-    photosInput?.addEventListener('change', () => {
-      resetPhotos(); const files = Array.from(photosInput.files);
+    function releasePreviews() { previewURLs.forEach(url => URL.revokeObjectURL(url)); previewURLs = []; one('photo-previews')?.replaceChildren(); }
+    function resetPhotos() {
+      releasePreviews(); selectedPhotos = []; photosInput?.setCustomValidity('');
+      photosInput?.setAttribute('aria-invalid', 'false'); text('photo-status', '');
+      if (one('clear-photos')) one('clear-photos').hidden = true;
+    }
+    function setPhotos(files) {
+      const transfer = new DataTransfer(); files.forEach(file => transfer.items.add(file)); photosInput.files = transfer.files;
+      if (photosInput.files.length !== files.length) throw new Error('File selection was not updated');
+    }
+    if (photosInput) {
       try {
-        validatePhotos(files); photosInput.setCustomValidity(''); text('photo-status', files.length ? `已選 ${files.length} 張，按 OK 後才會暫存。` : '');
-        for (const file of files) {
-          const image = document.createElement('img'), url = URL.createObjectURL(file); previewURLs.push(url); image.src = url; image.alt = file.name; one('photo-previews')?.append(image);
+        const probe = photosInput.cloneNode(false), transfer = new DataTransfer();
+        transfer.items.add(new File(['x'], 'probe.jpg', { type: 'image/jpeg' })); probe.files = transfer.files;
+        canEditPhotos = probe.files.length === 1;
+      } catch { /* The native picker remains available on older mobile browsers. */ }
+    }
+    function renderPhotos() {
+      if (!photosInput) return;
+      releasePreviews(); const files = Array.from(photosInput.files); selectedPhotos = files;
+      let error = '';
+      try { validatePhotos(files); } catch (failure) { error = failure.message; }
+      photosInput.setCustomValidity(error); photosInput.setAttribute('aria-invalid', String(Boolean(error)));
+      text('photo-status', error || (files.length ? `已選 ${files.length} 張，按 OK 後才會暫存。${canEditPhotos ? '可繼續加入或移除照片。' : '重新選取會取代目前照片。'}` : ''));
+      if (one('clear-photos')) one('clear-photos').hidden = !files.length;
+      files.slice(0, 6).forEach((file, index) => {
+        const figure = document.createElement('figure'), caption = document.createElement('figcaption'); caption.textContent = file.name; caption.title = file.name;
+        const placeholder = document.createElement('small'); placeholder.className = 'offline-photo-placeholder'; placeholder.textContent = '無法預覽，請核對照片檔案';
+        figure.append(placeholder);
+        if (photoAllowed(file) && file.size > 0 && file.size <= 8 * 1024 * 1024) {
+          const image = document.createElement('img'), url = URL.createObjectURL(file); previewURLs.push(url);
+          image.alt = `已選照片 ${index + 1}`; image.onload = () => { placeholder.hidden = true; };
+          image.onerror = () => { image.remove(); placeholder.hidden = false; };
+          image.src = url; figure.prepend(image);
         }
-      } catch (error) { photosInput.setCustomValidity(error.message); text('photo-status', error.message); }
+        figure.append(caption);
+        if (canEditPhotos) {
+          const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button button-secondary button-small';
+          remove.textContent = '移除'; remove.setAttribute('aria-label', `移除照片 ${index + 1}：${file.name}`);
+          remove.addEventListener('click', () => {
+            try { setPhotos(files.filter((_, current) => current !== index)); renderPhotos(); photosInput.focus(); }
+            catch { canEditPhotos = false; renderPhotos(); text('photo-status', '此瀏覽器不支援逐張移除，請清空後重新選擇。'); }
+          }); figure.append(remove);
+        }
+        one('photo-previews')?.append(figure);
+      });
+    }
+    photosInput?.addEventListener('change', () => {
+      if (canEditPhotos && selectedPhotos.length) {
+        try { setPhotos([...selectedPhotos, ...photosInput.files]); }
+        catch { canEditPhotos = false; }
+      }
+      renderPhotos();
     });
+    one('clear-photos')?.addEventListener('click', () => { photosInput.value = ''; renderPhotos(); photosInput.focus(); });
+    form?.addEventListener('reset', () => { resetPhotos(); });
     form?.addEventListener('submit', async event => {
       event.preventDefault(); if (form.dataset.submitting === 'true') return;
       form.dataset.submitting = 'true'; const submit = one('save'); if (submit) submit.disabled = true;
+      if (one('fields')) one('fields').disabled = true;
+      const captureOwner = selectedSnapshot?.point.owner || selectedOwner;
       try {
-        const row = await core.enqueue({ token: selectedToken, owner: selectedSnapshot?.point.owner || selectedOwner, expected: selectedSnapshot?.expected,
+        const row = await core.enqueue({ token: selectedToken, owner: captureOwner, expected: selectedSnapshot?.expected,
           note: form.elements.namedItem('note')?.disabled ? '' : form.elements.namedItem('note')?.value,
           is_abnormal: !form.elements.namedItem('is_abnormal')?.disabled && form.elements.namedItem('is_abnormal')?.checked,
           photos: photosInput?.disabled ? [] : photosInput?.files || [] });
         form.reset(); resetPhotos(); text('photo-status', ''); selectedToken = null; selectedSnapshot = null; savedClientId = row.client_id;
+        if (latestState?.owner !== captureOwner) {
+          if (one('saved')) one('saved').hidden = true;
+          text('status', '本筆已暫存在手機。請連線登入原帳號後，到同步查看。');
+          return;
+        }
         if (one('saved')) one('saved').hidden = false;
         text('saved-message', `${row.code} · ${slotText(row.slot)} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。`);
         await showPoint(); one('saved')?.scrollIntoView({ block: 'nearest' });
       } catch (error) { reportError(error); }
-      finally { delete form.dataset.submitting; await showPoint(); }
+      finally { delete form.dataset.submitting; await showPoint().catch(reportError); }
     }, true);
-    one('prepare')?.addEventListener('click', () => core.prepare().catch(reportError));
+    one('prepare')?.addEventListener('click', async () => {
+      if (preparing) return;
+      preparing = true; const button = one('prepare'); button.disabled = true; button.setAttribute('aria-busy', 'true');
+      try { await core.prepare(); } catch (error) { reportError(error); }
+      finally { preparing = false; button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; }
+    });
     one('sync')?.addEventListener('click', () => core.sync().catch(reportError));
     one('cancel-sync')?.addEventListener('click', () => core.cancelSync());
-    one('close-point')?.addEventListener('click', () => { if (form && (form.elements.namedItem('note')?.value || form.elements.namedItem('is_abnormal')?.checked || photosInput?.files.length) && !confirm('離開點位會放棄尚未暫存的內容，確定離開？')) return; selectedToken = null; selectedSnapshot = null; form?.reset(); resetPhotos(); showPoint(); });
-    document.addEventListener('submit', event => {
+    one('close-point')?.addEventListener('click', () => { if (form?.dataset.submitting === 'true') return; if (draftPresent(form) && !confirm('離開點位會放棄尚未暫存的內容，確定離開？')) return; selectedToken = null; selectedSnapshot = null; form?.reset(); resetPhotos(); showPoint().catch(reportError); });
+    document.addEventListener('submit', async event => {
       const logout = event.target; if (!(logout instanceof HTMLFormElement) || new URL(logout.action, location.origin).pathname !== '/logout') return;
-      event.preventDefault(); event.stopImmediatePropagation(); core.lock().finally(() => HTMLFormElement.prototype.submit.call(logout));
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (logout.dataset.offlineLoggingOut === 'true') return;
+      if (hasDraft() && !confirm('目前有尚未保存的內容，確定放棄並登出？')) return;
+      const buttons = [...logout.elements].filter(el => el instanceof HTMLButtonElement);
+      const original = buttons.map(button => ({ button, disabled: button.disabled }));
+      logout.dataset.offlineLoggingOut = 'true'; for (const button of buttons) button.disabled = true;
+      try { await core.lock(); core.allowNavigation(); HTMLFormElement.prototype.submit.call(logout); }
+      catch {
+        let notice = document.querySelector('[data-offline-logout-error]');
+        if (!notice) { notice = document.createElement('p'); notice.dataset.offlineLogoutError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; (document.querySelector('main') || body).prepend(notice); }
+        notice.textContent = '尚未登出：無法鎖定本機暫存，請重試登出。'; notice.focus();
+      } finally { delete logout.dataset.offlineLoggingOut; for (const item of original) item.button.disabled = item.disabled; }
     }, true);
-    let latestState;
-    core.subscribe(value => { latestState = value; });
     document.addEventListener('submit', async event => {
       const normal = event.target;
       if (!(normal instanceof HTMLFormElement) || normal.id !== 'inspection-form') return;
@@ -520,6 +639,10 @@
       const token = safePath(target)?.slice(3);
       const buttons = Array.from(normal.elements).filter(el => el instanceof HTMLButtonElement && el.type === 'submit');
       const saved = buttons.map(button => ({ button, disabled: button.disabled, content: button.innerHTML }));
+      const controls = [...normal.elements].filter(el => ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && el.type !== 'hidden');
+      const originalControls = controls.map(control => ({ control, disabled: control.disabled }));
+      const captureOwner = latestState?.owner; let durableEntry;
+      delete normal.dataset.offlineStored;
       normal.dataset.offlineSaving = 'true'; normal.dataset.submitting = 'true'; normal.setAttribute('aria-busy', 'true');
       for (const button of buttons) { button.disabled = true; button.textContent = '正在保存／送出…'; }
       const panel = document.createElement('div'), progress = document.createElement('p'), cancel = document.createElement('button');
@@ -534,19 +657,24 @@
       if (quickAction) quickAction.after(panel); else normal.before(panel);
       normalProgress = { panel, status: progress, cancel, saving: true }; panel.scrollIntoView({ block: 'nearest' });
       try {
-        const entry = await core.enqueue({ token, note: value('note'), is_abnormal: Boolean(normal.elements.namedItem('is_abnormal')?.checked),
+        const input = { token, note: value('note'), is_abnormal: Boolean(normal.elements.namedItem('is_abnormal')?.checked),
           photos: normal.elements.namedItem('photos')?.files || [], expected: { user_id: body.dataset.offlineUser, auth_version: body.dataset.offlineVersion,
             day: value('personal_day'), slot: value('slot'), stage: value('stage'),
-            frequency: value('frequency'), workflow_mode: value('workflow_mode'), period_key: value('period_key'), revision: value('point_revision') } });
+            frequency: value('frequency'), workflow_mode: value('workflow_mode'), period_key: value('period_key'), revision: value('point_revision') } };
+        for (const control of controls) control.disabled = true;
+        const entry = durableEntry = await core.enqueue(input);
         // Files are cleared only after the atomic local write has completed.
-        normal.reset();
+        normal.dataset.offlineStored = 'true'; normal.reset();
         normalProgress.saving = false;
+        if (latestState?.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
         if (navigator.onLine !== false) await core.sync({ client_id: entry.client_id });
         const updated = await core.getState(), receipt = updated.receipts.find(item => item.client_id === entry.client_id);
+        if (updated.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
         const receiptURL = receipt?.ack?.receipt_url;
         if (typeof receiptURL === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(receiptURL)) location.assign(receiptURL);
         else location.assign('/offline?queued=' + encodeURIComponent(entry.client_id));
       } catch (error) {
+        if (durableEntry) { core.allowNavigation(); location.assign('/offline?queued=' + encodeURIComponent(durableEntry.client_id)); return; }
         let notice = normal.parentElement.querySelector('[data-offline-form-error]');
         if (!notice) { notice = document.createElement('p'); notice.dataset.offlineFormError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; normal.before(notice); }
         notice.textContent = error.message || '無法保存，原本的備註與照片仍保留在表單中。'; notice.focus();
@@ -554,12 +682,13 @@
         normalProgress = null; panel.remove();
         delete normal.dataset.offlineSaving; delete normal.dataset.submitting; normal.removeAttribute('aria-busy');
         for (const item of saved) { item.button.disabled = item.disabled; item.button.innerHTML = item.content; }
+        for (const item of originalControls) item.control.disabled = item.disabled;
       }
     }, true);
     window.addEventListener('online', () => core.getState().catch(reportError));
     window.addEventListener('offline', () => { core.cancelSync(); core.getState().catch(reportError); });
-    window.addEventListener('pageshow', () => core.getState().catch(() => {}));
-    window.addEventListener('pagehide', resetPhotos);
+    window.addEventListener('pageshow', () => { navigationAllowed = false; renderPhotos(); core.getState().catch(() => {}); });
+    window.addEventListener('pagehide', releasePreviews);
     (async () => {
       if (shell) { await core.getState(); await showPoint(); return; }
       if (body.dataset.offlineWorkspace !== 'true' || !body.dataset.offlineUser) { await core.lock(); return; }

@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync(require.resolve('../static/offline-sw.js'), 'utf8');
 const origin = 'https://patrol.test';
-function worker() {
+function worker(options = {}) {
   const hooks = {}, stores = new Map(), requests = [], writes = [];
   const key = value => typeof value === 'string' ? new URL(value, origin).pathname : new URL(value.url).pathname;
   let responder = request => Promise.resolve(new Response(key(request) === '/offline' ? 'GENERIC OFFLINE SHELL' : 'asset', { status: 200 }));
@@ -14,7 +14,8 @@ function worker() {
   } };
   const self = { location: new URL(origin), navigator: { onLine: true }, addEventListener(name, fn) { hooks[name] = fn; }, skipWaiting: async () => {}, clients: { claim: async () => {} } };
   class WorkerRequest extends Request { constructor(value, init) { super(typeof value === 'string' ? new URL(value, origin) : value, init); } }
-  vm.runInNewContext(source, { self, caches, URL, Request: WorkerRequest, Response, AbortController, setTimeout, clearTimeout,
+  vm.runInNewContext(source, { self, caches, URL, Request: WorkerRequest, Response, AbortController,
+    setTimeout: (fn, delay) => setTimeout(fn, options.timeoutMs || delay), clearTimeout,
     fetch(request, init) { requests.push(request); return responder(request, init); } });
   async function lifecycle(name, extras = {}) { let waited; hooks[name]({ ...extras, waitUntil(promise) { waited = promise; } }); await waited; }
   async function fetchPage(path, { method = 'GET', mode = 'navigate' } = {}) {
@@ -66,4 +67,29 @@ test('failed updated shell installation preserves the existing usable offline ca
   await assert.rejects(w.lifecycle('install'));
   assert.equal(await w.stores.get('patrol-offline-shell-20261106-v1').get('/offline').text(), 'previous usable shell');
   assert.equal(w.writes.length, 0);
+});
+
+test('navigation timeout covers a stalled response body after headers arrived', async () => {
+  const w = worker({ timeoutMs: 15 }); await w.lifecycle('install'); const before = w.writes.length;
+  w.respond((_, init) => Promise.resolve(new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new TextEncoder().encode('PARTIAL PRIVATE HTML'));
+    init.signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+  } }))));
+  let deadline;
+  const result = await Promise.race([
+    w.fetchPage('/c/test-token').then(response => response.text()),
+    new Promise(resolve => { deadline = setTimeout(() => resolve('BODY NEVER FINISHED'), 150); })
+  ]);
+  clearTimeout(deadline);
+  assert.equal(result, 'GENERIC OFFLINE SHELL'); assert.equal(w.writes.length, before);
+});
+
+test('buffered online navigation returns the original response with its redirect metadata', async () => {
+  const w = worker(); await w.lifecycle('install');
+  const original = new Response('LOGIN PAGE', { headers: { 'Content-Type': 'text/html', 'Content-Security-Policy': "default-src 'self'" } });
+  Object.defineProperties(original, { url: { value: origin + '/login' }, redirected: { value: true } });
+  w.respond(() => Promise.resolve(original));
+  const result = await w.fetchPage('/c/test-token');
+  assert.equal(result, original); assert.equal(result.url, origin + '/login'); assert.equal(result.redirected, true);
+  assert.equal(await result.text(), 'LOGIN PAGE'); assert.equal(result.headers.get('Content-Security-Policy'), "default-src 'self'");
 });

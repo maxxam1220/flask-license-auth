@@ -1,7 +1,7 @@
 /* Run with fake-indexeddb on NODE_PATH; no live service or production data. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { indexedDB, IDBObjectStore } = require('fake-indexeddb');
+const { indexedDB, IDBObjectStore, IDBDatabase } = require('fake-indexeddb');
 const { createCore, validatePhotos } = require('../static/offline.js');
 const stamp = Date.parse('2026-11-06T01:10:00Z');
 const response = (json, status = 200) => new Response(JSON.stringify(json), { status, headers: { 'Content-Type': 'application/json' } });
@@ -285,4 +285,164 @@ test('stale sync authentication failure cannot clear a newer preparation for the
   const state = await second.core.getState(); assert.equal(state.owner, h.state.manifest.owner);
   assert.equal(state.locked, false); assert.equal(state.prepared, true); assert.equal(state.pending, 1);
   assert.equal(h.state.uploads.length, 0);
+});
+
+test('a committed enqueue stays successful when its following display read fails', async t => {
+  const h = await prepared(t), originalAdd = IDBObjectStore.prototype.add, originalRead = IDBObjectStore.prototype.getAll;
+  let failRead = false;
+  IDBObjectStore.prototype.add = function (...args) {
+    if (this.name === 'queue') this.transaction.addEventListener('complete', () => { failRead = true; });
+    return originalAdd.apply(this, args);
+  };
+  IDBObjectStore.prototype.getAll = function (...args) {
+    if (failRead && this.transaction.mode === 'readonly') throw new DOMException('temporarily unavailable', 'UnknownError');
+    return originalRead.apply(this, args);
+  };
+  let entry;
+  try { entry = await h.core.enqueue({ ...input, photos: [new File(['keep'], 'p.jpg', { type: 'image/jpeg' })] }); }
+  finally { IDBObjectStore.prototype.add = originalAdd; IDBObjectStore.prototype.getAll = originalRead; }
+  const [saved] = await rows(h.dbName, 'queue');
+  assert.equal(saved.client_id, entry.client_id); assert.equal(await saved.photos[0].blob.text(), 'keep');
+  assert.deepEqual((await h.core.getPoint('test-point')).availableSlots, ['pm']);
+});
+
+test('storage failure during sync cleanup always publishes a stopped state', async t => {
+  const h = await prepared(t); const entry = await h.core.enqueue(input);
+  const originalPut = IDBObjectStore.prototype.put, originalTransaction = IDBDatabase.prototype.transaction;
+  let failStorage = false, latest;
+  h.core.subscribe(value => { latest = value; });
+  IDBObjectStore.prototype.put = function (...args) {
+    if (this.name === 'receipts') this.transaction.addEventListener('complete', () => { failStorage = true; });
+    return originalPut.apply(this, args);
+  };
+  IDBDatabase.prototype.transaction = function (...args) {
+    if (failStorage) throw new DOMException('temporarily unavailable', 'UnknownError');
+    return originalTransaction.apply(this, args);
+  };
+  let result;
+  try { result = await h.core.sync(); }
+  finally { IDBObjectStore.prototype.put = originalPut; IDBDatabase.prototype.transaction = originalTransaction; }
+  assert.equal(result.sync.running, false); assert.equal(latest.sync.running, false);
+  assert.equal(result.sync.errorCode, 'storage');
+  assert.equal((await rows(h.dbName, 'receipts'))[0].client_id, entry.client_id);
+  assert.equal((await rows(h.dbName, 'queue')).length, 0);
+});
+
+test('notes reject server-invalid controls and lone surrogates before consuming a slot', async t => {
+  const h = await prepared(t);
+  for (const note of ['text\u0000bad', 'text\u000bbad', 'text\u007fbad', 'text\ud800bad', 'text\udc00bad']) {
+    await assert.rejects(h.core.enqueue({ ...input, note }), { code: 'note' });
+  }
+  assert.equal((await rows(h.dbName, 'queue')).length, 0);
+  const note = '備註\t第一行\n第二行😀';
+  await h.core.enqueue({ ...input, note });
+  assert.equal((await rows(h.dbName, 'queue'))[0].note, note);
+});
+
+test('failed ACK persistence retains the UUID and photo, then replays the server receipt safely', async t => {
+  const h = await prepared(t), originalPut = IDBObjectStore.prototype.put;
+  const entry = await h.core.enqueue({ ...input, photos: [new File(['keep'], 'p.jpg', { type: 'image/jpeg' })] });
+  IDBObjectStore.prototype.put = function (...args) {
+    if (this.name === 'receipts') throw new DOMException('full', 'QuotaExceededError');
+    return originalPut.apply(this, args);
+  };
+  try { const result = await h.core.sync(); assert.equal(result.sync.running, false); assert.equal(result.sync.saved, 0); }
+  finally { IDBObjectStore.prototype.put = originalPut; }
+  const [pending] = await rows(h.dbName, 'queue');
+  assert.equal(pending.client_id, entry.client_id); assert.equal(await pending.photos[0].blob.text(), 'keep');
+  assert.equal((await rows(h.dbName, 'receipts')).length, 0);
+  h.state.sync = received => response({ ok: true, status: 'already_synced', client_id: received.client_id });
+  await h.core.sync();
+  assert.equal(h.state.uploads[0].entry.client_id, h.state.uploads[1].entry.client_id);
+  assert.equal((await rows(h.dbName, 'queue')).length, 0); assert.equal((await rows(h.dbName, 'receipts')).length, 1);
+});
+
+test('failed logout lock stops in-flight upload and hides data until a successful retry', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let reached, latest;
+  const uploading = new Promise(resolve => { reached = resolve; });
+  h.state.sync = (_, init) => { reached(); return waitAbort(init); };
+  h.core.subscribe(value => { latest = value; });
+  const pending = h.core.sync(); await uploading;
+  const originalPut = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (...args) {
+    if (this.name === 'meta' && args[0]?.key === 'active') throw new DOMException('full', 'QuotaExceededError');
+    return originalPut.apply(this, args);
+  };
+  try { await assert.rejects(h.core.lock(), { code: 'storage' }); }
+  finally { IDBObjectStore.prototype.put = originalPut; }
+  await pending;
+  assert.equal(latest.locked, true); assert.equal(latest.identity, null); assert.equal(latest.pending, 0); assert.equal(latest.sync.running, false);
+  assert.equal(latest.storageUnavailable, false);
+  assert.equal((await h.core.getState()).locked, true); assert.equal(await h.core.getPoint('test-point'), null);
+  assert.equal((await rows(h.dbName, 'queue')).length, 1);
+  await h.core.lock();
+  const reopened = harness({ databaseName: h.dbName }); t.after(() => reopened.core.close());
+  assert.equal((await reopened.core.getState()).locked, true);
+  await h.core.prepare(); assert.equal((await h.core.getState()).pending, 1);
+});
+
+test('a matching ACK arriving after cancellation remains authoritative without a second upload', async t => {
+  const h = await prepared(t); const entry = await h.core.enqueue(input);
+  h.state.sync = received => { h.core.cancelSync(); return response({ ok: true, status: 'saved', client_id: received.client_id }); };
+  const result = await h.core.sync();
+  assert.equal(result.sync.cancelled, true); assert.equal(result.sync.running, false);
+  assert.equal((await rows(h.dbName, 'queue')).length, 0);
+  assert.equal((await rows(h.dbName, 'receipts'))[0].client_id, entry.client_id);
+  await h.core.sync(); assert.equal(h.state.uploads.length, 1);
+});
+
+test('storage read failures hide private state and never reveal a prior account queue', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let latest; h.core.subscribe(value => { latest = value; });
+  const originalRead = IDBObjectStore.prototype.getAll;
+  IDBObjectStore.prototype.getAll = function () { throw new DOMException('temporarily unavailable', 'UnknownError'); };
+  try { await assert.rejects(h.core.getState(), { code: 'storage' }); }
+  finally { IDBObjectStore.prototype.getAll = originalRead; }
+  assert.equal(latest.identity, null); assert.equal(latest.owner, null); assert.equal(latest.pending, 0); assert.deepEqual(latest.queue, []);
+  assert.equal(latest.storageUnavailable, true);
+  const second = harness({ databaseName: h.dbName }); t.after(() => second.core.close());
+  second.state.manifest = manifest({ owner: 'u2v1b22inspectorgeneral', identity: { id: 2, auth_version: 1, binding_id: 22, name: 'Other', role: 'inspector', category: 'general' } });
+  await second.core.prepare();
+  const state = await h.core.getState(); assert.equal(state.identity.id, 2); assert.equal(state.pending, 0);
+  assert.equal(state.storageUnavailable, false);
+  assert.equal((await rows(h.dbName, 'queue')).length, 1);
+});
+
+test('a resumed tab skips a UUID already acknowledged by another tab after lease expiry', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let reached, release;
+  const checking = new Promise(resolve => { reached = resolve; });
+  h.state.status = () => new Promise(resolve => { release = () => resolve(response({ ok: true, owner: h.state.manifest.owner, csrf_token: 'fresh' })); reached(); });
+  const oldSync = h.core.sync(); await checking;
+  const second = harness({ databaseName: h.dbName }); t.after(() => second.core.close());
+  h.state.now += 46000; second.state.now = h.state.now;
+  await second.core.sync(); assert.equal(second.state.uploads.length, 1);
+  release(); const resumed = await oldSync;
+  assert.equal(h.state.uploads.length, 0); assert.equal(resumed.sync.errorCode, undefined);
+  assert.equal(resumed.locked, false); assert.equal(resumed.pending, 0); assert.equal(resumed.receipts.length, 1);
+});
+
+test('preparation committing during a failed logout cannot clear the privacy hold', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  const originalPut = IDBObjectStore.prototype.put;
+  let locking, started = false;
+  IDBObjectStore.prototype.put = function (...args) {
+    if (this.name === 'manifests' && !started) {
+      started = true; locking = h.core.lock().then(() => null, error => error.code);
+    }
+    if (this.name === 'meta' && args[0]?.key === 'active' && args[0]?.locked === true) throw new DOMException('full', 'QuotaExceededError');
+    return originalPut.apply(this, args);
+  };
+  try {
+    await assert.rejects(h.core.prepare(), { code: 'owner' });
+    assert.equal(await locking, 'storage');
+  } finally { IDBObjectStore.prototype.put = originalPut; }
+  const state = await h.core.getState();
+  assert.equal(state.locked, true); assert.equal(state.identity, null); assert.equal(state.pending, 0);
+  assert.equal(await h.core.getPoint('test-point'), null);
+  assert.equal((await rows(h.dbName, 'queue')).length, 1);
+  await h.core.lock();
+  const reopened = harness({ databaseName: h.dbName }); t.after(() => reopened.core.close());
+  assert.equal((await reopened.core.getState()).locked, true);
 });

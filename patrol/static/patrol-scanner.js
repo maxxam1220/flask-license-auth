@@ -17,6 +17,7 @@
   let pendingPath;
   let vendorLoad;
   let generation = 0;
+  let dismissedGeneration;
   let stream;
   let timer;
   let onTrackEnd;
@@ -111,7 +112,7 @@
       Array.from(form.elements).some(field => edited(field, form)));
   }
 
-  async function navigateToPoint(path) {
+  async function navigateToPoint(path, discardDraft = false) {
     // The offline helper may route to the generic shell; never follow another origin.
     const navigationGeneration = generation;
     const stillCurrent = () => generation === navigationGeneration && !dialog.open && !document.hidden;
@@ -121,10 +122,14 @@
       if (!stillCurrent()) return;
       const url = new URL(destination || path, location.origin);
       if (url.origin !== location.origin) return;
+      if (discardDraft) window.PatrolOffline?.allowNavigation?.();
       location.assign(url.pathname + url.search + url.hash);
     } catch {
       // Normal confirmation remains available if the optional helper is unavailable.
-      if (stillCurrent()) location.assign(path);
+      if (stillCurrent()) {
+        if (discardDraft) window.PatrolOffline?.allowNavigation?.();
+        location.assign(path);
+      }
     }
   }
 
@@ -150,7 +155,10 @@
   function dismiss() {
     stopCamera();
     clearDestination();
-    if (dialog.open) dialog.close();
+    if (dialog.open) {
+      dismissedGeneration = generation;
+      dialog.close();
+    }
   }
 
   function active(run) {
@@ -284,12 +292,14 @@
     if (!pendingPath || !dialog.open || document.hidden) return;
     const path = pendingPath;
     dismiss();
-    await navigateToPoint(path);
+    await navigateToPoint(path, true);
   });
   dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
   dialog.addEventListener('close', () => {
     if (!dialog.open) {
-      stopCamera();
+      // Native dialog close is queued. An explicit dismiss already stopped this
+      // scan; invalidating again can cancel its awaited offline destination.
+      if (dismissedGeneration !== generation) stopCamera();
       clearDestination();
       if (!document.hidden) opener?.focus({ preventScroll: true });
     }

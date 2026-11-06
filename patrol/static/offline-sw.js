@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261106-v2';
+const CACHE = 'patrol-offline-shell-20261106-v3';
 const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'];
 const allowed = new Set(REQUIRED);
 self.addEventListener('install', event => {
@@ -45,6 +45,10 @@ self.addEventListener('fetch', event => {
     try {
       const response = await fetch(request, { signal: controller.signal });
       if (response.status >= 500) return (await fallback()) || response;
+      // Headers alone do not make a usable check-in page. Keep the deadline
+      // active through the body, but return the original Response so its URL,
+      // redirect state and security headers remain unchanged. Never cache it.
+      await response.clone().arrayBuffer();
       return response;
     } catch (_) {
       return (await fallback()) || new Response('離線頁面尚未備妥。請連線後重新開啟巡檢網站。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });

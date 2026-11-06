@@ -39,7 +39,7 @@ function simulate(options = {}) {
     return match ? hooks[match[1]] || null : null;
   };
   const dialog = element({ open: false, querySelector: lookup, showModal() { this.open = true; },
-    close() { this.open = false; this.dispatchEvent(new Event('close')); } });
+    close() { this.open = false; if (!options.delayedClose) this.dispatchEvent(new Event('close')); } });
   hooks.dialog = dialog;
   const track = element({ stopped: false, stop() { this.stopped = true; } });
   const stream = { getTracks: () => [track] };
@@ -74,7 +74,7 @@ function simulate(options = {}) {
     }
   });
   const window = element({
-    PatrolOffline: options.route ? { route: options.route } : undefined,
+    PatrolOffline: options.route ? { route: options.route, allowNavigation: options.allowNavigation } : undefined,
     document, URL, location: { origin, pathname: options.pathname || '/dashboard', assign(value) { destinations.push(value); } },
     navigator: { mediaDevices: options.unsupported ? undefined : {
       getUserMedia(configuration) {
@@ -195,6 +195,51 @@ test('offline routing waits for its destination after stopping the camera', asyn
   routeResult.resolve('/offline?point=next');
   await nextTurn();
   assert.deepEqual(s.destinations, ['/offline?point=next']);
+});
+
+test('the queued native dialog close event preserves a pending offline destination', async () => {
+  const routing = delayed();
+  const s = simulate({ delayedClose: true, detect: () => [qr('/c/next')], route: () => routing.promise });
+  s.click(s.start);
+  await nextTurn();
+  assert.equal(s.dialog.open, false);
+  assert.deepEqual(s.destinations, []);
+  s.dialog.dispatchEvent(new Event('close'));
+  routing.resolve('/offline?point=next');
+  await nextTurn();
+  assert.deepEqual(s.destinations, ['/offline?point=next']);
+});
+
+test('confirmed discard releases the leave guard only when its destination is ready', async () => {
+  const routing = delayed();
+  let allowed = 0;
+  const s = simulate({ delayedClose: true, forms: [post(field('note', 'draft'))],
+    detect: () => [qr('/c/next')], route: () => routing.promise, allowNavigation: () => { allowed++; } });
+  s.click(s.start);
+  await nextTurn();
+  s.click(s.discard);
+  s.dialog.dispatchEvent(new Event('close'));
+  assert.equal(allowed, 0);
+  routing.resolve('/offline?point=next');
+  await nextTurn();
+  assert.equal(allowed, 1);
+  assert.deepEqual(s.destinations, ['/offline?point=next']);
+});
+
+test('an interrupted discard route retains the leave guard and its draft', async () => {
+  const routing = delayed();
+  let allowed = 0;
+  const s = simulate({ forms: [post(field('note', 'draft'))], detect: () => [qr('/c/next')],
+    route: () => routing.promise, allowNavigation: () => { allowed++; } });
+  s.click(s.start);
+  await nextTurn();
+  s.click(s.discard);
+  s.document.hidden = true;
+  s.document.dispatchEvent(new Event('visibilitychange'));
+  routing.resolve('/offline?point=next');
+  await nextTurn();
+  assert.equal(allowed, 0);
+  assert.deepEqual(s.destinations, []);
 });
 
 for (const interruption of ['new scan', 'background', 'pagehide']) {
