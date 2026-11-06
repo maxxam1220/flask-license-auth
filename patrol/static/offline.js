@@ -22,27 +22,51 @@
     if (typeof value !== 'string' || !/^(?:https?:\/\/[A-Za-z0-9.:\[\]-]+)?\/c\/[A-Za-z0-9_-]{1,100}$/.test(value)) return null;
     try { const url = new URL(value, root.location?.origin || 'https://offline.invalid'); return url.origin === (root.location?.origin || 'https://offline.invalid') ? url.pathname : null; } catch { return null; }
   }
+  function secureUUID(source) {
+    try { if (typeof source?.randomUUID === 'function') return source.randomUUID(); } catch (_) { /* Older WebKit can expose an unavailable method. */ }
+    try {
+      if (typeof source?.getRandomValues === 'function') {
+        const bytes = new Uint8Array(16); source.getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0'));
+        return hex.slice(0, 4).join('') + '-' + hex.slice(4, 6).join('') + '-' + hex.slice(6, 8).join('') + '-' + hex.slice(8, 10).join('') + '-' + hex.slice(10).join('');
+      }
+    } catch (_) { /* Never substitute timestamps or Math.random for secure IDs. */ }
+    throw fault('support', '此瀏覽器無法建立安全的離線編號，目前僅支援線上打卡；請連線操作或更新瀏覽器。');
+  }
+  function requestPersistence(navigator) {
+    try { Promise.resolve(navigator.storage?.persist?.()).catch(() => {}); }
+    catch (_) { /* Persistence permission is optional; IndexedDB writes remain authoritative. */ }
+  }
   function createCore(options = {}) {
     const env = options.env || root;
     const idb = options.indexedDB || env.indexedDB;
     const now = options.now || (() => Date.now());
-    const uuid = () => (options.crypto || env.crypto).randomUUID();
+    const uuid = () => secureUUID(options.crypto || env.crypto);
     const fetcher = options.fetch || env.fetch?.bind(env);
     const timers = options.timers || env;
     const navigator = options.navigator || env.navigator || {};
     const connectTimeout = options.connectTimeout || 5000;
     const uploadTimeout = options.uploadTimeout || 30000;
     const listeners = new Set();
-    const tabId = uuid();
-    let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false };
+    let tabId, capabilityError;
+    try {
+      if (env.isSecureContext === false) throw fault('support', '離線暫存需要 HTTPS 安全連線，目前僅支援線上打卡；請使用正式網站網址。');
+      tabId = uuid();
+    } catch (error) { capabilityError = error?.code === 'support' ? error : fault('support', '此瀏覽器無法啟用安全離線暫存，目前僅支援線上打卡；請連線操作或更新瀏覽器。'); }
+    const requireSupport = () => { if (capabilityError) throw capabilityError; };
+    let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false,
+      supported: !capabilityError, supportMessage: capabilityError?.message || '' };
     let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', privacyHold = false;
     const requests = new Set();
     const abortRequests = () => { for (const controller of requests) controller.abort(); };
     let channel;
-    if (options.broadcast !== false && env.BroadcastChannel) {
-      channel = new env.BroadcastChannel('patrol-offline-state-v1');
-      channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; abortRequests(); hidePrivateState(); } refresh().catch(() => {}); };
-    }
+    try {
+      if (options.broadcast !== false && env.BroadcastChannel) {
+        channel = new env.BroadcastChannel('patrol-offline-state-v1');
+        channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; abortRequests(); hidePrivateState(); } refresh().catch(() => {}); };
+      }
+    } catch (_) { channel = null; /* IndexedDB transactions still enforce ownership and synchronization leases. */ }
     function announce() {
       for (const fn of listeners) { try { fn(state); } catch (_) { /* One UI subscriber cannot interrupt persistence. */ } }
       if (env.dispatchEvent && env.CustomEvent) env.dispatchEvent(new env.CustomEvent('patrol:offline-state', { detail: state }));
@@ -111,6 +135,7 @@
       day: row.day, observed_at: row.observed_at, status: row.status, error: row.error || '', retryable: row.retryable,
       note: row.note, is_abnormal: row.is_abnormal, photo_count: row.photos?.length || 0, attempts: row.attempts || 0 });
     async function refresh() {
+      if (capabilityError) { message = capabilityError.message; state.online = navigator.onLine !== false; hidePrivateState(); return state; }
       let snapshot;
       try { snapshot = await transaction(STORES, 'readonly', (tx, done) => readAll(tx, done)); }
       catch (error) { hidePrivateState(true); throw error; }
@@ -119,7 +144,7 @@
         .sort((a, b) => a.created_ms - b.created_ms || (a.sequence || 0) - (b.sequence || 0) || a.client_id.localeCompare(b.client_id)) : [];
       const queue = owned.map(row => row.owner === manifest.owner ? summary(row) : { ...summary(row), stale_owner: true, status: 'blocked', retryable: false,
         error: '原登入版本或手機綁定已變更。此筆保留供處理，不會使用新授權補傳；請聯絡管理員。' });
-      state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), storageUnavailable: false, identity: manifest?.identity || null,
+      state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), supported: true, supportMessage: '', storageUnavailable: false, identity: manifest?.identity || null,
         owner: manifest?.owner || null, revision: active?.revision || 0, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
         online: navigator.onLine !== false, pending: queue.length, blocked: queue.filter(row => row.status === 'blocked').length,
         queue, receipts: manifest ? snapshot.receipts.filter(row => row.owner === manifest.owner).map(row => ({ ...row, photos: undefined })) : [],
@@ -170,6 +195,7 @@
           Array.isArray(p.slots) && p.slots.length > 0 && p.slots.every(slot => ['any', 'am', 'pm'].includes(slot)) && Array.isArray(p.used_slots));
     }
     async function prepare(expectedIdentity) {
+      requireSupport();
       const startEpoch = epoch;
       const revision = await transaction(['meta'], 'readonly', (tx, done) => {
         const request = tx.objectStore('meta').get('active'); request.onsuccess = () => done(request.result?.revision || 0);
@@ -206,6 +232,7 @@
       broadcast(); return refresh();
     }
     async function getPoint(token) {
+      if (capabilityError) return null;
       return transaction(STORES, 'readonly', (tx, done) => readAll(tx, data => {
         const { manifest } = current(data), point = manifest?.points.find(item => item.token === token);
         if (!point) return done(null);
@@ -215,6 +242,7 @@
       }));
     }
     async function enqueue(input) {
+      requireSupport();
       const photos = Array.from(input.photos || []); validatePhotos(photos);
       const note = String(input.note || '').replace(/\r\n?/g, '\n').trim();
       if (Array.from(note).length > 2000) throw fault('note', '巡檢備註最多 2,000 字。');
@@ -293,6 +321,7 @@
       }));
     }
     async function synchronize(selection = {}) {
+      requireSupport();
       if (syncing) return state;
       if (navigator.onLine === false) { message = '目前沒有網路，資料仍保留在此手機。'; return refresh(); }
       // Claim synchronously: two clicks can otherwise both pass the guard
@@ -384,14 +413,15 @@
     function cancelSync() { cancelled = true; syncController?.abort(); }
     async function route(value) {
       const path = safePath(value); if (!path) throw fault('point', '這不是本站的巡檢點網址。');
+      if (navigator.onLine === false) requireSupport();
       return navigator.onLine === false ? '/offline?point=' + encodeURIComponent(path.slice(3)) : path;
     }
     return { prepare, getState: refresh, getPoint, enqueue, sync: synchronize, lock, remove, route, cancelSync,
       subscribe(fn) { listeners.add(fn); fn(state); return () => listeners.delete(fn); },
-      async close() { channel?.close(); const db = await dbPromise; db?.close(); },
+      async close() { try { channel?.close(); } catch (_) {} const db = await dbPromise; db?.close(); },
       async matchIdentity(id, version) { await refresh(); if (state.identity && (String(state.identity.id) !== String(id) || String(state.identity.auth_version) !== String(version))) await lock('帳號已變更，請重新準備離線資料。'); return state; } };
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, safePath };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, safePath, requestPersistence };
   if (!root.document) return;
 
   let shellPromise;
@@ -408,7 +438,7 @@
         channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); event.data?.ready ? resolve() : reject(fault('shell', '離線頁面檔案不完整，請重試。')); };
         worker.postMessage({ type: 'PATROL_OFFLINE_READY' }, [channel.port2]);
       });
-      navigator.storage?.persist?.().catch(() => {});
+      requestPersistence(navigator);
     })().catch(error => { shellPromise = null; throw error; });
     return shellPromise;
   }
@@ -470,7 +500,8 @@
     function render(state) {
       latestState = state;
       text('count', state.pending ? String(state.pending) : '');
-      text('network', !state.online ? '離線' : state.sync?.running ? '補傳中' : state.pending ? '待補傳' : state.prepared ? '已備妥' : '離線準備');
+      text('network', state.supported === false ? '僅限線上' : !state.online ? '離線' : state.sync?.running ? '補傳中' : state.pending ? '待補傳' : state.prepared ? '已備妥' : '離線準備');
+      for (const link of all('open')) { if (state.supported === false) link.title = state.supportMessage; }
       if (normalProgress && !normalProgress.saving) {
         normalProgress.status.textContent = state.sync?.running ?
           `${state.sync.phase === 'uploading' ? '正在上傳本筆紀錄（最多 30 秒）' : '正在檢查連線（最多 5 秒）'} · 已等 ${state.sync.elapsed || 0} 秒` :
@@ -490,7 +521,7 @@
       text('queue-summary', state.sync?.running ? `正在處理 ${state.sync.processed}/${state.sync.total} 筆 · 已確認 ${state.sync.saved} 筆 · ${state.sync.elapsed} 秒` : `${state.pending} 筆待補傳${state.blocked ? `，其中 ${state.blocked} 筆需處理` : ''}`);
       if (one('sync')) one('sync').disabled = state.locked || !state.pending || state.sync?.running;
       if (one('cancel-sync')) one('cancel-sync').hidden = !state.sync?.running;
-      if (one('prepare')) one('prepare').disabled = preparing || !state.online || state.sync?.running;
+      if (one('prepare')) one('prepare').disabled = state.supported === false || preparing || !state.online || state.sync?.running;
       if (one('login')) one('login').hidden = !state.locked;
       if (one('empty')) one('empty').hidden = state.pending > 0;
       if (savedClientId && one('saved')) {

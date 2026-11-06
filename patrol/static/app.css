@@ -586,6 +586,9 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
 .scanner-dialog { width: min(450px, calc(100% - 24px)); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); margin: auto; padding: 0; border: 1px solid #d4e3da; border-radius: 14px; color: var(--ink); background: white; box-shadow: 0 18px 60px #102d3940; }
 .scanner-dialog[open] { display: flex; flex-direction: column; }
 .scanner-dialog::backdrop { background: #102d39a8; }
+.scanner-fallback-backdrop { position: fixed; inset: 0; z-index: 1000; background: #102d39a8; }
+.scanner-dialog[data-qr-fallback-open] { position: fixed; top: 50%; left: 50%; z-index: 1001; margin: 0; transform: translate(-50%, -50%); }
+body.scanner-fallback-open { overflow: hidden; }
 .scanner-heading { display: flex; flex: none; justify-content: space-between; align-items: center; gap: 14px; padding: 18px 20px 14px; }
 .checkin-place { margin: .25rem 0 0; color: var(--muted); font-size: .9375rem; }
 .scanner-heading h2 { font-size: 21px; }
@@ -948,4 +951,15 @@ textarea:focus-visible, [data-error-focus]:focus-visible { outline: 3px solid #7
   .dashboard-period .date-filter input[type=date] { min-width: 0; flex: 1 1 auto; }
   .dashboard-period .period-view { gap: .25rem .5rem; }
   .dashboard-period .segmented > a { padding-inline: clamp(.45rem, 2vw, .85rem); }
+}
+/* Keep Safari's localized native date value on one line, including enlarged text. */
+input[type=date] { white-space: nowrap; }
+input[type=date]::-webkit-date-and-time-value { min-height: 1.5em; line-height: 1.5; white-space: nowrap; text-align: start; }
+input[type=date]::-webkit-datetime-edit { white-space: nowrap; }
+@media (max-width: 480px) {
+  .dashboard-period .date-filter { display: grid; flex: 1 0 100%; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; }
+  .dashboard-period .date-filter input[type=date] { grid-column: 1 / -1; grid-row: 1; width: 100%; }
+  .dashboard-period .date-filter [data-period-step=prev] { grid-column: 1; grid-row: 2; }
+  .dashboard-period .date-filter [data-period-step=next] { grid-column: 3; grid-row: 2; }
+  .dashboard-period .date-filter button { grid-column: 2; grid-row: 2; min-height: 44px; }
 }

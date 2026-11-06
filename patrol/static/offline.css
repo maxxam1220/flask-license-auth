@@ -16,6 +16,11 @@
 @media (max-width: 1180px) and (min-width: 721px) { .desktop-fieldbar { padding-inline: 26px; } }
 @media (max-width: 720px) {
   .desktop-fieldbar { display: none; }
+  .mobile-header { height: auto; min-height: 63px; padding-block: 8px; }
+  .mobile-header .brand { min-height: 44px; min-width: 44px; gap: 6px; font-size: 20px; letter-spacing: 1px; white-space: nowrap; }
+  .mobile-header .brand-mark { flex: none; width: 28px; height: 28px; border-radius: 8px; }
+  .mobile-header .brand-mark .icon { width: 22px; height: 22px; }
+  .mobile-header .brand > span:last-child { display: inline; }
   .mobile-header .field-header-actions { margin-left: auto; }
   .mobile-header .field-header-actions .scan-trigger-header { margin-left: 0; padding-inline: 10px; min-width: 76px; }
   .mobile-header .offline-sync-link { min-width: 76px; padding-inline: 9px; }
@@ -25,8 +30,11 @@
 @media (max-width: 390px) {
   .mobile-header { padding-inline: 10px; gap: 7px; }
   .mobile-header .field-header-actions { gap: 6px; }
+  .mobile-header .field-header-actions .scan-trigger-header { min-width: 70px; padding-inline: 8px; }
+  .mobile-header .scan-trigger-header > .icon { display: none; }
+  .mobile-header .offline-sync-link { min-width: 70px; padding-inline: 7px; }
 }
-@media (max-width: 360px) { .mobile-header .brand > span:last-child { display: none; } }
+@media (max-width: 360px) { .mobile-header .brand-mark { display: none; } }
 
 /* This shell has no server-rendered identity and never inherits workspace layout. */
 .offline-shell { margin: 0; color: #203b35; background: #f3f6f3; font-size: 16px; }

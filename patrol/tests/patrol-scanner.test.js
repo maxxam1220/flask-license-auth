@@ -18,14 +18,30 @@ function delayed() {
 }
 
 function simulate(options = {}) {
-  function element(props = {}) { return Object.assign(new EventTarget(), props); }
-  const button = () => element({ hidden: true, focused: false, focus() { this.focused = true; } });
+  function element(props = {}) {
+    const attributes = new Map(), classes = new Set();
+    return Object.assign(new EventTarget(), {
+      hidden: false, tabIndex: 0, children: [], parentElement: null,
+      setAttribute(name, value) { attributes.set(name, String(value)); if (name === 'open') this.open = true; },
+      getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+      removeAttribute(name) { attributes.delete(name); if (name === 'open') this.open = false; },
+      classList: { add(name) { classes.add(name); }, remove(name) { classes.delete(name); }, contains(name) { return classes.has(name); } },
+      append(child) { this.children.push(child); child.parentElement = this; },
+      insertBefore(child, before) { this.children.splice(this.children.indexOf(before), 0, child); child.parentElement = this; },
+      remove() { const list = this.parentElement?.children; if (list) list.splice(list.indexOf(this), 1); this.parentElement = null; },
+      contains(other) { return this === other || this.children.some(child => child.contains(other)); },
+      closest(selector) { assert.equal(selector, '[hidden]'); return this.hidden ? this : this.parentElement?.closest(selector) || null; },
+      focused: false, focus() { this.focused = true; document.activeElement = this; }
+    }, props);
+  }
+  const button = () => element({ hidden: true });
   const starts = [button(), button(), button()];
   const [start] = starts;
   const close = element();
   const draft = element({ hidden: true });
   const keep = button();
   const discard = button();
+  keep.hidden = false; discard.hidden = false;
   const retry = element({ hidden: true });
   const status = element({ textContent: '' });
   const englishStatus = options.executor ? element({ textContent: '' }) : null;
@@ -38,8 +54,17 @@ function simulate(options = {}) {
     const match = selector.match(/^\[data-qr-([\w-]+)\]$/);
     return match ? hooks[match[1]] || null : null;
   };
-  const dialog = element({ open: false, querySelector: lookup, showModal() { this.open = true; },
+  const dialog = element({ open: false, querySelector: lookup,
+    querySelectorAll: () => [close, retry, keep, discard],
+    showModal() { if (options.throwModal) throw new Error('Native modal unavailable'); this.open = true; },
     close() { this.open = false; if (!options.delayedClose) this.dispatchEvent(new Event('close')); } });
+  if (options.noDialogAPI) { delete dialog.showModal; delete dialog.close; }
+  if (options.decoderURL !== undefined) dialog.setAttribute('data-qr-decoder', options.decoderURL);
+  dialog.append(close); dialog.append(retry); dialog.append(draft); draft.append(keep); draft.append(discard);
+  const background = element({ inert: false });
+  if (options.backgroundAria !== undefined) background.setAttribute('aria-hidden', options.backgroundAria);
+  const body = element(), html = element();
+  html.append(body); body.append(background); body.append(dialog);
   hooks.dialog = dialog;
   const track = element({ stopped: false, stop() { this.stopped = true; } });
   const stream = { getTracks: () => [track] };
@@ -50,7 +75,8 @@ function simulate(options = {}) {
   const frames = [];
   let timerId = 0;
   const document = element({
-    hidden: false, currentScript: { src: origin + '/static/patrol-scanner.js?v=1' },
+    hidden: false, currentScript: options.currentScript === undefined ? { src: origin + '/static/patrol-scanner.js?v=1' } : options.currentScript,
+    body, documentElement: html, activeElement: null,
     forms: options.forms || [],
     querySelector: selector => selector === 'form[data-submitting="true"]' ? (options.submitting ? {} : null) :
       selector === '[data-offline-checkin]' ? options.offlineForm || null : lookup(selector),
@@ -63,6 +89,7 @@ function simulate(options = {}) {
     } },
     createElement(tag) {
       if (tag === 'script') return {};
+      if (tag === 'div') return element({ tagName: 'DIV' });
       assert.equal(tag, 'canvas');
       return { getContext() { return {
         drawImage() {},
@@ -103,8 +130,94 @@ function simulate(options = {}) {
     callback();
     await nextTurn();
   }
-  return { start, starts, draft, keep, discard, close, retry, status, englishStatus, dialog, video, track, stream, document, window, frames,
+  return { start, starts, draft, keep, discard, close, retry, status, englishStatus, dialog, video, track, stream, document, window, frames, background,
     requests, constraints, destinations, timers, click, step };
+}
+
+for (const failure of ['missing API', 'throwing API']) {
+  test('SCAN stays ready with a safe modal fallback for ' + failure, async () => {
+    const s = simulate({ noDialogAPI: failure === 'missing API', throwModal: failure === 'throwing API',
+      backgroundAria: 'false', detect: () => [] });
+    assert.ok(s.starts.every(button => !button.hidden && button.getAttribute('data-qr-ready') === 'true'));
+    assert.equal(s.constraints.length, 0);
+    s.click(s.starts[2]); await nextTurn();
+    assert.equal(s.dialog.getAttribute('data-qr-fallback-open'), 'true');
+    assert.equal(s.dialog.getAttribute('aria-modal'), 'true');
+    assert.equal(s.document.body.classList.contains('scanner-fallback-open'), true);
+    assert.equal(s.document.body.children.filter(child => child.className === 'scanner-fallback-backdrop').length, 1);
+    assert.equal(s.background.getAttribute('aria-hidden'), 'true'); assert.equal(s.background.inert, true);
+    assert.equal(s.document.activeElement, s.close); assert.equal(s.video.srcObject, s.stream);
+    s.click(s.close);
+    assert.equal(s.track.stopped, true); assert.equal(s.video.srcObject, null);
+    assert.equal(s.dialog.open, false); assert.equal(s.dialog.getAttribute('data-qr-fallback-open'), null);
+    assert.equal(s.background.getAttribute('aria-hidden'), 'false'); assert.equal(s.background.inert, false);
+    assert.equal(s.document.body.classList.contains('scanner-fallback-open'), false);
+    assert.equal(s.document.body.children.length, 2); assert.equal(s.document.activeElement, s.starts[2]);
+  });
+}
+
+test('fallback traps keyboard focus, stops on Escape and restores background accessibility', async () => {
+  const s = simulate({ noDialogAPI: true, acquire: async () => { throw new Error('busy'); } });
+  s.click(s.start); await nextTurn();
+  function key(name, shiftKey = false) {
+    const e = new Event('keydown', { cancelable: true }); Object.assign(e, { key: name, shiftKey });
+    s.document.dispatchEvent(e); return e;
+  }
+  assert.equal(s.retry.hidden, false);
+  assert.equal(key('Tab', true).defaultPrevented, true); assert.equal(s.document.activeElement, s.retry);
+  assert.equal(key('Tab').defaultPrevented, true); assert.equal(s.document.activeElement, s.close);
+  s.background.focus();
+  const focus = new Event('focusin'); Object.defineProperty(focus, 'target', { value: s.background });
+  s.document.dispatchEvent(focus); assert.equal(s.document.activeElement, s.close);
+  assert.equal(key('Escape').defaultPrevented, true);
+  assert.equal(s.dialog.open, false); assert.equal(s.document.activeElement, s.start);
+  assert.equal(s.background.getAttribute('aria-hidden'), null); assert.equal(s.background.inert, false);
+});
+
+test('missing dialog and camera APIs keep SCAN visible and show a usable alternative', () => {
+  const s = simulate({ noDialogAPI: true, unsupported: true });
+  assert.equal(s.start.hidden, false);
+  s.click(s.start);
+  assert.equal(s.dialog.open, true); assert.match(s.status.textContent, /手機內建相機/);
+  assert.equal(s.constraints.length, 0); s.click(s.close); assert.equal(s.dialog.open, false);
+});
+
+for (const currentScript of [null, { src: '' }, { src: 'not a valid script URL' }]) {
+  test('decoder readiness does not depend on currentScript ' + JSON.stringify(currentScript), async () => {
+    const s = simulate({ currentScript, noDialogAPI: true,
+      loadScript(script, context) { context.jsQR = () => ({ data: '/c/fallback' }); script.onload(); } });
+    assert.equal(s.start.hidden, false); s.click(s.start); await nextTurn();
+    assert.deepEqual(s.requests, [origin + '/static/vendor/jsqr-1.4.0.js']);
+    assert.deepEqual(s.destinations, ['/c/fallback']); assert.equal(s.track.stopped, true);
+  });
+}
+
+test('fallback preserves drafts, only explicit discard navigates, and late camera grants are stopped', async () => {
+  const s = simulate({ noDialogAPI: true, forms: [post(field('note', '現場草稿'))], detect: () => [qr('/c/next')] });
+  s.click(s.start); await nextTurn();
+  assert.equal(s.draft.hidden, false); assert.equal(s.document.activeElement, s.keep);
+  s.click(s.keep); assert.deepEqual(s.destinations, []);
+  s.click(s.start); await nextTurn(); s.click(s.discard); s.click(s.discard);
+  assert.deepEqual(s.destinations, ['/c/next']); assert.equal(s.background.inert, false);
+  const permission = delayed();
+  const t = simulate({ noDialogAPI: true, acquire: () => permission.promise });
+  t.click(t.start); t.document.hidden = true; t.document.dispatchEvent(new Event('visibilitychange'));
+  permission.resolve(t.stream); await nextTurn();
+  assert.equal(t.track.stopped, true); assert.equal(t.video.srcObject, null);
+  assert.equal(t.dialog.open, false); assert.equal(t.background.inert, false);
+});
+
+for (const interruption of ['new scan', 'background', 'pagehide']) {
+  test('fallback delayed route cannot navigate after ' + interruption, async () => {
+    const routing = delayed(); let first = true;
+    const s = simulate({ noDialogAPI: true, detect: () => first ? (first = false, [qr('/c/next')]) : [], route: () => routing.promise });
+    s.click(s.start); await nextTurn();
+    if (interruption === 'new scan') s.click(s.start);
+    else if (interruption === 'background') { s.document.hidden = true; s.document.dispatchEvent(new Event('visibilitychange')); }
+    else s.window.dispatchEvent(new Event('pagehide'));
+    routing.resolve('/offline?point=next'); await nextTurn();
+    assert.deepEqual(s.destinations, []);
+  });
 }
 
 test('opens only after user action, reads rear camera without audio, and navigates once', async () => {

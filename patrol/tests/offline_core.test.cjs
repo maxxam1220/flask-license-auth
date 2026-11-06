@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { indexedDB, IDBObjectStore, IDBDatabase } = require('fake-indexeddb');
-const { createCore, validatePhotos } = require('../static/offline.js');
+const { createCore, validatePhotos, requestPersistence } = require('../static/offline.js');
 const stamp = Date.parse('2026-11-06T01:10:00Z');
 const response = (json, status = 200) => new Response(JSON.stringify(json), { status, headers: { 'Content-Type': 'application/json' } });
 function manifest(overrides = {}) {
@@ -445,4 +445,64 @@ test('preparation committing during a failed logout cannot clear the privacy hol
   await h.core.lock();
   const reopened = harness({ databaseName: h.dbName }); t.after(() => reopened.core.close());
   assert.equal((await reopened.core.getState()).locked, true);
+});
+
+test('older Safari without randomUUID uses cryptographic RFC 4122 version 4 identifiers', async t => {
+  const fallbackCrypto = { getRandomValues(bytes) { assert.equal(this, fallbackCrypto); return crypto.getRandomValues(bytes); } };
+  const h = await prepared(t, { crypto: fallbackCrypto });
+  const first = await h.core.enqueue(input), second = await h.core.enqueue(input);
+  for (const id of [first.client_id, second.client_id]) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.notEqual(first.client_id, second.client_id);
+  await h.core.sync(); assert.equal((await rows(h.dbName, 'receipts')).length, 2);
+});
+
+test('randomUUID denial can use getRandomValues without weakening version or variant bits', async t => {
+  const h = await prepared(t, { crypto: { randomUUID() { throw new DOMException('unavailable', 'NotSupportedError'); }, getRandomValues(bytes) { return bytes.fill(255); } } });
+  const entry = await h.core.enqueue(input);
+  assert.equal(entry.client_id, 'ffffffff-ffff-4fff-bfff-ffffffffffff');
+});
+
+test('missing secure randomness exposes online-only state instead of crashing initialization', async t => {
+  const h = harness({ crypto: {} }); t.after(() => h.core.close());
+  const state = await h.core.getState();
+  assert.equal(state.supported, false); assert.equal(state.prepared, false); assert.equal(state.locked, true);
+  assert.match(state.supportMessage, /線上/);
+  await assert.rejects(h.core.prepare(), { code: 'support' });
+  await assert.rejects(h.core.enqueue(input), { code: 'support' });
+  await assert.rejects(h.core.sync(), { code: 'support' });
+  assert.equal(await h.core.route('/c/test-point'), '/c/test-point');
+  assert.equal(h.state.calls.length, 0);
+});
+
+test('unsupported randomness still permits logout to lock existing local data without deleting pending', async t => {
+  const original = await prepared(t); await original.core.enqueue(input);
+  const limited = harness({ crypto: {}, databaseName: original.dbName }); t.after(() => limited.core.close());
+  await limited.core.lock();
+  assert.equal((await rows(original.dbName, 'queue')).length, 1);
+  assert.equal((await original.core.getState()).locked, true);
+});
+
+test('insecure contexts disable offline capture before making network requests', async t => {
+  const env = Object.assign(Object.create(globalThis), { isSecureContext: false });
+  const h = harness({ env, crypto }); t.after(() => h.core.close());
+  const state = await h.core.getState(); assert.equal(state.supported, false); assert.match(state.supportMessage, /HTTPS/);
+  await assert.rejects(h.core.prepare(), { code: 'support' });
+  await assert.rejects(h.core.enqueue(input), { code: 'support' });
+  assert.equal(h.state.calls.length, 0);
+});
+
+test('denied BroadcastChannel construction does not prevent preparation and safe queue operation', async t => {
+  const env = Object.assign(Object.create(globalThis), { BroadcastChannel: class { constructor() { throw new DOMException('denied', 'SecurityError'); } } });
+  const h = await prepared(t, { env, crypto, broadcast: true });
+  const entry = await h.core.enqueue(input); await h.core.sync();
+  assert.equal((await rows(h.dbName, 'receipts'))[0].client_id, entry.client_id);
+});
+
+test('optional storage persistence failures never interrupt offline preparation', async () => {
+  for (const navigator of [{}, { storage: {} }, { storage: { persist() { return false; } } },
+    { storage: { persist() { throw new DOMException('denied', 'SecurityError'); } } },
+    { storage: { persist() { return Promise.reject(new DOMException('denied', 'SecurityError')); } } }]) {
+    assert.doesNotThrow(() => requestPersistence(navigator));
+  }
+  await new Promise(resolve => setImmediate(resolve));
 });

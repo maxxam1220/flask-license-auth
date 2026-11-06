@@ -2,7 +2,7 @@
 (() => {
   const starts = document.querySelectorAll('[data-qr-start]');
   const dialog = document.querySelector('[data-qr-dialog]');
-  if (!starts.length || !dialog || typeof dialog.showModal !== 'function') return;
+  if (!starts.length || !dialog) return;
 
   const video = dialog.querySelector('[data-qr-video]');
   const status = dialog.querySelector('[data-qr-status-zh]') || dialog.querySelector('[data-qr-status]');
@@ -12,7 +12,13 @@
   const draftActions = dialog.querySelector('[data-qr-draft-actions]');
   const keep = dialog.querySelector('[data-qr-keep]');
   const discard = dialog.querySelector('[data-qr-discard]');
-  const vendorURL = new URL('vendor/jsqr-1.4.0.js', document.currentScript.src);
+  // Deferred scripts and embedded browsers do not always expose currentScript.
+  // The template supplies the same-origin decoder path independently of it.
+  let vendorURL = new URL('/static/vendor/jsqr-1.4.0.js', location.origin);
+  try {
+    const declared = new URL(dialog.getAttribute('data-qr-decoder') || vendorURL.href, location.origin);
+    if (declared.origin === location.origin) vendorURL = declared;
+  } catch { /* The bundled default remains usable if a path is malformed. */ }
   let opener;
   let pendingPath;
   let vendorLoad;
@@ -21,6 +27,67 @@
   let stream;
   let timer;
   let onTrackEnd;
+  let fallbackOpen = false;
+  let backdrop;
+  let background = [];
+  const isOpen = () => fallbackOpen || Boolean(dialog.open);
+
+  function openDialog() {
+    if (isOpen()) return;
+    if (typeof dialog.showModal === 'function' && typeof dialog.close === 'function') {
+      try { dialog.showModal(); return; } catch { /* Use the accessible fallback below. */ }
+    }
+    fallbackOpen = true;
+    dialog.setAttribute('open', '');
+    dialog.setAttribute('data-qr-fallback-open', 'true');
+    dialog.setAttribute('aria-modal', 'true');
+    backdrop = document.createElement('div');
+    backdrop.className = 'scanner-fallback-backdrop';
+    backdrop.setAttribute('aria-hidden', 'true');
+    dialog.parentElement.insertBefore(backdrop, dialog);
+    document.body.classList.add('scanner-fallback-open');
+    // Match native modal isolation, including browsers without inert support.
+    let branch = dialog;
+    for (let parent = dialog.parentElement; parent && parent !== document.documentElement; parent = parent.parentElement) {
+      for (const sibling of parent.children) {
+        if (sibling === branch || sibling === backdrop || ['SCRIPT', 'STYLE', 'LINK'].includes(sibling.tagName)) continue;
+        background.push({ element: sibling, ariaHidden: sibling.getAttribute('aria-hidden'), inert: sibling.inert });
+        sibling.setAttribute('aria-hidden', 'true');
+        if ('inert' in sibling) sibling.inert = true;
+      }
+      branch = parent;
+    }
+    close.focus({ preventScroll: true });
+  }
+
+  function closeFallback() {
+    fallbackOpen = false;
+    dialog.removeAttribute('open');
+    dialog.removeAttribute('data-qr-fallback-open');
+    dialog.removeAttribute('aria-modal');
+    backdrop?.remove(); backdrop = null;
+    document.body.classList.remove('scanner-fallback-open');
+    for (const saved of background) {
+      if (saved.ariaHidden === null) saved.element.removeAttribute('aria-hidden');
+      else saved.element.setAttribute('aria-hidden', saved.ariaHidden);
+      if ('inert' in saved.element) saved.element.inert = saved.inert;
+    }
+    background = [];
+  }
+
+  function fallbackKeys(event) {
+    if (!fallbackOpen) return;
+    if (event.key === 'Escape') { event.preventDefault(); dismiss(); return; }
+    if (event.key !== 'Tab') return;
+    const controls = Array.from(dialog.querySelectorAll('button, a[href], input, select, textarea, [tabindex]'))
+      .filter(control => !control.disabled && control.tabIndex !== -1 && !control.closest('[hidden]'));
+    const first = controls[0] || close, last = controls[controls.length - 1] || close;
+    const outside = !dialog.contains(document.activeElement);
+    if ((event.shiftKey && (document.activeElement === first || outside)) ||
+        (!event.shiftKey && (document.activeElement === last || outside))) {
+      event.preventDefault(); (event.shiftKey ? last : first).focus();
+    }
+  }
 
   function confirmationPath(value) {
     // Check the original text before URL resolution can normalize dot segments or escapes.
@@ -115,7 +182,7 @@
   async function navigateToPoint(path, discardDraft = false) {
     // The offline helper may route to the generic shell; never follow another origin.
     const navigationGeneration = generation;
-    const stillCurrent = () => generation === navigationGeneration && !dialog.open && !document.hidden;
+    const stillCurrent = () => generation === navigationGeneration && !isOpen() && !document.hidden;
     try {
       const route = window.PatrolOffline?.route;
       const destination = typeof route === 'function' ? await route(path) : path;
@@ -155,14 +222,15 @@
   function dismiss() {
     stopCamera();
     clearDestination();
-    if (dialog.open) {
+    if (isOpen()) {
       dismissedGeneration = generation;
-      dialog.close();
+      if (fallbackOpen) { closeFallback(); afterClose(); }
+      else dialog.close();
     }
   }
 
   function active(run) {
-    return run === generation && dialog.open && !document.hidden;
+    return run === generation && isOpen() && !document.hidden;
   }
 
   function failed(run, text, english) {
@@ -176,7 +244,7 @@
     stopCamera();
     clearDestination();
     const run = generation;
-    if (!dialog.open) dialog.showModal();
+    openDialog();
     retry.hidden = true;
     if (document.querySelector('form[data-submitting="true"]')) {
       message('資料正在送出。請等候儲存完成後再掃描。', 'Saving. Please wait.');
@@ -279,30 +347,36 @@
 
   starts.forEach(button => {
     button.addEventListener('click', () => {
-      if (dialog.open) return;
+      if (isOpen()) return;
       opener = button;
       begin();
     });
     button.hidden = false;
+    button.setAttribute('data-qr-ready', 'true');
   });
   retry.addEventListener('click', begin);
   close.addEventListener('click', dismiss);
   keep?.addEventListener('click', dismiss);
   discard?.addEventListener('click', async () => {
-    if (!pendingPath || !dialog.open || document.hidden) return;
+    if (!pendingPath || !isOpen() || document.hidden) return;
     const path = pendingPath;
     dismiss();
     await navigateToPoint(path, true);
   });
   dialog.addEventListener('cancel', event => { event.preventDefault(); dismiss(); });
-  dialog.addEventListener('close', () => {
-    if (!dialog.open) {
+  function afterClose() {
+    if (!isOpen()) {
       // Native dialog close is queued. An explicit dismiss already stopped this
       // scan; invalidating again can cancel its awaited offline destination.
       if (dismissedGeneration !== generation) stopCamera();
       clearDestination();
       if (!document.hidden) opener?.focus({ preventScroll: true });
     }
+  }
+  dialog.addEventListener('close', afterClose);
+  document.addEventListener('keydown', fallbackKeys);
+  document.addEventListener('focusin', event => {
+    if (fallbackOpen && !dialog.contains(event.target)) close.focus({ preventScroll: true });
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) dismiss(); });
   window.addEventListener('pagehide', dismiss);
