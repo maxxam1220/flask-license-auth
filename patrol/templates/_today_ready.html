@@ -9,8 +9,8 @@
   <div class="ready-heading">
     <h2 id="today-ready-title">{{ heading }}</h2>
     <span class="ready-count">{{ ready_points|length }} 個點位</span>
-    <a class="text-link ready-refresh" data-ready-refresh
-       href="{{ url_for('ready', category=category_filter, floor=selected_floor or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新列表</a>
+    <a class="text-link ready-refresh" data-ready-refresh aria-label="更新今日{{ '待簽到' if executing else '待巡' }}列表"
+       href="{{ url_for('ready', category=category_filter, floor=selected_floor or none, reload_ready='1' if not request.args.get('reload_ready') else none, _anchor='today-ready') }}">更新<span class="ready-refresh-detail">列表</span></a>
   </div>
   <p class="ready-scope">
     <time datetime="{{ ready_date }}">{{ ready_date }}</time><span>{{ category_label(scope) if scope else '全部分類' }} · {{ floor_label(selected_floor) if selected_floor else '全部樓層' }}</span>

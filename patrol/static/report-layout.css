@@ -189,12 +189,20 @@
 
 @media (max-width: 720px) {
   .report-page .main-content { padding-top: 16px; }
-  .report-page .page-heading { margin-bottom: 14px; }
-  .report-page .page-heading p { margin-top: 5px; }
+  .report-page .page-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 12px; margin-bottom: 14px; }
+  .report-page .page-heading > div { display: contents; }
+  .report-page .page-heading h1 { grid-column: 1; grid-row: 1; }
+  .report-page .page-heading > .button { grid-column: 2; grid-row: 1; white-space: nowrap; }
+  .report-page .page-heading p { grid-column: 1 / -1; grid-row: 2; max-width: none; margin-top: 0; }
   .report-page .record-stage-tabs { margin-bottom: 12px; }
   .report-page .storage-usage { margin-bottom: 12px; }
   .report-page .spaced { margin-top: 14px; }
   .report-page .records-query-panel { padding: 9px 13px; }
+  .report-page .records-query-toggle { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; }
+  .report-page .records-query-summary { display: contents; }
+  .report-page .records-query-title { grid-column: 1; grid-row: 1; }
+  .report-page .records-query-dates { grid-column: 1 / -1; grid-row: 2; }
+  .report-page .records-query-action { grid-column: 2; grid-row: 1; }
   .report-page .records-query-toggle:not([hidden]) ~ [data-query-fields]:not([hidden]) { margin-top: 12px; padding-top: 14px; }
   .report-page .records-query-action { gap: .25rem; }
   .report-page .section-heading { flex-wrap: wrap; gap: 4px 12px; margin-bottom: 11px; }

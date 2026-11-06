@@ -24,7 +24,7 @@
 {% macro frequency_select(selected) %}<select name="frequency">{% for value,label in [('daily','每日一次'),('daily2','每日兩次（不限時段）'),('weekly','每週一次'),('monthly','每月一次'),('irregular','不定期')] %}<option value="{{ value }}"{% if value in ['monthly','irregular'] %} data-general-frequency{% endif %}{% if selected == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}
 {% block content %}
 <div hidden id="official-general-codes" data-codes='{{ official_general_codes|default({})|tojson }}'></div>
-<div class="page-heading"><div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢頻率與專屬 QR Code。</p></div>{% if not show_deleted %}<a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a>{% endif %}</div>
+<div class="page-heading management-page-heading"><div><h1>巡檢點管理</h1><p>依職安、總務與樓層管理點位，設定巡檢頻率與專屬 QR Code。</p></div>{% if not show_deleted %}<a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a>{% endif %}</div>
 <nav class="category-tabs" aria-label="點位清單">
   <a class="{{ 'selected' if not show_deleted }}" aria-current="{{ 'page' if not show_deleted else 'false' }}" href="{{ url_for('points', category=selected_category, floor=selected_floor) }}">現有點位</a>
   <a class="{{ 'selected' if show_deleted }}" aria-current="{{ 'page' if show_deleted else 'false' }}" href="{{ url_for('points', list='deleted', category=selected_category, floor=selected_floor) }}">已刪除（{{ deleted_count }}）</a>

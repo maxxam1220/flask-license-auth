@@ -142,8 +142,8 @@ form[aria-busy="true"] { cursor: progress; }
   .management-meta > .button, .button-small, .text-button,
   .password-reset-form .button, .danger-zone .button { min-height: 44px; font-size: 13px; padding: 9px 12px; }
   .management-meta > .button .icon { width: 16px; height: 16px; }
-  .compact-disclosure > summary { font-size: 13px; min-height: 40px; }
-  .create-disclosure > summary { min-height: 40px; font-size: 14px; }
+  .compact-disclosure > summary { font-size: 13px; min-height: 44px; }
+  .create-disclosure > summary { min-height: 44px; font-size: 14px; }
   .table-actions { flex-wrap: wrap; gap: 8px; }
   .table-scroll td { min-width: 0; gap: 14px; }
   .table-scroll td > strong, .table-scroll td > span { min-width: 0; overflow-wrap: anywhere; }
@@ -797,6 +797,7 @@ body.scanner-fallback-open { overflow: hidden; }
 @media screen and (min-width: 721px) {
   .sidebar .brand { margin-bottom: clamp(18px, 3vh, 30px); }
   .sidebar .nav-links { gap: 3px; margin-bottom: 19px; }
+  .sidebar .nav-link { padding-block: 9px; }
   .sidebar > .sidebar-navigation { flex: 1 1 auto; min-height: 7rem; overflow-y: auto; overscroll-behavior-y: contain; padding: 4px; margin: -4px; }
   .sidebar .nav-links:last-child { margin-bottom: 4px; }
   .sidebar-bottom { padding-top: 12px; }
@@ -947,6 +948,13 @@ body.scanner-fallback-open { overflow: hidden; }
   .sidebar .brand small { letter-spacing: .04em; white-space: nowrap; }
 }
 @media (max-width: 720px) {
+  .ready-filters > .button, .create-disclosure .form-actions > .button { min-height: 44px; }
+  .ready-refresh-detail { display: none; }
+  .management-page-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 5px 12px; }
+  .management-page-heading > div { display: contents; }
+  .management-page-heading h1 { grid-column: 1; grid-row: 1; }
+  .management-page-heading > .button { grid-column: 2; grid-row: 1; }
+  .management-page-heading > div > p { grid-column: 1 / -1; grid-row: 2; max-width: none; margin-top: 0; }
   .dashboard-period .date-filter { width: 100%; }
   .dashboard-period .date-filter input[type=date] { min-width: 0; flex: 1 1 auto; }
   .dashboard-period .period-view { gap: .25rem .5rem; }

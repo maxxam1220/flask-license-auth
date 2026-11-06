@@ -21,7 +21,7 @@
   <div class="field-header-actions">{{ scanner_button('header', '掃描巡檢點') }}<a class="offline-sync-link" href="#offline-queue" data-offline-open aria-label="查看待傳紀錄"><span class="offline-sync-symbol" aria-hidden="true">{{ icon('download') }}</span><span class="offline-sync-copy"><span>同步 <strong data-offline-count>0</strong></span><small data-offline-network>待確認</small></span></a></div>
 </header>
 <main class="offline-main" id="offline-main" tabindex="-1">
-  <div class="offline-page-heading"><div><h1>離線打卡與同步</h1><p>離線時先暫存在這支手機，回到有網路的地方再同步。</p></div><a class="offline-back-link" href="/dashboard">返回巡檢總覽 {{ icon('arrow') }}</a></div>
+  <div class="offline-page-heading"><div><h1>離線打卡與同步</h1><p>離線時先暫存在這支手機，回到有網路的地方再同步。</p></div><nav class="offline-page-links" aria-label="離線頁面導覽"><a class="offline-back-link" href="/dashboard">返回巡檢總覽 {{ icon('arrow') }}</a><a class="offline-back-link" href="#offline-readiness">離線準備 {{ icon('download') }}</a></nav></div>
   <noscript><p class="offline-notice offline-notice-error">此功能需要 JavaScript。請啟用後重新開啟；有網路時也可返回巡檢總覽打卡。</p></noscript>
   <div class="offline-status" data-offline-status role="status" aria-live="polite" aria-atomic="true" tabindex="-1">正在讀取這支裝置的離線資料…</div>
 
@@ -46,22 +46,20 @@
   </section>
 
   <section class="offline-panel offline-saved" data-offline-saved hidden aria-labelledby="offline-saved-title" tabindex="-1">
-    <span class="offline-saved-icon">{{ icon('circle-check') }}</span><h2 id="offline-saved-title">已暫存在這支手機</h2><p data-offline-saved-message>尚未同步。回到有網路的地方後，請按同步完成上傳。</p>{{ scanner_button('next', '繼續下一點') }}
+    <div class="offline-saved-heading"><span class="offline-saved-icon">{{ icon('circle-check') }}</span><h2 id="offline-saved-title">已暫存在這支手機</h2></div><p data-offline-saved-message>尚未同步。回到有網路的地方後，請按同步完成上傳。</p>{{ scanner_button('next', '繼續下一點') }}
   </section>
-
-  <section class="offline-panel offline-readiness" aria-labelledby="offline-readiness-title">
-    <div class="offline-section-heading"><h2 id="offline-readiness-title">離線準備</h2><span class="offline-account" data-offline-account>尚未讀取帳號</span></div>
-    <p class="offline-validity" data-offline-validity>請先在有網路時登入，使用已核准的手機完成準備。</p>
-    <div class="offline-actions"><button class="button button-secondary" type="button" data-offline-prepare>{{ icon('download') }}更新離線資料</button><a class="button button-secondary" href="/login?next=/offline" data-offline-login>{{ icon('login') }}登入帳號</a></div>
-    <p class="offline-help">暫存紀錄只保存在目前瀏覽器。同步完成前，請保留瀏覽器資料。</p>
-  </section>
-
   <section class="offline-panel offline-queue-panel" id="offline-queue" aria-labelledby="offline-queue-title">
     <div class="offline-section-heading"><h2 id="offline-queue-title">待傳紀錄</h2><span class="offline-queue-summary" data-offline-queue-summary>尚無待傳紀錄</span></div>
     <div class="offline-actions offline-sync-actions"><button class="button button-primary" type="button" data-offline-sync disabled>{{ icon('download') }}同步待傳紀錄</button><button class="button button-secondary" type="button" data-offline-cancel-sync hidden>取消本輪同步</button></div>
     <p class="offline-help offline-sync-help">連線檢查最多 5 秒，每筆上傳最多 30 秒。逾時或取消後，尚未確認的紀錄仍保留，可稍後重試。</p>
     <div class="offline-empty" data-offline-empty>{{ icon('list') }}<p>目前沒有待傳紀錄</p><span>掃描現場 QR Code，再確認打卡。</span></div>
     <ul class="offline-queue" data-offline-queue aria-label="本機待傳打卡紀錄"></ul>
+  </section>
+  <section class="offline-panel offline-readiness" id="offline-readiness" aria-labelledby="offline-readiness-title">
+    <div class="offline-section-heading"><h2 id="offline-readiness-title">離線準備</h2><span class="offline-account" data-offline-account>尚未讀取帳號</span></div>
+    <p class="offline-validity" data-offline-validity>請先在有網路時登入，使用已核准的手機完成準備。</p>
+    <div class="offline-actions"><button class="button button-secondary" type="button" data-offline-prepare>{{ icon('download') }}更新離線資料</button><a class="button button-secondary" href="/login?next=/offline" data-offline-login>{{ icon('login') }}登入帳號</a></div>
+    <p class="offline-help">暫存紀錄只保存在目前瀏覽器。同步完成前，請保留瀏覽器資料。</p>
   </section>
   <footer class="offline-footer"><span>巡點 · 廠區巡檢系統</span><span>時間以台灣時間顯示</span></footer>
 </main>

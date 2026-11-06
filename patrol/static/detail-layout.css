@@ -108,3 +108,31 @@
   .record-detail-wrap .record-facts > div + div { border-top: 1px solid var(--line); }
   .record-detail-wrap .record-facts strong { text-align: end; }
 }
+
+/* Short landscape screens keep the main action above the fixed navigation. */
+@media screen and (min-width: 540px) and (max-width: 720px) and (max-height: 480px) {
+  .checkin-wrap-wide .checkin-card, .receipt-wrap .receipt-can-scan {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, .9fr);
+    align-items: start; column-gap: 1rem;
+  }
+  .checkin-wrap-wide .checkin-card > *, .receipt-wrap .receipt-can-scan > * { grid-column: 1 / -1; }
+  .checkin-wrap-wide .checkin-card > h1 { grid-column: 1; grid-row: 1; font-size: 1.6rem; }
+  .checkin-wrap-wide .checkin-card > .checkin-location {
+    grid-column: 1; grid-row: 2; margin-top: .3rem; font-size: 1rem; line-height: 1.5;
+  }
+  .checkin-wrap-wide .checkin-card > .checkin-place { grid-column: 1; grid-row: 3; }
+  .checkin-wrap-wide .checkin-card > .checkin-quick-action {
+    grid-column: 2; grid-row: 1 / span 3; margin-block: 0;
+  }
+  .checkin-wrap-wide .checkin-quick-action > p { font-size: .875rem; margin-bottom: .35rem; }
+  .checkin-wrap-wide .checkin-quick-action .button-large { min-height: 48px; font-size: 1rem; }
+  .checkin-wrap-wide .checkin-report-link { margin-top: 0; font-size: .875rem; }
+  .receipt-wrap .receipt-can-scan > .success-emblem { display: none; }
+  .receipt-wrap .receipt-can-scan > h1 { grid-column: 1; grid-row: 1; font-size: 1.5rem; }
+  .receipt-wrap .receipt-can-scan > .checkin-location {
+    grid-column: 1; grid-row: 2; margin-top: .3rem;
+  }
+  .receipt-wrap .receipt-can-scan > .scan-trigger-next {
+    grid-column: 2; grid-row: 1 / span 2; align-self: center; margin-top: 0;
+  }
+}
