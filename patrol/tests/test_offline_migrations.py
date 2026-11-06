@@ -74,21 +74,21 @@ def submission(**changes):
 
 
 def test_fresh_offline_schema_creation_and_second_run_are_idempotent(engine):
-    assert upgrade_schema(engine) == LATEST_VERSION == 12
+    assert upgrade_schema(engine) == LATEST_VERSION
     before = schema_signature(engine) if engine.dialect.name == "postgresql" else None
-    assert upgrade_schema(engine) == 12
+    assert upgrade_schema(engine) == LATEST_VERSION
     if before is not None:
         assert schema_signature(engine) == before
     with engine.connect() as connection:
         assert connection.scalar(select(func.count(OfflineSubmission.id))) == 0
-        assert connection.execute(select(SchemaVersion.version)).scalars().all() == [12]
+        assert connection.execute(select(SchemaVersion.version)).scalars().all() == [LATEST_VERSION]
 
 
 def test_v11_upgrade_adds_only_empty_offline_table_and_preserves_shared_data(engine, v11):
     with engine.connect() as connection:
         before = snapshot(connection, v11)
         old_tables = set(inspect(connection).get_table_names())
-    assert upgrade_schema(engine) == 12
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         after = snapshot(connection, v11)
         assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
@@ -98,7 +98,7 @@ def test_v11_upgrade_adds_only_empty_offline_table_and_preserves_shared_data(eng
     with Session(engine) as session:
         assert session.get(Inspection, 71).offline_submission is None
         assert session.get(PatrolExecution, 61).offline_submission is None
-    assert upgrade_schema(engine) == 12
+    assert upgrade_schema(engine) == LATEST_VERSION
 
 
 def test_receipt_relationships_keep_claimed_and_received_times_separate(engine, v11):

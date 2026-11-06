@@ -197,6 +197,25 @@ test('offline routing waits for its destination after stopping the camera', asyn
   assert.deepEqual(s.destinations, ['/offline?point=next']);
 });
 
+for (const interruption of ['new scan', 'background', 'pagehide']) {
+  test('a delayed offline route cannot navigate after ' + interruption, async () => {
+    const routing = delayed();
+    let first = true;
+    const s = simulate({ detect: () => first ? (first = false, [qr('/c/next')]) : [], route: () => routing.promise });
+    s.click(s.start);
+    await nextTurn();
+    assert.equal(s.dialog.open, false);
+    if (interruption === 'new scan') s.click(s.start);
+    else if (interruption === 'background') {
+      s.document.hidden = true;
+      s.document.dispatchEvent(new Event('visibilitychange'));
+    } else s.window.dispatchEvent(new Event('pagehide'));
+    routing.resolve('/offline?point=next');
+    await nextTurn();
+    assert.deepEqual(s.destinations, []);
+  });
+}
+
 test('an unavailable offline helper preserves normal navigation and cannot redirect to another origin', async () => {
   const failed = simulate({ detect: () => [qr('/c/next')], route: async () => { throw new Error('storage'); } });
   failed.click(failed.start);

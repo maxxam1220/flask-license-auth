@@ -14,6 +14,8 @@ db = SQLAlchemy()
 POINT_WORKFLOW_RULE = "workflow_mode = 'standard' OR (category = 'general' AND workflow_mode IN ('spot','two_stage'))"
 EXECUTION_SLOT_RULE = ("(frequency IN ('daily','weekly','monthly','irregular') AND slot = 'any') OR "
                        "(frequency = 'daily2' AND slot IN ('am','pm'))")
+ENGINEERING_TITLE_RULE = ("NOT engineering_inspector_title OR (role = 'inspector' AND patrol_category IS NOT NULL "
+                          "AND patrol_category = 'general' AND NOT general_manager_title)")
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
@@ -52,6 +54,9 @@ class User(db.Model):
         "patrol_category IN ('safety', 'general')", name="patrol_user_category_allowed"), nullable=True)
     # Display title for a general inspector. Access checks use role and patrol_category.
     general_manager_title = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
+    engineering_inspector_title = db.Column(db.Boolean, db.CheckConstraint(
+        ENGINEERING_TITLE_RULE, name="patrol_engineering_inspector_title"),
+        nullable=False, default=False, server_default=db.false())
     active = db.Column(db.Boolean, nullable=False, default=True)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     auth_version = db.Column(db.Integer, nullable=False, default=1)

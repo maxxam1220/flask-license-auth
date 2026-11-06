@@ -198,3 +198,91 @@ test('late prepare response cannot overwrite a newer owner and reveal old privat
   const state = await second.core.getState(); assert.equal(state.identity.id, 2); assert.equal(state.pending, 0);
   assert.equal((await rows(h.dbName, 'queue')).length, 1);
 });
+
+test('temporary status failure keeps preparation and all pending content visible', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  h.state.status = () => response({ ok: false, message: 'temporarily unavailable' }, 503);
+  const state = await h.core.sync();
+  assert.equal(state.locked, false); assert.equal(state.prepared, true); assert.equal(state.pending, 1);
+  assert.equal(state.sync.errorCode, 'response');
+  assert.equal(h.state.uploads.length, 0); assert.equal(state.sync.running, false);
+  assert.equal((await rows(h.dbName, 'queue'))[0].note, input.note);
+});
+
+test('same-tab rapid sync clicks do not launch overlapping status or upload runs', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  const before = h.state.calls.length;
+  await Promise.all([h.core.sync(), h.core.sync(), h.core.sync()]);
+  assert.deepEqual(h.state.calls.slice(before), ['/api/offline/status', '/api/offline/sync']);
+  assert.equal(h.state.uploads.length, 1); assert.equal((await rows(h.dbName, 'receipts')).length, 1);
+});
+
+test('response body timeout stops this sync round instead of waiting on the next item', async t => {
+  const h = await prepared(t, { uploadTimeout: 15 }); await h.core.enqueue(input); await h.core.enqueue(input);
+  h.state.sync = (_, init) => Promise.resolve({ ok: true, status: 200, json: () => waitAbort(init) });
+  const state = await h.core.sync();
+  assert.equal(h.state.uploads.length, 1); assert.equal(state.pending, 2);
+  assert.equal(state.queue[0].status, 'retry'); assert.match(state.queue[0].error, /逾時/);
+  assert.equal(state.queue[1].attempts, 0); assert.equal(state.sync.running, false);
+});
+
+test('offline shell installation delay does not backdate the calibrated visit time', async t => {
+  const h = harness({ ensureShell: async () => { h.state.now += 14000; } }); t.after(() => h.core.close());
+  await h.core.prepare(); await h.core.enqueue(input);
+  assert.equal(Date.parse((await rows(h.dbName, 'queue'))[0].observed_at), stamp + 14000);
+});
+
+test('late rejected prepare cannot lock a more recently prepared account', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let release; h.state.prepare = () => new Promise(resolve => { release = () => resolve(response({ ok: false, code: 'login_required' }, 401)); });
+  const stale = h.core.prepare(); while (!release) await new Promise(resolve => setTimeout(resolve, 0));
+  const second = harness({ databaseName: h.dbName }); t.after(() => second.core.close());
+  second.state.manifest = manifest({ owner: 'u2v1b22inspectorgeneral', identity: { id: 2, auth_version: 1, binding_id: 22, name: 'Other', role: 'inspector', category: 'general' } });
+  await second.core.prepare(); release(); await assert.rejects(stale, { code: 'login_required' });
+  const state = await second.core.getState(); assert.equal(state.identity.id, 2); assert.equal(state.locked, false); assert.equal(state.prepared, true);
+  assert.equal(state.pending, 0); assert.equal((await rows(h.dbName, 'queue')).length, 1);
+});
+
+test('cancel sync does not abort a concurrent preparation or reset cancellation state', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let statusReached, prepareReached, releasePrepare;
+  const statusReady = new Promise(resolve => { statusReached = resolve; });
+  const prepareReady = new Promise(resolve => { prepareReached = resolve; });
+  h.state.status = init => { statusReached(); return waitAbort(init); };
+  h.state.prepare = init => new Promise((resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    releasePrepare = () => resolve(response(h.state.manifest)); prepareReached();
+  });
+  const syncing = h.core.sync(); await statusReady;
+  const preparing = h.core.prepare(); await prepareReady;
+  h.core.cancelSync(); const stopped = await syncing; assert.equal(stopped.sync.cancelled, true);
+  releasePrepare(); await preparing;
+  const state = await h.core.getState(); assert.equal(state.pending, 1); assert.equal(state.prepared, true);
+  assert.equal(h.state.uploads.length, 0);
+});
+
+test('cancelling before first IndexedDB read completes avoids every network request', async t => {
+  const h = await prepared(t); await h.core.enqueue(input); const before = h.state.calls.length;
+  const syncing = h.core.sync(); h.core.cancelSync(); await syncing;
+  assert.equal(h.state.calls.length, before); assert.equal((await h.core.getState()).pending, 1);
+});
+
+test('one forbidden point stays blocked while the next permitted point can synchronize', async t => {
+  const h = await prepared(t); await h.core.enqueue(input); await h.core.enqueue(input);
+  h.state.sync = entry => entry.slot === 'am' ? response({ ok: false, code: 'forbidden', message: '不可巡檢自己的執行紀錄', retryable: false }, 403) :
+    response({ ok: true, status: 'saved', client_id: entry.client_id });
+  const state = await h.core.sync(); assert.equal(state.locked, false); assert.equal(state.prepared, true);
+  assert.equal(state.queue.length, 1); assert.equal(state.queue[0].status, 'blocked'); assert.equal(state.receipts.length, 1);
+});
+
+test('stale sync authentication failure cannot clear a newer preparation for the same owner', async t => {
+  const h = await prepared(t); await h.core.enqueue(input);
+  let release, reached; const ready = new Promise(resolve => { reached = resolve; });
+  h.state.status = () => new Promise(resolve => { release = () => resolve(response({ ok: false, code: 'login_required' }, 401)); reached(); });
+  const pending = h.core.sync(); await ready;
+  const second = harness({ databaseName: h.dbName }); t.after(() => second.core.close());
+  await second.core.prepare(); release(); await pending;
+  const state = await second.core.getState(); assert.equal(state.owner, h.state.manifest.owner);
+  assert.equal(state.locked, false); assert.equal(state.prepared, true); assert.equal(state.pending, 1);
+  assert.equal(h.state.uploads.length, 0);
+});

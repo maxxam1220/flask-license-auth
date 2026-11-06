@@ -14,11 +14,13 @@ from itsdangerous import BadData, URLSafeSerializer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from account_roles import role_label
+from daily_rounds import daily2_anytime
 from domain import floor_label
 from general_workflow import execution_in_slot, new_execution, personal_inspection_in_slot
 from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, process_uploads
 from issues import open_issue_for
-from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, Point, db
+from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
 from patrol_access import can_access_category
 
 
@@ -50,7 +52,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
 
     def identity(user, binding):
         return dict(id=user.id, name=user.display_name, role=user.role, category=user.patrol_category,
-                    binding_id=binding.id, auth_version=user.auth_version)
+                    binding_id=binding.id, auth_version=user.auth_version, role_label=role_label(user))
 
     def actor(lock=False):
         if not g.get("user"):
@@ -119,7 +121,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         day = local_dt(instant).date()
         capture_until = datetime.combine(day + timedelta(days=1), time.min, timezone_local)
         sync_until = capture_until + timedelta(days=1)
-        rows = []
+        candidates = []
         for point in db.session.scalars(select(Point).where(Point.active.is_(True),
                 Point.deleted_at.is_(None), Point.schedule_start <= day).order_by(Point.floor, Point.code)):
             stage = stage_for(user, point)
@@ -129,14 +131,37 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             slots = ["am", "pm"] if point.frequency == "daily2" else ["any"]
             # Before the anytime cutover, offline capture is unavailable for
             # legacy morning/afternoon days; never reinterpret historical rules.
-            from daily_rounds import daily2_anytime
             if point.frequency == "daily2" and not daily2_anytime(day):
                 continue
+            candidates.append((point, stage, key, slots))
+        # Prepare an entire route with a fixed number of queries. Loading a
+        # receipt for every slot also eagerly loaded its offline mapping and
+        # could exhaust the phone's short connection window on a large site.
+        personal_ids = [p.id for p, stage, _, _ in candidates if p.workflow_mode in ("spot", "two_stage") and stage != "execute"]
+        shared_ids = [p.id for p, _, _, _ in candidates if p.workflow_mode == "standard"]
+        execution_ids = [p.id for p, _, _, _ in candidates if p.workflow_mode == "two_stage"]
+        keys = {key for _, _, key, _ in candidates}
+        personal_used = set(db.session.execute(select(Inspection.point_id, Inspection.slot).where(
+            Inspection.point_id.in_(personal_ids), Inspection.user_id == user.id,
+            Inspection.personal_day == day)).all()) if personal_ids else set()
+        shared_used = set(db.session.execute(select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot).where(
+            Inspection.point_id.in_(shared_ids), Inspection.period_key.in_(keys),
+            Inspection.legacy_unscheduled.is_(False), Inspection.executor_visit.is_(False))).all()) if shared_ids else set()
+        executed_used = set(db.session.execute(select(PatrolExecution.point_id, PatrolExecution.frequency, PatrolExecution.period_key, PatrolExecution.slot).where(
+            PatrolExecution.point_id.in_(execution_ids), PatrolExecution.period_key.in_(keys))).all()) if execution_ids else set()
+        rows = []
+        for point, stage, key, slots in candidates:
             grant = dict(v=1, owner=owner(user, binding), settings=settings(point), stage=stage,
                          day=day.isoformat(), period_key=key, issued_at=iso(instant),
                          capture_until=iso(capture_until), sync_until=iso(sync_until))
-            used = [slot for slot in slots if consumed(user, point, day, key, slot, stage)]
-            executed = [slot for slot in slots if point.workflow_mode == "two_stage" and execution_in_slot(point, key, slot)]
+            executed = [slot for slot in slots if (point.id, point.frequency, key, slot) in executed_used]
+            if stage == "execute":
+                used = executed
+            elif point.workflow_mode in ("spot", "two_stage"):
+                used = [slot for slot in slots if ((point.id, "any") in personal_used or (point.id, slot) in personal_used
+                        or (slot == "any" and any((point.id, old_slot) in personal_used for old_slot in ("am", "pm"))))]
+            else:
+                used = [slot for slot in slots if (point.id, point.frequency, key, slot) in shared_used]
             rows.append(dict(id=point.id, token=point.qr_token, revision=point_revision(point), code=point.code, name=point.name,
                              floor=floor_label(point.floor), frequency=point.frequency, workflow_mode=point.workflow_mode,
                              stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed,
@@ -193,7 +218,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             canonical = dict(entry, note=note, observed_at=iso(observed), photos=photo_hashes)
             payload_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=True,
                                                     separators=(",", ":")).encode()).hexdigest()
-        except (ValueError, TypeError, OverflowError):
+        except (ValueError, TypeError, OverflowError, RecursionError):
             return fail("invalid_entry", "暫存格式不正確；備註最多 2,000 字、照片最多 3 張且每張 8 MB。資料仍保留。", 400)
         if entry["owner"] != owner(user, binding):
             return fail("owner_changed", "帳號權限或手機綁定已變更，這批暫存無法自動同步；請聯絡管理員。", 403)

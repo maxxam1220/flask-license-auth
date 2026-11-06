@@ -35,11 +35,13 @@
     const listeners = new Set();
     const tabId = uuid();
     let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false };
-    let epoch = 0, controller, syncing = false, cancelled = false, syncState = {}, message = '';
+    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '';
+    const requests = new Set();
+    const abortRequests = () => { for (const controller of requests) controller.abort(); };
     let channel;
     if (options.broadcast !== false && env.BroadcastChannel) {
       channel = new env.BroadcastChannel('patrol-offline-state-v1');
-      channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; controller?.abort(); } refresh().catch(() => {}); };
+      channel.onmessage = event => { if (event.data?.type === 'lock') { epoch++; abortRequests(); } refresh().catch(() => {}); };
     }
     function announce() {
       for (const fn of listeners) { try { fn(state); } catch (_) { /* One UI subscriber cannot interrupt persistence. */ } }
@@ -105,34 +107,41 @@
       const queue = owned.map(row => row.owner === manifest.owner ? summary(row) : { ...summary(row), stale_owner: true, status: 'blocked', retryable: false,
         error: '原登入版本或手機綁定已變更。此筆保留供處理，不會使用新授權補傳；請聯絡管理員。' });
       state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), identity: manifest?.identity || null,
-        owner: manifest?.owner || null, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
+        owner: manifest?.owner || null, revision: active?.revision || 0, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
         online: navigator.onLine !== false, pending: queue.length, blocked: queue.filter(row => row.status === 'blocked').length,
         queue, receipts: manifest ? snapshot.receipts.filter(row => row.owner === manifest.owner).map(row => ({ ...row, photos: undefined })) : [],
         sync: { ...syncState, running: syncing }, message };
       announce(); return state;
     }
-    async function lock(reason = '') {
-      epoch++; controller?.abort(); message = reason; cancelled = true;
-      await transaction(['meta', 'manifests'], 'readwrite', (tx, done) => {
+    async function lock(reason = '', expected = null) {
+      const applied = await transaction(['meta', 'manifests'], 'readwrite', (tx, done) => {
         const store = tx.objectStore('meta'), request = store.get('active');
-        request.onsuccess = () => { store.put({ key: 'active', locked: true, owner: null, revision: (request.result?.revision || 0) + 1 });
+        request.onsuccess = () => {
+          if ((expected?.owner && request.result?.owner !== expected.owner) ||
+              (expected?.revision !== undefined && (request.result?.revision || 0) !== expected.revision)) return done(false);
+          store.put({ key: 'active', locked: true, owner: null, revision: (request.result?.revision || 0) + 1 });
           tx.objectStore('manifests').clear(); done(true); };
       });
-      broadcast('lock'); return refresh();
+      if (applied) { epoch++; abortRequests(); message = reason; cancelled = true; broadcast('lock'); }
+      return refresh();
     }
     async function network(url, init = {}, timeout = connectTimeout) {
       if (navigator.onLine === false) throw fault('offline', '目前沒有網路，資料仍保留在此手機。');
-      const aborter = new env.AbortController(); controller = aborter;
+      const aborter = new env.AbortController(), isSync = url !== '/api/offline/prepare';
+      requests.add(aborter); if (isSync) syncController = aborter;
       const timer = timers.setTimeout(() => aborter.abort(), timeout);
       try {
         const response = await fetcher(url, { ...init, signal: aborter.signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
         let json;
-        try { json = await response.json(); } catch (_) { throw fault('response', '伺服器回應無法確認，資料仍保留，請重試。'); }
+        try { json = await response.json(); } catch (error) {
+          if (error.name === 'AbortError') throw error;
+          throw fault('response', '伺服器回應無法確認，資料仍保留，請重試。');
+        }
         return { response, json };
       } catch (error) {
-        if (error.name === 'AbortError') throw fault(cancelled ? 'cancelled' : 'timeout', cancelled ? '已停止補傳，尚未確認的資料仍保留。' : '連線逾時，資料仍保留，請重試。');
+        if (error.name === 'AbortError') throw fault(isSync && cancelled ? 'cancelled' : 'timeout', isSync && cancelled ? '已停止補傳，尚未確認的資料仍保留。' : '連線逾時，資料仍保留，請重試。');
         throw error;
-      } finally { timers.clearTimeout(timer); if (controller === aborter) controller = null; }
+      } finally { timers.clearTimeout(timer); requests.delete(aborter); if (syncController === aborter) syncController = null; }
     }
     function validManifest(value) {
       return value?.ok === true && value.version === 1 && typeof value.owner === 'string' && value.owner.length <= 300 && value.identity &&
@@ -143,22 +152,25 @@
           Array.isArray(p.slots) && p.slots.length > 0 && p.slots.every(slot => ['any', 'am', 'pm'].includes(slot)) && Array.isArray(p.used_slots));
     }
     async function prepare(expectedIdentity) {
-      const startEpoch = epoch; cancelled = false;
+      const startEpoch = epoch;
       const revision = await transaction(['meta'], 'readonly', (tx, done) => {
         const request = tx.objectStore('meta').get('active'); request.onsuccess = () => done(request.result?.revision || 0);
       });
       const { response, json } = await network('/api/offline/prepare');
+      // Cache installation may take several seconds. It must not shift the
+      // phone's calibrated clock backwards by that preparation duration.
+      const receivedMs = now(), offsetMs = Date.parse(json?.server_time) - receivedMs;
       if (!response.ok || !validManifest(json)) {
-        if ([401, 403].includes(response.status)) await lock('請先登入並使用已核准的綁定手機。');
+        if ([401, 403].includes(response.status)) await lock('請先登入並使用已核准的綁定手機。', { revision });
         throw fault(json?.code || 'prepare', json?.message || '無法準備離線資料，請先確認登入與手機綁定。');
       }
       if (expectedIdentity && (String(json.identity.id) !== String(expectedIdentity.id) || String(json.identity.auth_version) !== String(expectedIdentity.version))) {
-        await lock('帳號已變更，請重新載入頁面。'); throw fault('owner', '帳號已變更，請重新載入頁面。');
+        await lock('帳號已變更，請重新載入頁面。', { revision }); throw fault('owner', '帳號已變更，請重新載入頁面。');
       }
       if (startEpoch !== epoch) throw fault('owner', '帳號狀態已變更，請重試。');
       if (options.ensureShell) await options.ensureShell();
       if (startEpoch !== epoch) throw fault('owner', '帳號狀態已變更，請重試。');
-      const manifest = { ...json, offset_ms: Date.parse(json.server_time) - now(), prepared_ms: now() };
+      const manifest = { ...json, offset_ms: offsetMs, prepared_ms: receivedMs };
       await transaction(['meta', 'manifests'], 'readwrite', (tx, done, fail) => {
         const store = tx.objectStore('meta'), request = store.get('active');
         request.onsuccess = () => {
@@ -168,6 +180,7 @@
         };
       });
       message = '今日離線資料已備妥。未上傳的紀錄只保留在這支手機。';
+      if (!syncing) syncState = {};
       broadcast(); return refresh();
     }
     async function getPoint(token) {
@@ -216,6 +229,7 @@
         tx.objectStore('meta').put({ key: 'sequence', value: sequence }); tx.objectStore('queue').add(row); done(summary(row));
       }));
       message = '已暫存此手機，尚未上傳。請保持頁面開啟，連線後按「同步待傳紀錄」。';
+      if (!syncing) syncState = {};
       broadcast(); await refresh(); return saved;
     }
     async function remove(client_id, confirmation) {
@@ -228,7 +242,7 @@
         if (!manifest || !row || (row.owner !== manifest.owner && row.user_id !== manifest.identity.id)) return fail(fault('owner', '無法操作其他帳號的本機資料。'));
         tx.objectStore('queue').delete(client_id); done(true);
       }));
-      message = '已刪除這筆尚未確認的本機資料。'; broadcast(); return refresh();
+      message = '已刪除這筆尚未確認的本機資料。'; syncState = {}; broadcast(); return refresh();
     }
     async function lease(owner, release = false) {
       return transaction(['meta'], 'readwrite', (tx, done) => {
@@ -251,18 +265,26 @@
     async function synchronize(selection = {}) {
       if (syncing) return state;
       if (navigator.onLine === false) { message = '目前沒有網路，資料仍保留在此手機。'; return refresh(); }
-      await refresh(); const owner = state.owner, startEpoch = epoch;
-      if (!owner || state.locked) throw fault('locked', '請先連線登入原帳號，再補傳。');
-      if (!await lease(owner)) { message = '另一個分頁正在補傳，請稍候。'; return refresh(); }
+      // Claim synchronously: two clicks can otherwise both pass the guard
+      // while their first IndexedDB reads are still in flight.
       syncing = true; cancelled = false; const started = now();
-      syncState = { total: state.pending, processed: 0, saved: 0, failed: 0, elapsed: 0, current: '', cancelled: false };
+      let owner, revision, leaseHeld = false; const startEpoch = epoch;
+      syncState = { total: state.pending, processed: 0, saved: 0, failed: 0, elapsed: 0, current: '', phase: 'checking', cancelled: false };
       const ticker = timers.setInterval(() => { syncState.elapsed = Math.floor((now() - started) / 1000); state = { ...state, sync: { ...syncState, running: syncing } }; announce(); }, 1000);
       try {
         await refresh();
+        owner = state.owner; revision = state.revision;
+        if (!owner || state.locked) throw fault('locked', '請先連線登入原帳號，再補傳。');
+        leaseHeld = await lease(owner);
+        if (!leaseHeld) throw fault('busy', '另一個分頁正在補傳，請稍候。');
+        if (cancelled || epoch !== startEpoch) throw fault('cancelled', '已停止補傳，尚未確認的資料仍保留。');
         const status = await network('/api/offline/status');
         if (!status.response.ok || status.json?.ok !== true || status.json.owner !== owner || typeof status.json.csrf_token !== 'string') {
-          await lock('登入或手機綁定已變更，請用原帳號重新登入後補傳。');
-          throw fault('owner', '登入或手機綁定已變更，待補傳資料仍保留。');
+          if ([401, 403].includes(status.response.status) || (status.response.ok && status.json?.ok === true && status.json.owner !== owner)) {
+            await lock('登入或手機綁定已變更，請用原帳號重新登入後補傳。', { owner, revision });
+            throw fault('owner', '登入或手機綁定已變更，待補傳資料仍保留。');
+          }
+          throw fault('response', '目前無法確認伺服器連線，暫存與離線準備仍保留；請稍後重試。');
         }
         const ids = state.queue.filter(row => !row.stale_owner && (!selection.client_id || row.client_id === selection.client_id)).map(row => row.client_id);
         syncState.total = ids.length;
@@ -270,7 +292,8 @@
           if (cancelled || epoch !== startEpoch) break;
           if (!await lease(owner)) break;
           const row = await ownedEntry(id, owner, (tx, item) => { item.status = 'pending'; item.attempts++; tx.objectStore('queue').put(item); });
-          syncState.current = row.code; await refresh();
+          syncState.current = row.code; syncState.phase = 'uploading'; await refresh();
+          if (cancelled || epoch !== startEpoch) break;
           const Form = options.FormData || env.FormData, body = new Form();
           body.append('entry', JSON.stringify({ client_id: row.client_id, owner: row.owner, token: row.token, grant: row.grant, slot: row.slot,
             observed_at: row.observed_at, note: row.note, is_abnormal: row.is_abnormal }));
@@ -294,7 +317,12 @@
               syncState.saved++;
             } else {
               const reason = json?.message || '伺服器未確認這筆紀錄，資料仍保留，請重試。';
-              if ([401, 403].includes(response.status)) { await lock(reason); throw fault('owner', reason); }
+              // A single point can reject an otherwise authorized inspector
+              // (for example, reviewing their own earlier execution). Keep
+              // other points available instead of discarding the manifest.
+              if (response.status === 401 || (response.status === 403 && json?.code !== 'forbidden')) {
+                await lock(reason, { owner, revision }); throw fault('owner', reason);
+              }
               const retryable = response.status >= 500 || json?.retryable !== false || json?.ok === true;
               await ownedEntry(id, owner, (tx, item) => { item.status = retryable ? 'retry' : 'blocked'; item.error = reason; item.retryable = retryable; tx.objectStore('queue').put(item); });
               syncState.failed++;
@@ -308,14 +336,18 @@
           syncState.processed++; broadcast(); await refresh();
         }
         message = cancelled ? '已停止補傳，尚未確認的資料仍保留。' : `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`;
-      } catch (error) { message = error.message || '無法連線，待補傳資料仍保留。'; }
+      } catch (error) {
+        message = error.message || '無法連線，待補傳資料仍保留。';
+        if (!cancelled && !['cancelled', 'busy'].includes(error.code)) syncState.errorCode = error.code || 'network';
+      }
       finally {
-        syncing = false; syncState.cancelled = cancelled; timers.clearInterval(ticker); await lease(owner, true);
+        syncing = false; syncState.cancelled = cancelled; syncState.phase = 'idle'; timers.clearInterval(ticker);
+        if (leaseHeld) await lease(owner, true);
         broadcast(); await refresh();
       }
       return state;
     }
-    function cancelSync() { cancelled = true; controller?.abort(); }
+    function cancelSync() { cancelled = true; syncController?.abort(); }
     async function route(value) {
       const path = safePath(value); if (!path) throw fault('point', '這不是本站的巡檢點網址。');
       return navigator.onLine === false ? '/offline?point=' + encodeURIComponent(path.slice(3)) : path;
@@ -354,12 +386,12 @@
     const text = (hook, value) => all(hook).forEach(el => { el.textContent = value; });
     const query = new URLSearchParams(location.search);
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
-      pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot;
+      pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress;
     const form = one('checkin'), photosInput = form?.elements.namedItem('photos');
     const slotText = slot => slot === 'am' ? '第 1 次' : slot === 'pm' ? '第 2 次' : '本次';
     const stageText = stage => ({ execute: '執行簽到', inspect: '巡檢', visit: '直接簽到' }[stage] || '巡檢');
     const timeText = iso => { try { return new Date(iso).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); } catch { return iso; } };
-    const reportError = error => { text('status', error.message || '操作未完成，原有資料仍保留。'); one('status')?.focus(); };
+    const reportError = error => { text('status', error.message || '操作未完成，原有資料仍保留。'); if (one('status')) one('status').dataset.state = 'error'; one('status')?.focus(); };
     async function showPoint() {
       const run = ++pointGeneration, section = one('point'); if (!section) return;
       const point = selectedToken ? await core.getPoint(selectedToken) : null;
@@ -388,13 +420,21 @@
     }
     function render(state) {
       text('count', state.pending ? String(state.pending) : '');
-      text('network', !state.online ? '離線' : state.sync?.running ? '補傳中' : state.pending ? '待補傳' : '離線準備');
+      text('network', !state.online ? '離線' : state.sync?.running ? '補傳中' : state.pending ? '待補傳' : state.prepared ? '已備妥' : '離線準備');
+      if (normalProgress && !normalProgress.saving) {
+        normalProgress.status.textContent = state.sync?.running ?
+          `${state.sync.phase === 'uploading' ? '正在上傳本筆紀錄（最多 30 秒）' : '正在檢查連線（最多 5 秒）'} · 已等 ${state.sync.elapsed || 0} 秒` :
+          '已保存在手機，正在開啟收據或待傳紀錄…';
+        normalProgress.cancel.disabled = !state.sync?.running;
+      }
       if (!shell) return;
       if (viewOwner && viewOwner !== state.owner) { selectedToken = null; selectedOwner = null; selectedSnapshot = null; form?.reset(); resetPhotos(); if (one('saved')) one('saved').hidden = true; }
       viewOwner = state.owner;
-      text('account', state.identity ? `${state.identity.name} · ${stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : '尚未解鎖離線資料');
+      text('account', state.identity ? `${state.identity.name} · ${state.identity.role_label || stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : '尚未解鎖離線資料');
       text('validity', state.prepared ? `可暫存至 ${timeText(state.captureUntil)}；補傳期限 ${timeText(state.syncUntil)}` : state.locked ? '請先連線登入原帳號，並準備今日資料。' : '今日資料已到期。待補傳紀錄仍保留，請連線補傳。');
       text('status', state.message || (!state.online ? '目前離線。暫存不等於打卡完成，請連線後補傳。' : state.prepared ? '今日離線資料已備妥。' : '請先準備今日離線資料。'));
+      if (one('status')) one('status').dataset.state = !state.online ? 'offline' : state.blocked ? 'blocked' :
+        !state.sync?.running && (state.sync?.errorCode || state.sync?.failed > 0) ? 'error' : 'online';
       text('queue-summary', state.sync?.running ? `正在處理 ${state.sync.processed}/${state.sync.total} 筆 · 已確認 ${state.sync.saved} 筆 · ${state.sync.elapsed} 秒` : `${state.pending} 筆待補傳${state.blocked ? `，其中 ${state.blocked} 筆需處理` : ''}`);
       if (one('sync')) one('sync').disabled = state.locked || !state.pending || state.sync?.running;
       if (one('cancel-sync')) one('cancel-sync').hidden = !state.sync?.running;
@@ -481,7 +521,18 @@
       const buttons = Array.from(normal.elements).filter(el => el instanceof HTMLButtonElement && el.type === 'submit');
       const saved = buttons.map(button => ({ button, disabled: button.disabled, content: button.innerHTML }));
       normal.dataset.offlineSaving = 'true'; normal.dataset.submitting = 'true'; normal.setAttribute('aria-busy', 'true');
-      for (const button of buttons) { button.disabled = true; button.textContent = '正在保存／送出；未連線則保留待傳…'; }
+      for (const button of buttons) { button.disabled = true; button.textContent = '正在保存／送出…'; }
+      const panel = document.createElement('div'), progress = document.createElement('p'), cancel = document.createElement('button');
+      panel.className = 'offline-submit-progress'; panel.tabIndex = -1;
+      progress.dataset.offlineFormProgress = ''; progress.setAttribute('role', 'status'); progress.setAttribute('aria-live', 'polite');
+      progress.textContent = '正在保存到手機；請稍候…';
+      cancel.type = 'button'; cancel.className = 'button button-secondary button-small'; cancel.dataset.offlineCancelSubmit = '';
+      cancel.textContent = '取消上傳，保留待傳'; cancel.disabled = true;
+      cancel.addEventListener('click', () => { cancel.disabled = true; core.cancelSync(); progress.textContent = '正在停止上傳，紀錄仍保留在手機…'; });
+      panel.append(progress, cancel);
+      const quickAction = normal.closest('.checkin-card')?.querySelector('.checkin-quick-action');
+      if (quickAction) quickAction.after(panel); else normal.before(panel);
+      normalProgress = { panel, status: progress, cancel, saving: true }; panel.scrollIntoView({ block: 'nearest' });
       try {
         const entry = await core.enqueue({ token, note: value('note'), is_abnormal: Boolean(normal.elements.namedItem('is_abnormal')?.checked),
           photos: normal.elements.namedItem('photos')?.files || [], expected: { user_id: body.dataset.offlineUser, auth_version: body.dataset.offlineVersion,
@@ -489,6 +540,7 @@
             frequency: value('frequency'), workflow_mode: value('workflow_mode'), period_key: value('period_key'), revision: value('point_revision') } });
         // Files are cleared only after the atomic local write has completed.
         normal.reset();
+        normalProgress.saving = false;
         if (navigator.onLine !== false) await core.sync({ client_id: entry.client_id });
         const updated = await core.getState(), receipt = updated.receipts.find(item => item.client_id === entry.client_id);
         const receiptURL = receipt?.ack?.receipt_url;
@@ -499,6 +551,7 @@
         if (!notice) { notice = document.createElement('p'); notice.dataset.offlineFormError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; normal.before(notice); }
         notice.textContent = error.message || '無法保存，原本的備註與照片仍保留在表單中。'; notice.focus();
       } finally {
+        normalProgress = null; panel.remove();
         delete normal.dataset.offlineSaving; delete normal.dataset.submitting; normal.removeAttribute('aria-busy');
         for (const item of saved) { item.button.disabled = item.disabled; item.button.innerHTML = item.content; }
       }

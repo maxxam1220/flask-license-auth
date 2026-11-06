@@ -58,3 +58,12 @@ test('readiness requires every cached asset; activation deletes only old patrol 
   w.stores.set('patrol-offline-shell-old', new Map()); w.stores.set('unrelated-app-cache', new Map()); await w.lifecycle('activate');
   assert.equal(w.stores.has('patrol-offline-shell-old'), false); assert.equal(w.stores.has('unrelated-app-cache'), true);
 });
+
+test('failed updated shell installation preserves the existing usable offline cache', async () => {
+  const w = worker(); const old = new Map([['/offline', new Response('previous usable shell')]]);
+  w.stores.set('patrol-offline-shell-20261106-v1', old);
+  w.respond(request => Promise.resolve(new Response('unavailable', { status: new URL(request.url).pathname.endsWith('offline.js') ? 503 : 200 })));
+  await assert.rejects(w.lifecycle('install'));
+  assert.equal(await w.stores.get('patrol-offline-shell-20261106-v1').get('/offline').text(), 'previous usable shell');
+  assert.equal(w.writes.length, 0);
+});

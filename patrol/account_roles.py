@@ -7,6 +7,7 @@ class AccountChoice(NamedTuple):
     role: str
     category: str | None
     manager_title: bool = False
+    engineering_title: bool = False
 
 
 ACCOUNT_CHOICES = {
@@ -14,10 +15,11 @@ ACCOUNT_CHOICES = {
     "general_executor": AccountChoice("總務執行人員", "executor", "general"),
     "general": AccountChoice("總務巡檢員", "inspector", "general"),
     "general_manager": AccountChoice("總務管理員", "inspector", "general", True),
+    "engineering": AccountChoice("工務巡檢員", "inspector", "general", False, True),
     "admin": AccountChoice("系統管理員", "admin", None),
 }
 ACCOUNT_ROLE_LABELS = {key: choice.label for key, choice in ACCOUNT_CHOICES.items()}
-_CHOICE_KEYS = {(c.role, c.category, c.manager_title): key for key, c in ACCOUNT_CHOICES.items()}
+_CHOICE_KEYS = {(c.role, c.category, c.manager_title, c.engineering_title): key for key, c in ACCOUNT_CHOICES.items()}
 
 
 def account_role_choice(account):
@@ -26,7 +28,8 @@ def account_role_choice(account):
     if account.role == "admin":
         return "admin"
     titled = account.role == "inspector" and account.patrol_category == "general" and bool(account.general_manager_title)
-    return _CHOICE_KEYS.get((account.role, account.patrol_category, titled))
+    engineering = account.role == "inspector" and account.patrol_category == "general" and bool(account.engineering_inspector_title)
+    return _CHOICE_KEYS.get((account.role, account.patrol_category, titled, engineering))
 
 
 def role_label(account):

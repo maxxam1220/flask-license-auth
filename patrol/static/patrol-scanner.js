@@ -113,15 +113,18 @@
 
   async function navigateToPoint(path) {
     // The offline helper may route to the generic shell; never follow another origin.
+    const navigationGeneration = generation;
+    const stillCurrent = () => generation === navigationGeneration && !dialog.open && !document.hidden;
     try {
       const route = window.PatrolOffline?.route;
       const destination = typeof route === 'function' ? await route(path) : path;
+      if (!stillCurrent()) return;
       const url = new URL(destination || path, location.origin);
       if (url.origin !== location.origin) return;
       location.assign(url.pathname + url.search + url.hash);
     } catch {
       // Normal confirmation remains available if the optional helper is unavailable.
-      location.assign(path);
+      if (stillCurrent()) location.assign(path);
     }
   }
 

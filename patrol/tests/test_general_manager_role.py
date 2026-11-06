@@ -1,4 +1,6 @@
 """The general manager title uses the same patrol scope and attendance rules as a general inspector."""
+import pytest
+
 from models import AuditLog, Inspection, InspectionPhoto, IssueEvent, PatrolExecution, User, db
 from test_app import PASSWORD, application, login, record, seeded  # noqa: F401
 from test_classification_management import form_revision
@@ -59,10 +61,11 @@ def test_title_edits_keep_existing_login_and_attendance_but_invalidate_older_adm
     assert inspector.auth_version > old_version and staff.get("/dashboard").location.startswith("/login")
 
 
-def test_both_titles_share_general_handoffs_and_report_access(application, seeded):
+@pytest.mark.parametrize("title", ["general_manager", "engineering"])
+def test_both_titles_share_general_handoffs_and_report_access(application, seeded, title):
     executor, lead, inspector, admin, pair, _, _ = team(application)
     user = db.session.scalar(db.select(User).where(User.username == "inspect"))
-    assert assign(admin, user, "general_manager").status_code == 302
+    assert assign(admin, user, title).status_code == 302
     safety = seeded["daily"]
     foreign = record(seeded["inspector"], safety)
     foreign.photos.append(InspectionPhoto(data=b"safety-photo", size_bytes=12, width=1, height=1))

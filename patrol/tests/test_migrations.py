@@ -448,6 +448,7 @@ def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, ve
     assert all(statement.lstrip().startswith(("ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN FLOOR",
                                              "ALTER TABLE PATROL_USERS ADD COLUMN PATROL_CATEGORY",
                                              "ALTER TABLE PATROL_USERS ADD COLUMN GENERAL_MANAGER_TITLE",
+                                             "ALTER TABLE PATROL_USERS ADD COLUMN ENGINEERING_INSPECTOR_TITLE",
                                              "ALTER TABLE PATROL_POINTS ADD COLUMN DELETED_AT",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN RETIRED_AT",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN POINT_CODE",

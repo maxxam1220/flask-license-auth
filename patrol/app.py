@@ -86,6 +86,8 @@ def management_state(item):
         values = (item.id, item.display_name, item.role, item.patrol_category, item.active, item.auth_version)
         if item.general_manager_title:
             values += ("general_manager",)
+        if item.engineering_inspector_title:
+            values += ("engineering_inspector",)
     return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
 
 
@@ -2166,7 +2168,8 @@ def create_app(config=None):
         if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
             abort(400, description=f"請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元的密碼。")
         user = User(username=username, display_name=name, role=choice.role, patrol_category=choice.category,
-                    general_manager_title=choice.manager_title, must_change_password=True)
+                    general_manager_title=choice.manager_title, engineering_inspector_title=choice.engineering_title,
+                    must_change_password=True)
         user.set_password(password)
         db.session.add(user)
         audit("user_created", username, account_role_choice(user))
@@ -2198,6 +2201,7 @@ def create_app(config=None):
             user.auth_version += 1
         user.display_name, user.role, user.patrol_category, user.active = name, choice.role, choice.category, active
         user.general_manager_title = choice.manager_title
+        user.engineering_inspector_title = choice.engineering_title
         if not active:
             db.session.execute(db.update(DeviceBinding).where(DeviceBinding.user_id == user.id, DeviceBinding.status.in_(["approved", "pending"])).values(status="revoked"))
         audit("user_updated", user.username, f"{previous} -> {account_role_choice(user)}")
