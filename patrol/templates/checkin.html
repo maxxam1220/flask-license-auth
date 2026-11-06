@@ -19,7 +19,7 @@
     <p class="checkin-location">{{ point.name }}</p>
     <p class="checkin-place">{{ floor_label(point.floor) }}{% if is_patrol_admin %} · {{ category_label(point.category) }}{% endif %}</p>
     {% if existing %}
-      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if flexible_daily2 %}{{ '本人今日兩次皆完成' if personal else '此點今日兩次皆完成' }}{% elif long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本次' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本次' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
+      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if daily2_existing_daily_record %}本人今日已有完成紀錄{% elif flexible_daily2 %}{{ '本人今日兩次皆完成' if personal else '此點今日兩次皆完成' }}{% elif long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本次' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本次' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
     {% endif %}
     {% if form_error and waiting_for_execution %}<div class="flash flash-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<span>{{ form_error }}</span></div>{% endif %}
     {% if previous_period and (note or is_abnormal) and (waiting_for_execution or can_confirm) %}
@@ -133,6 +133,6 @@
       <p class="checkin-footnote">{% if visit %}看到「直接簽到完成」後，即可前往下一點。{% elif execute %}簽到只記錄人員、點位與時間。看到「執行簽到完成」後，即可前往下一點。{% else %}附照片時請稍候，顯示「打卡成功」才表示紀錄與照片已儲存。<br>打卡時間以系統紀錄為準。{% endif %}</p>
     {% endif %}
   </div>
-  <p class="checkin-outside-note">{% if existing %}{% if flexible_daily2 %}{{ '本人' if personal else '此點' }}今日兩次皆已完成，可繼續前往下一個巡檢點。{% else %}{{ '本人本次' if personal and point.frequency == 'daily2' else '本人當日' if personal else '本次' if point.frequency == 'daily2' else '本期' }}已有完成紀錄，可繼續前往下一個巡檢點。{% endif %}{% elif can_confirm and not simple_signin %}離開前，請確認畫面顯示「打卡成功」。{% endif %}</p>
+  <p class="checkin-outside-note">{% if existing %}{% if daily2_existing_daily_record %}此點頻率已調整，原有紀錄已計入今日打卡限制，今天不需再打。{% elif flexible_daily2 %}{{ '本人' if personal else '此點' }}今日兩次皆已完成，可繼續前往下一個巡檢點。{% else %}{{ '本人本次' if personal and point.frequency == 'daily2' else '本人當日' if personal else '本次' if point.frequency == 'daily2' else '本期' }}已有完成紀錄，可繼續前往下一個巡檢點。{% endif %}{% elif can_confirm and not simple_signin %}離開前，請確認畫面顯示「打卡成功」。{% endif %}</p>
 </div>
 {% endblock %}

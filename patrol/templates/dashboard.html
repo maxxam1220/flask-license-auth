@@ -13,6 +13,18 @@
   {%- else %}<span class="badge badge-signin">未簽到</span>
   {%- endif %}
 {% endmacro %}
+{% macro stage_steps(slot) %}
+  {% if slot.status == 'not_due' %}<span class="badge badge-not_due">尚未開始</span>
+  {% else %}
+  {% set signed_in = slot.executed_at or slot.status == 'done' %}
+  <div class="workflow-stage-pair" aria-label="執行與巡檢進度">
+    <span data-stage="execution" class="badge {{ 'badge-done' if signed_in else 'badge-missed' if slot.expired else 'badge-signin' }}">{{ '已簽到' if signed_in else '未簽到' }}</span>
+    <span class="workflow-stage-arrow" aria-hidden="true">{{ icon('arrow') }}</span>
+    <span data-stage="inspection" class="badge {{ 'badge-done' if slot.status == 'done' else 'badge-missed' if slot.expired else 'badge-review' if signed_in else 'badge-neutral' }}">{{ '已巡檢' if slot.status == 'done' else '未巡檢' if slot.expired or not signed_in else '待巡檢' }}</span>
+  </div>
+  {% if slot.expired %}<small class="workflow-deadline">本次已到期</small>{% endif %}
+  {% endif %}
+{% endmacro %}
 {% macro point_issues(point_id, count) -%}
   {% if count %}
   <div class="point-issue-row">
@@ -91,7 +103,9 @@
 <div class="point-grid">{% for card in cards %}<article class="point-card {% if card.status == 'done' %}is-done{% endif %}">
   {% set done_count = card.slots|selectattr('status','equalto','done')|list|length %}
   {% set slot_count = card.slots|length %}
-  {% set current_slot = card.slots|selectattr('status','equalto','pending')|rejectattr('expired')|first %}
+  {% set pending_slots = card.slots|selectattr('status','equalto','pending')|rejectattr('expired')|list %}
+  {% set reviewable_slot = pending_slots|selectattr('stage_status','equalto','awaiting_inspection')|first %}
+  {% set current_slot = reviewable_slot if reviewable_slot is defined else pending_slots|first %}
   <div class="point-card-content">
   <div class="point-card-top"><span class="point-code">{{ card.point.code }}</span>
     <div class="point-card-badges">
@@ -108,9 +122,9 @@
   {{ point_issues(card.point.id, card.open_issue_count) }}
   <div class="point-meta">{% if card.point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif card.point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段</span>{% endif %}{{ icon('building') }}{{ floor_label(card.point.floor) }}<span>·</span>{{ frequency(card.point.frequency) }}{% if is_patrol_admin %}<span>·</span>{{ category_label(card.point.category) }}{% endif %}</div>
   {% if card.point.workflow_mode == 'two_stage' %}
-  <div class="workflow-slots" aria-label="各次作業進度">{% for slot in card.slots %}<div class="workflow-slot">
+  <div class="workflow-slots" aria-label="各次作業進度">{% for slot in card.slots %}<div class="workflow-slot" data-round="{{ slot.key }}">
     <span class="workflow-slot-label">{{ slot.label if card.point.frequency == 'daily2' else '本月' if card.point.frequency == 'monthly' else '本週' if card.point.frequency == 'weekly' else '本日' }}</span>
-    <div>{{ stage_badge(slot) }}{% if slot.executed_at %}<small>執行時間 {{ slot.executed_at|localtime }}</small>{% endif %}</div>
+    <div class="workflow-slot-progress">{{ stage_steps(slot) }}{% if slot.executed_at %}<small>執行時間 {{ slot.executed_at|localtime }}</small>{% endif %}</div>
   </div>{% endfor %}</div>
   {% elif card.point.frequency == 'daily2' %}<div class="slot-grid" aria-label="第 1 次及第 2 次巡檢狀態">{% for slot in card.slots %}<div class="slot-card slot-{{ 'missed' if slot.expired else slot.status }}"><div><strong>{{ slot.label }}</strong><span>{{ '已完成' if slot.status == 'done' else '尚未開始' if slot.status in ['not_due','upcoming'] else '已到期、未巡檢' if slot.expired else '待巡檢' }}</span></div>{% if slot.record %}<small>{{ reporter_name(slot.record) }} · {{ slot.record.created_at|shorttime }}</small>{% else %}<small>{{ card.period_label }}</small>{% endif %}</div>{% endfor %}</div>{% endif %}
   </div>

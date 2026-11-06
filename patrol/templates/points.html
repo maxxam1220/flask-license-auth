@@ -47,7 +47,7 @@
     <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
     <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>請使用樓層代碼加編號，或依總務清冊保留原編號與大小寫。</small></label>
     <label>地點名稱<input name="name" required maxlength="100" placeholder="例如：機房入口"></label>
-    <label>巡檢頻率{{ frequency_select('daily') }}<small>每日兩次以中午 12:00 分界。</small></label>
+    <label>巡檢頻率{{ frequency_select('daily') }}<small>每日兩次可於當天任意時間完成，不限間隔。</small></label>
   </div>
   <input type="hidden" name="active" value="on"><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立點位</button></div>
 </form></details>{% endif %}

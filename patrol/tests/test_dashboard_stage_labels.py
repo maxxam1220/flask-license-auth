@@ -56,7 +56,7 @@ def test_two_rounds_show_which_stage_is_open_and_count_finished_slots(applicatio
     assert badges == partial and "未簽到" in card and "尚未開始" not in card
     visit(executor, paired)
     card, badges = point_card(inspector, "1F-G00")
-    assert badges == partial and "已簽到、待巡檢" in card
+    assert badges == partial and 'data-stage="inspection" class="badge badge-review">待巡檢' in card
     visit(inspector, paired)
     card, badges = point_card(inspector, "1F-G00")
     assert badges == [("badge-done", "已完成")] and "已完成 2 / 2 次" in card
@@ -68,7 +68,8 @@ def test_live_stage_and_partial_completion_keep_missed_morning_visible(applicati
     monkeypatch.setattr(app_module, "now_utc", lambda: now)
     missed = ("badge-missed", "漏打 1 次")
     card, badges = point_card(inspector, "1F-G00")
-    assert badges == [("badge-signin", "未簽到"), missed] and "已到期、未簽到" in card
+    assert badges == [("badge-signin", "未簽到"), missed] and "本次已到期" in card
+    assert 'data-stage="execution" class="badge badge-missed">未簽到' in card
     visit(executor, paired)
     assert point_card(inspector, "1F-G00")[1] == [("badge-review", "已簽到、待巡檢"), missed]
     visit(inspector, paired)

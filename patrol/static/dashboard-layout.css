@@ -44,6 +44,12 @@
 .point-card .workflow-slot > div { min-width: 0; }
 .point-card .workflow-slot .badge { white-space: normal; text-align: start; }
 .point-card .workflow-slot small { margin-top: .25rem; line-height: 1.5; }
+.workflow-slot-progress { flex: 1; }
+.workflow-stage-pair { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem; }
+.workflow-stage-pair .badge { flex-shrink: 0; }
+.workflow-stage-arrow { display: inline-flex; color: var(--muted); }
+.workflow-stage-arrow .icon { width: .9rem; height: .9rem; }
+.point-card .workflow-deadline { color: #a4382a; }
 .point-card-bottom { border-top-color: #dce5de; }
 
 /* Unscheduled locations use the same fixed reading order on every row. */

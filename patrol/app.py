@@ -1052,6 +1052,9 @@ def create_app(config=None):
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None
         stage, allowed, notice = checkin_stage(point, first)
         existing = prior_inspection(point, key, slot, day) if stage != "execute" else None
+        # An earlier all-day receipt still consumes the personal quota after
+        # a same-day frequency change, but it is not two completed inspections.
+        daily2_existing_daily_record = bool(flexible_daily2 and existing and existing.slot == "any")
         receipt_url = None
         saved = first if stage == "execute" else existing
         if saved and saved.user_id == g.user.id and (stage == "execute" or can_read_inspection(g.user, saved)):
@@ -1081,6 +1084,7 @@ def create_app(config=None):
                                execution_time=first.created_at if first else None,
                                personal_day=day.isoformat(),
                                flexible_daily2=flexible_daily2,
+                               daily2_existing_daily_record=daily2_existing_daily_record,
                                round_ticket=daily_round_ticket(point, key, slot, day) if flexible_daily2 else "",
                                spot_ticket=spot_ticket(point, key, slot, day) if point.workflow_mode == "spot" else "",
                                point_revision=checkin_location_revision(point),
@@ -1912,6 +1916,26 @@ def create_app(config=None):
     def execution_reviewed(first):
         return db.session.scalar(select(Inspection.id).where(Inspection.execution_id == first.id).limit(1)) is not None
 
+    def protect_started_daily_rounds(point, values, instant):
+        """Do not replace today's personal quota or add unreviewable executions."""
+        day = local_dt(instant).date()
+        changes_rounds = (point.frequency != values["frequency"]
+                          and "daily2" in (point.frequency, values["frequency"]))
+        adds_execution = (point.frequency == values["frequency"] == "daily2"
+                          and point.workflow_mode != "two_stage" and values["workflow_mode"] == "two_stage")
+        if (not daily2_anytime(day) or "general" not in (point.category, values["category"])
+                or not (changes_rounds or adds_execution)):
+            return
+        start = naive_utc(datetime.combine(day, time.min, TAIPEI))
+        end = naive_utc(datetime.combine(day + timedelta(days=1), time.min, TAIPEI))
+        inspected = db.session.scalar(select(Inspection.id).where(Inspection.point_id == point.id,
+            db.or_(Inspection.personal_day == day,
+                   db.and_(Inspection.created_at >= start, Inspection.created_at < end))).limit(1))
+        executed = db.session.scalar(select(PatrolExecution.id).where(PatrolExecution.point_id == point.id,
+            PatrolExecution.created_at >= start, PatrolExecution.created_at < end).limit(1))
+        if inspected is not None or executed is not None:
+            abort(409, description="此點今日已有簽到或巡檢紀錄，請隔日再變更每日兩次的頻率或改為兩階段，避免重複計算或無法接續巡檢。")
+
     def point_list_url(deleted=False, *, changed=None):
         floor, category = scope_filters()
         anchor = None
@@ -1977,6 +2001,8 @@ def create_app(config=None):
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
         if not active or any(getattr(point, key) != values[key] for key in values):
             protect_pending_execution(point)
+        instant = now_utc()
+        protect_started_daily_rounds(point, values, instant)
         # Freeze unknown snapshots before editing the current point. Older workers
         # may still have inserted NULL snapshots during a rolling deployment.
         for schedule in point.schedules:
@@ -1989,7 +2015,6 @@ def create_app(config=None):
             if schedule.point_name is None:
                 schedule.point_name = point.name
         if point.active != active or any(getattr(point, key) != values[key] for key in values):
-            instant = now_utc()
             day = local_dt(instant).date()
             preserve_initial_schedule(point, day)
             # An archived point stays unavailable up to its actual reactivation,
