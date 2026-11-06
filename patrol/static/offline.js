@@ -449,11 +449,32 @@
     const body = document.body, shell = body.hasAttribute('data-offline-shell');
     const all = hook => [...document.querySelectorAll(`[data-offline-${hook}]`)];
     const one = hook => document.querySelector(`[data-offline-${hook}]`);
-    const text = (hook, value) => all(hook).forEach(el => { el.textContent = value; });
+    const text = (hook, value) => all(hook).forEach(el => { if (el.textContent !== value) el.textContent = value; });
     const query = new URLSearchParams(location.search);
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
       pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
       navigationAllowed = false, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, updatingLocale = false;
+    let uiRequest = null, uiRequestEpoch = 0;
+    const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
+    const uiPreferencesFromIdentity = identity => ({ ui_language: identity.ui_language,
+      simple_executor_ui: identity.role === 'executor' && identity.simple_executor_ui === true });
+    function cancelUIPreferences() { uiRequestEpoch++; uiRequest?.abort(); uiRequest = null; }
+    async function refreshUIPreferences() {
+      if (!shell || navigator.onLine === false || !root.fetch || !root.AbortController) return;
+      cancelUIPreferences();
+      const epoch = uiRequestEpoch, identityKey = uiIdentityKey(latestState), controller = new root.AbortController();
+      uiRequest = controller;
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await root.fetch('/api/ui-preferences', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal });
+        const value = await response.json();
+        if (!response.ok || value?.ok !== true || epoch !== uiRequestEpoch || identityKey !== uiIdentityKey(latestState)) return;
+        updatingLocale = true;
+        try { root.PatrolI18n?.acceptPreferences(value); } finally { updatingLocale = false; }
+        if (latestState) { render(latestState); renderPhotos(); }
+      } catch (_) { /* A presentation lookup must never block capture, sync or local recovery. */ }
+      finally { clearTimeout(timer); if (uiRequest === controller) uiRequest = null; }
+    }
     const form = one('checkin'), photosInput = form?.elements.namedItem('photos');
     core.allowNavigation = () => { navigationAllowed = true; };
     const draftPresent = target => target && !target.hasAttribute('data-offline-stored') && (
@@ -509,14 +530,23 @@
       if (one('report-fields')) { one('report-fields').hidden = !point || point.stage !== 'inspect'; for (const field of one('report-fields').querySelectorAll('input,textarea')) field.disabled = point?.stage !== 'inspect'; }
     }
     function render(state) {
+      const oldIdentity = latestState?.identity;
+      if (shell && state.identity && ((oldIdentity && uiIdentityKey(state) !== uiIdentityKey(latestState)) || preparing)) {
+        // A freshly prepared manifest supersedes older display hints. This
+        // only changes labels; capture still requires the manifest's grants.
+        cancelUIPreferences();
+        updatingLocale = true;
+        try { root.PatrolI18n?.acceptPreferences(uiPreferencesFromIdentity(state.identity)); } finally { updatingLocale = false; }
+      }
       latestState = state;
       if (shell) {
-        // The cached shell is public/neutral. Only this account's persisted
-        // manifest selects its language; logout and old manifests return to zh.
-        const locale = ['id', 'vi'].includes(state.identity?.ui_language) ? state.identity.ui_language : 'zh';
+        // The cached document is public. Display preferences also work on an
+        // unbound desktop and never authorize access to the private manifest.
+        const preferences = root.PatrolI18n?.getPreferences(state.identity);
+        const locale = preferences?.ui_language || state.identity?.ui_language || 'zh-Hant';
         updatingLocale = true;
         try { root.PatrolI18n?.setLocale(locale); } finally { updatingLocale = false; }
-        const simple = state.identity?.role === 'executor' && Boolean(state.identity?.simple_executor_ui);
+        const simple = Boolean(preferences?.simple_executor_ui);
         body.classList.toggle('simple-executor-ui', simple); body.dataset.uiLanguage = locale;
         for (const home of all('home')) {
           home.href = simple ? '/ready' : '/dashboard';
@@ -527,7 +557,7 @@
         }
       }
       text('count', state.pending ? String(state.pending) : '');
-      text('network', state.supported === false ? t('僅限線上') : !state.online ? t('離線') : state.sync?.running ? t('補傳中') : state.pending ? t('待補傳') : state.prepared ? t('已備妥') : t('離線準備'));
+      text('network', state.supported === false ? t('僅限線上') : !state.online ? t('離線') : state.sync?.running ? t('補傳中') : state.pending ? t('待補傳') : state.prepared ? t('已備妥') : t('準備離線'));
       for (const link of all('open')) { if (state.supported === false) link.title = t(state.supportMessage); }
       if (normalProgress && !normalProgress.saving) {
         normalProgress.status.textContent = state.sync?.running ?
@@ -744,15 +774,20 @@
         for (const item of originalControls) item.control.disabled = item.disabled;
       }
     }, true);
-    window.addEventListener('online', () => core.getState().catch(reportError));
-    window.addEventListener('offline', () => { core.cancelSync(); core.getState().catch(reportError); });
-    window.addEventListener('pageshow', () => { navigationAllowed = false; renderPhotos(); core.getState().catch(() => {}); });
-    window.addEventListener('pagehide', releasePreviews);
+    window.addEventListener('online', () => { core.getState().then(refreshUIPreferences).catch(reportError); });
+    window.addEventListener('offline', () => { cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
+    window.addEventListener('pageshow', event => {
+      navigationAllowed = false; renderPhotos();
+      core.getState().then(() => { if (event.persisted) refreshUIPreferences(); }).catch(() => {});
+    });
+    window.addEventListener('pagehide', () => { cancelUIPreferences(); releasePreviews(); });
     document.addEventListener('patrol:locale-changed', () => { if (!updatingLocale && latestState) { render(latestState); renderPhotos(); } });
     (async () => {
-      if (shell) { await core.getState(); await showPoint(); return; }
-      if (body.dataset.offlineWorkspace !== 'true' || !body.dataset.offlineUser) { await core.lock(); return; }
-      await core.matchIdentity(body.dataset.offlineUser, body.dataset.offlineVersion);
+      try {
+        if (shell) { await core.getState(); await showPoint(); refreshUIPreferences(); return; }
+        if (body.dataset.offlineWorkspace !== 'true' || !body.dataset.offlineUser) { await core.lock(); return; }
+        await core.matchIdentity(body.dataset.offlineUser, body.dataset.offlineVersion);
+      } finally { delete body.dataset.offlineHydrating; }
       if (navigator.onLine !== false) await core.prepare({ id: body.dataset.offlineUser, version: body.dataset.offlineVersion });
     })().catch(error => { if (shell) reportError(error); });
   }

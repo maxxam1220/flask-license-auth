@@ -706,5 +706,9 @@
   "已選 {count} 張，確認打卡時才會上傳。": {
     "id": "{count} foto dipilih. Foto dikirim saat check-in dikonfirmasi.",
     "vi": "Đã chọn {count} ảnh. Ảnh chỉ được gửi khi xác nhận chấm công."
+  },
+  "準備離線": {
+    "id": "Siapkan offline",
+    "vi": "Chuẩn bị"
   }
 }

@@ -1,7 +1,7 @@
 {% from '_ui.html' import icon %}
 {% from '_scanner.html' import scanner_button, scanner_dialog %}
 <!doctype html>
-<html lang="{{ ui_locale }}">
+<html lang="{{ ui_locale }}" data-offline-page>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13,15 +13,15 @@
   <link rel="stylesheet" href="/static/offline.css">
   <link rel="stylesheet" href="/static/executor-locale.css">
   <script id="patrol-i18n" type="application/json">{{ client_i18n|tojson }}</script>
-  <script defer src="/static/i18n.js"></script>
+  <script src="/static/i18n.js"></script>
   <script defer src="/static/offline.js"></script>
   <script defer src="/static/patrol-scanner.js"></script>
 </head>
-<body class="offline-shell" data-offline-shell>
+<body class="offline-shell" data-offline-shell data-offline-hydrating>
 <a class="skip-link" href="#offline-main"><span data-i18n="跳到主要內容">{{ t('跳到主要內容') }}</span></a>
 <header class="offline-header">
   <a class="brand" href="/dashboard" data-offline-home data-offline-home-brand aria-label="{{ t('返回巡檢總覽') }}" data-i18n-aria-label="返回巡檢總覽"><span class="brand-mark">{{ icon('qr') }}</span><span><span data-i18n="巡點">{{ t('巡點') }}</span></span></a>
-  <div class="field-header-actions">{{ scanner_button('header', '掃描巡檢點') }}<a class="offline-sync-link" href="#offline-queue" data-offline-open aria-label="{{ t('查看待傳紀錄') }}" data-i18n-aria-label="查看待傳紀錄"><span class="offline-sync-symbol" aria-hidden="true">{{ icon('download') }}</span><span class="offline-sync-copy"><span><span data-i18n="同步">{{ t('同步') }}</span> <strong data-offline-count>0</strong></span><small data-offline-network><span data-i18n="待確認">{{ t('待確認') }}</span></small></span></a></div>
+  <div class="field-header-actions">{{ scanner_button('header', '掃描巡檢點') }}<a class="offline-sync-link" href="#offline-queue" data-offline-open aria-label="{{ t('查看待傳紀錄') }}" data-i18n-aria-label="查看待傳紀錄"><span class="offline-sync-symbol" aria-hidden="true">{{ icon('download') }}</span><span class="offline-sync-copy"><span><span data-i18n="同步">{{ t('同步') }}</span> <strong data-offline-count></strong></span><small data-offline-network><span data-i18n="待確認">{{ t('待確認') }}</span></small></span></a></div>
 </header>
 <main class="offline-main" id="offline-main" tabindex="-1">
   <div class="offline-page-heading"><div><h1><span data-i18n="離線打卡與同步">{{ t('離線打卡與同步') }}</span></h1><p><span data-i18n="離線時先暫存在這支手機，回到有網路的地方再同步。">{{ t('離線時先暫存在這支手機，回到有網路的地方再同步。') }}</span></p></div><nav class="offline-page-links" aria-label="{{ t('離線頁面導覽') }}" data-i18n-aria-label="離線頁面導覽"><a class="offline-back-link" href="/dashboard" data-offline-home><span data-offline-home-label data-i18n="返回巡檢總覽">{{ t('返回巡檢總覽') }}</span> {{ icon('arrow') }}</a><a class="offline-back-link" href="#offline-readiness"><span data-i18n="離線準備">{{ t('離線準備') }}</span> {{ icon('download') }}</a></nav></div>

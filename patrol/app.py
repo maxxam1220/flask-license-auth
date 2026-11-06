@@ -394,7 +394,7 @@ def create_app(config=None):
                     flash("登入表單已過期，請重新輸入密碼後再登入。", "error")
                     return render_template("login.html", next=safe_next(request.form.get("next") or request.args.get("next"))), 400
                 abort(400, description="表單已過期，請重新載入頁面後再試。")
-        if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz", "offline_page", "offline_worker"):
+        if g.user and g.user.must_change_password and request.endpoint not in ("change_password", "logout", "static", "healthz", "offline_page", "offline_worker", "ui_preferences"):
             if (request.method == "GET" and request.endpoint not in (None, "login")
                     and (request.endpoint == "checkin" or not session.get("after_password")
                          or session["after_password"] == url_for("dashboard"))):
@@ -413,7 +413,7 @@ def create_app(config=None):
         camera_policy = "(self)" if can_scan else "()"
         response.headers["Permissions-Policy"] = f"camera={camera_policy}, microphone=(), geolocation=()"
         if request.endpoint != "static":
-            response.headers["Cache-Control"] = "private, no-store" if request.endpoint == "photo_file" else "no-store"
+            response.headers["Cache-Control"] = "private, no-store" if request.endpoint in ("photo_file", "ui_preferences") else "no-store"
         if app.config["COOKIE_SECURE"]:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -647,6 +647,15 @@ def create_app(config=None):
     def healthz():
         db.session.execute(db.text("SELECT 1"))
         return {"status": "ok"}
+
+    @app.get("/api/ui-preferences")
+    def ui_preferences():
+        # A public offline shell can display the signed-in account's language
+        # even on an unbound browser. This hint grants no offline capabilities.
+        if not g.user:
+            return {"ok": False, "code": "login_required"}, 401
+        return {"ok": True, "ui_language": get_locale(),
+                "simple_executor_ui": uses_simple_executor_ui(g.user), "home_url": home_url(g.user)}
 
     @app.get("/")
     def index():

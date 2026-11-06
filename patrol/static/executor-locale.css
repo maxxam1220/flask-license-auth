@@ -87,7 +87,7 @@ html[lang="vi"] .mobile-header > .brand { min-height: 44px; }
   html[lang="id"] .offline-sync-copy > span,
   html[lang="vi"] .offline-sync-copy > span { white-space: nowrap; }
   html[lang="id"] .offline-sync-copy small,
-  html[lang="vi"] .offline-sync-copy small { line-height: 1.2; white-space: normal; overflow-wrap: anywhere; }
+  html[lang="vi"] .offline-sync-copy small { line-height: 14px; white-space: nowrap; overflow-wrap: normal; }
 }
 @media (max-width: 600px) {
   html[lang="id"] .mobile-header > .brand,
