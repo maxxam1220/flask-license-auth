@@ -7,10 +7,11 @@
   <div><h1>綁定審核</h1><p>核對員工與瀏覽器名稱，再處理綁定申請。</p></div>
   <span class="heading-icon">{{ icon('shield') }}</span>
 </div>
-<section class="panel binding-list-panel">
+<section class="panel binding-list-panel binding-review-panel">
   <div class="section-heading">
     <div><h2>待審申請與有效綁定</h2><p>每人可核准一個瀏覽器。待審核的申請排在最前面。</p></div>
-    <span class="count-label">待審 {{ bindings|selectattr('status', 'equalto', 'pending')|list|length }} 筆</span>
+    {% set pending_count = bindings|selectattr('status', 'equalto', 'pending')|list|length %}
+    <span class="count-label binding-review-count{% if pending_count %} has-pending{% endif %}">待審 {{ pending_count }} 筆</span>
   </div>
   {% if bindings %}
   {% macro binding_table(items) %}
@@ -19,7 +20,7 @@
     <tbody>
       {% for binding in items %}
       {% set previous = approved_devices.get(binding.user_id) %}
-      <tr>
+      <tr{% if binding.status == 'pending' %} class="binding-row-pending"{% endif %}>
         <td data-label="申請人員"><div><strong>{{ binding.user.display_name }}</strong><small class="cell-hint">{{ binding.user.username }} · {{ role_label(binding.user) }}</small></div></td>
         <td data-label="辨識名稱"><div>
           <strong>{{ binding.label }}</strong>

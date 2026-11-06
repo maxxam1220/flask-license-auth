@@ -71,7 +71,7 @@
    leave less room than a phone-width media query would suggest. */
 .binding-list-panel { container: binding-list / inline-size; }
 .binding-list-panel td > div { min-width: 0; overflow-wrap: anywhere; }
-.binding-help { padding: 0; }
+.binding-help { padding: 0; align-self: start; }
 .binding-help summary {
   display: flex; align-items: center; justify-content: space-between; gap: .75rem;
   min-height: 52px; padding: 1rem; color: var(--ink); font-size: 1rem;

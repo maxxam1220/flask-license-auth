@@ -19,6 +19,18 @@
 .dashboard-guide p { font-size: .875rem; line-height: 1.65; }
 .dashboard-guide p + p { margin-top: 6px; }
 
+/* Keep the time controls together, apart from the progress they describe. */
+.dashboard-period {
+  padding: .7rem .85rem;
+  border: 1px solid #dce6de;
+  border-radius: 9px;
+  background: #eef3ef;
+}
+.dashboard-period .segmented { background: #e2eae2; border-color: #d5e0d5; }
+@media (max-width: 720px) {
+  .dashboard-period { padding: .65rem 0; border-inline: 0; border-radius: 0; background: transparent; }
+}
+
 /* Keep the selected floor and each point's identity easy to find in a long list. */
 .floor-overview .floor-card.is-selected {
   border-color: var(--teal);

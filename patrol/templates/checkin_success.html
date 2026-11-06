@@ -30,7 +30,7 @@
     {% if record.frequency == 'daily2' %}<div><span>巡檢時段</span><strong>{{ slot_label(record.slot) }}</strong></div>{% endif %}
     <div><span>{{ '執行時間' if executed else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
     {% if long_period and not executed and record.execution %}<div><span>執行簽到</span><strong>{{ record.execution.created_at|localtime }}</strong></div>{% endif %}
-    {% if executed %}<div><span>第二階段</span><strong>{{ '已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢（可跨日接續）' if long_period else '待巡檢' }}</strong></div>
+    {% if executed %}<div><span>第二階段</span><strong class="badge receipt-stage-status {{ 'badge-done' if phase_status == 'done' else 'badge-missed' if phase_status == 'expired' else 'badge-neutral' if phase_status == 'unknown' else 'badge-review' }}">{{ '已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢（可跨日接續）' if long_period else '待巡檢' }}</strong></div>
     {% elif not visit %}<div><span>回報狀態</span>{{ issue_status(record) }}</div><div><span>現場照片</span><strong>{{ record.photos|length }} 張已儲存</strong></div>{% endif %}
   </div>
   {% if not visit and point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=record.point_id) if is_patrol_admin or can_view_general_team else '') }}<p>此點位的未結案異常仍持續追蹤。</p></div>{% endif %}

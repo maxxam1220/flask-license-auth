@@ -6,7 +6,7 @@
   scroll-margin-top: .6rem;
 }
 #today-ready:focus-visible { outline: 3px solid #327e70; outline-offset: 3px; }
-.ready-heading { display: flex; align-items: center; flex-wrap: wrap; gap: .25rem .65rem; }
+.ready-heading { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .4rem; }
 .ready-heading h2 { margin: 0; font-size: var(--reading-title); line-height: 1.3; }
 .ready-count {
   padding: .15rem .55rem;
@@ -17,14 +17,18 @@
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
-.ready-refresh { margin-inline-start: auto; min-height: 44px; font-size: var(--reading-secondary); }
+.ready-refresh {
+  margin-inline-start: auto; min-height: 44px; padding: .45rem .6rem;
+  border: 1px solid #c6d8ce; border-radius: 6px; background: #fff;
+  font-size: var(--reading-secondary); white-space: nowrap;
+}
 .ready-scope { display: flex; flex-wrap: wrap; gap: .1rem .45rem; align-items: baseline; margin: .2rem 0 .8rem; font-weight: 600; color: #405956; }
 .ready-scope > span:not(.ready-asof)::before { content: "·"; margin-right: .45rem; color: #62746f; }
 .ready-scope, .ready-feedback { font-size: var(--reading-secondary); line-height: 1.5; }
 .ready-feedback { color: var(--muted); margin: .35rem 0; }
 .ready-feedback:empty { margin: 0; }
 .ready-table {
-  --ready-columns: 2.6rem minmax(4.8rem, 1.15fr) minmax(0, 2fr) minmax(4.65rem, 1.15fr);
+  --ready-columns: 2.6rem minmax(4.8rem, 1.15fr) minmax(0, 2fr) minmax(6.2rem, 1.15fr);
   display: block; width: 100%; border-collapse: collapse;
 }
 .ready-table thead, .ready-table tbody { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 1rem; }
@@ -50,7 +54,7 @@
 .ready-tag { border: 1px solid #d4e3f7; line-height: 1.45; }
 .ready-tag-execute { color: #754300; background: #fff1ce; }
 .ready-tag-execute { border-color: #ead7a8; }
-.ready-refresh:hover { text-decoration: underline; }
+.ready-refresh:hover { background: #edf5ef; border-color: #8eae9c; text-decoration: none; }
 .ready-empty { display: flex; align-items: center; gap: .55rem; margin: 0; padding: .65rem .75rem; border-radius: 6px; background: #f3f6f3; }
 .ready-empty .icon { flex: none; color: #427859; }
 .ready-asof { margin-inline-start: auto; color: var(--muted); font-weight: 400; }

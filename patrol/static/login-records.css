@@ -4,6 +4,16 @@
 #login-results th:first-child { width: 28%; }
 #login-results th:nth-child(2) { width: 36%; }
 #login-results .table-scroll td { overflow-wrap: anywhere; }
+#login-results .table-scroll time { font-variant-numeric: tabular-nums; }
+@container login-history (min-width: 40.001rem) {
+  .table-scroll td { vertical-align: top; }
+  .table-scroll tbody tr:nth-child(even) { background: #f8faf8; }
+}
+@media (hover: hover) {
+  @container login-history (min-width: 40.001rem) {
+    .table-scroll tbody tr:hover { background: #edf5f1; }
+  }
+}
 
 @container login-history (max-width: 40rem) {
   .table-scroll { overflow: visible; }

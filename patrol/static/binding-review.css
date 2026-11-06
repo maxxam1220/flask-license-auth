@@ -1,4 +1,18 @@
 /* Keep pending decisions and valid browsers visible; completed requests remain available. */
+.binding-review-panel > .section-heading { align-items: flex-start; }
+.binding-review-count {
+  display: inline-flex; align-items: center; min-height: 34px;
+  padding: .35rem .65rem; border-radius: 6px;
+  background: #eef3f0; color: #456454; font-variant-numeric: tabular-nums;
+}
+.binding-review-count.has-pending { background: #fff1ce; color: #754300; }
+.binding-review-panel .binding-row-pending { background: #fffbf2; }
+.binding-review-panel .table-scroll td { vertical-align: top; }
+.binding-review-panel .binding-row-pending td:first-child { box-shadow: inset 3px 0 #d4a657; }
+@container binding-list (max-width: 42rem) {
+  .binding-review-panel .binding-row-pending { padding-inline: .75rem; border-radius: 7px; }
+  .binding-review-panel .binding-row-pending td:first-child { box-shadow: none; }
+}
 .binding-review-empty { color: var(--muted); line-height: 1.6; }
 .binding-history { margin-top: 1.25rem; border-top: 1px solid var(--line); }
 .binding-history > summary {
