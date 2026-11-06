@@ -109,3 +109,13 @@
   .table-scroll .table-actions { justify-content: flex-start; flex-wrap: wrap; gap: .5rem; }
   .table-scroll .table-actions .button, .table-scroll .text-button { min-height: 44px; }
 }
+/* Names need the full card width before metadata: a fixed label column makes
+   real device and multilingual staff names unnecessarily tall on phones. */
+@container binding-list (max-width: 26rem) {
+  .table-scroll td.binding-identity-cell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: .2rem;
+  }
+  .table-scroll .binding-identity-cell + .binding-identity-cell { padding-top: .55rem; }
+  .table-scroll .binding-identity-cell strong { color: var(--ink); }
+}

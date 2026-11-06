@@ -21,8 +21,8 @@
       {% for binding in items %}
       {% set previous = approved_devices.get(binding.user_id) %}
       <tr{% if binding.status == 'pending' %} class="binding-row-pending"{% endif %}>
-        <td data-label="申請人員"><div><strong>{{ binding.user.display_name }}</strong><small class="cell-hint">{{ binding.user.username }} · {{ role_label(binding.user) }}</small></div></td>
-        <td data-label="辨識名稱"><div>
+        <td class="binding-identity-cell" data-label="申請人員"><div><strong>{{ binding.user.display_name }}</strong><small class="cell-hint">{{ binding.user.username }} · {{ role_label(binding.user) }}</small></div></td>
+        <td class="binding-identity-cell" data-label="辨識名稱"><div>
           <strong>{{ binding.label }}</strong>
           {% if binding.status == 'pending' %}
           <small class="cell-hint">{{ '將取代「' ~ previous.label ~ '」' if previous else '目前沒有已核准的瀏覽器' }}</small>

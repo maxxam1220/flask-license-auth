@@ -1,3 +1,6 @@
+/* A selected name must stay inside the mobile query summary beside its action. */
+.records-query-title small { min-width: 0; overflow-wrap: anywhere; }
+
 #login-results { container: login-history / inline-size; }
 #login-results .table-scroll { margin-inline: 0; }
 #login-results .table-scroll table { width: 100%; table-layout: fixed; }

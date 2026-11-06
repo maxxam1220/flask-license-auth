@@ -78,6 +78,7 @@
 .checkin-wrap-wide .photo-picker-box strong { line-height: 1.5; }
 
 @media (max-width: 720px) {
+  .checkin-wrap-wide > .back-link, .receipt-wrap > .back-link { min-height: 44px; }
   .record-detail-wrap .record-back-links { margin-bottom: .35rem; }
   .record-detail-wrap .record-back-links a, .record-detail-wrap .badge { font-size: .875rem; }
   .record-detail-wrap .detail-heading {
@@ -98,6 +99,8 @@
   .receipt-wrap .success-card h1 { font-size: 1.65rem; }
 }
 @media (max-width: 480px) {
+  .record-detail-wrap .detail-heading { grid-template-columns: minmax(0, 1fr); gap: .35rem; }
+  .record-detail-wrap .record-status-badge { justify-self: start; }
   .record-detail-wrap .record-facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .record-detail-wrap .record-facts > div {
     grid-template-columns: minmax(4.2em, auto) minmax(0, 1fr); align-items: baseline; gap: .7rem; padding-block: .32rem;
