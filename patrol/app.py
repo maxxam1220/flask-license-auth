@@ -374,9 +374,11 @@ def create_app(config=None):
         # the sign-in form itself retains its normal CSRF protection.
         if request.path.startswith("/api/offline/"):
             if not g.user:
-                return {"ok": False, "code": "login_required", "message": t("請連網登入原帳號後再同步；暫存仍保留。"), "retryable": False}, 401
+                source = "請連網登入原帳號後再同步；暫存仍保留。"
+                return {"ok": False, "code": "login_required", "message": t(source), "message_source": source, "retryable": False}, 401
             if g.user.must_change_password:
-                return {"ok": False, "code": "password_required", "message": t("請先完成密碼變更；暫存仍保留。"), "retryable": False}, 403
+                source = "請先完成密碼變更；暫存仍保留。"
+                return {"ok": False, "code": "password_required", "message": t(source), "message_source": source, "retryable": False}, 403
         if not g.user and request.method == "POST":
             if request.endpoint == "logout":
                 # A second open tab may still show the previous logout button.
@@ -2311,9 +2313,12 @@ def create_app(config=None):
     def show_error(error):
         # Bare HTTP exceptions carry English framework text; the template
         # supplies a localized fallback while preserving our route messages.
-        message = None if error.description == type(error).description else t(error.description)
+        source = None if error.description == type(error).description else error.description
+        message = t(source) if source else None
         if request.path.startswith("/api/offline/"):
-            return {"ok": False, "code": "request_rejected", "message": message or t("同步未完成，暫存仍保留；請重新連線後再試。"), "retryable": error.code in (429,)}, error.code
+            source = source or "同步未完成，暫存仍保留；請重新連線後再試。"
+            return {"ok": False, "code": "request_rejected", "message": t(source), "message_source": source,
+                    "retryable": error.code in (429,)}, error.code
         if request.endpoint == "confirm_checkin" and g.get("user") and error.code in (400, 413):
             # The multipart parser may already have rejected the body. Recover
             # by GET from the matched route; never parse or replay the old form.

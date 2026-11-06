@@ -81,5 +81,10 @@
   "每月 1 次": {"id":"1 kali/bulan", "vi":"1 lần/tháng"},
   "不定期": {"id":"Tanpa jadwal tetap", "vi":"Không định kỳ"},
   "已簽到": {"id":"Sudah absen", "vi":"Đã điểm danh"},
-  "直接簽到": {"id":"Absen langsung", "vi":"Điểm danh trực tiếp"}
+  "直接簽到": {"id":"Absen langsung", "vi":"Điểm danh trực tiếp"},
+  "分類選項不正確。": {"id":"Pilihan kategori tidak valid.", "vi":"Lựa chọn danh mục không hợp lệ."},
+  "查看最新綁定": {"id":"Lihat status perangkat terbaru", "vi":"Xem trạng thái liên kết mới nhất"},
+  "Retry · 返回此點重新確認": {"id":"Retry · Kembali ke titik ini dan periksa lagi", "vi":"Retry · Quay lại điểm này để xác nhận lại"},
+  "返回此點重新確認": {"id":"Kembali ke titik ini dan periksa lagi", "vi":"Quay lại điểm này để xác nhận lại"},
+  "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。": {"id":"Unggahan terlalu besar. Absen belum disimpan. Pilih ulang maksimal 3 foto, masing-masing tidak lebih dari 8 MB.", "vi":"Nội dung tải lên quá lớn. Lần điểm danh này chưa được lưu. Hãy chọn lại tối đa 3 ảnh, mỗi ảnh không quá 8 MB."}
 }

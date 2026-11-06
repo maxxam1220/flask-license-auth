@@ -46,7 +46,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
     signer = URLSafeSerializer(app.secret_key, salt="patrol-offline-v1")
 
     def fail(code, message, status=409, retryable=False):
-        return jsonify(ok=False, code=code, message=t(message), retryable=retryable), status
+        return jsonify(ok=False, code=code, message=t(message), message_source=message, retryable=retryable), status
 
     def owner(user, binding):
         return f"u{user.id}v{user.auth_version}b{binding.id}-{user.role}-{user.patrol_category or 'all'}"

@@ -20,11 +20,11 @@
 <body class="offline-shell" data-offline-shell>
 <a class="skip-link" href="#offline-main"><span data-i18n="跳到主要內容">{{ t('跳到主要內容') }}</span></a>
 <header class="offline-header">
-  <a class="brand" href="/offline" aria-label="{{ t('巡點離線打卡') }}" data-i18n-aria-label="巡點離線打卡"><span class="brand-mark">{{ icon('qr') }}</span><span><span data-i18n="巡點">{{ t('巡點') }}</span></span></a>
+  <a class="brand" href="/dashboard" data-offline-home data-offline-home-brand aria-label="{{ t('返回巡檢總覽') }}" data-i18n-aria-label="返回巡檢總覽"><span class="brand-mark">{{ icon('qr') }}</span><span><span data-i18n="巡點">{{ t('巡點') }}</span></span></a>
   <div class="field-header-actions">{{ scanner_button('header', '掃描巡檢點') }}<a class="offline-sync-link" href="#offline-queue" data-offline-open aria-label="{{ t('查看待傳紀錄') }}" data-i18n-aria-label="查看待傳紀錄"><span class="offline-sync-symbol" aria-hidden="true">{{ icon('download') }}</span><span class="offline-sync-copy"><span><span data-i18n="同步">{{ t('同步') }}</span> <strong data-offline-count>0</strong></span><small data-offline-network><span data-i18n="待確認">{{ t('待確認') }}</span></small></span></a></div>
 </header>
 <main class="offline-main" id="offline-main" tabindex="-1">
-  <div class="offline-page-heading"><div><h1><span data-i18n="離線打卡與同步">{{ t('離線打卡與同步') }}</span></h1><p><span data-i18n="離線時先暫存在這支手機，回到有網路的地方再同步。">{{ t('離線時先暫存在這支手機，回到有網路的地方再同步。') }}</span></p></div><nav class="offline-page-links" aria-label="{{ t('離線頁面導覽') }}" data-i18n-aria-label="離線頁面導覽"><a class="offline-back-link" href="/dashboard" data-offline-home><span data-i18n="返回巡檢總覽">{{ t('返回巡檢總覽') }}</span> {{ icon('arrow') }}</a><a class="offline-back-link" href="#offline-readiness"><span data-i18n="離線準備">{{ t('離線準備') }}</span> {{ icon('download') }}</a></nav></div>
+  <div class="offline-page-heading"><div><h1><span data-i18n="離線打卡與同步">{{ t('離線打卡與同步') }}</span></h1><p><span data-i18n="離線時先暫存在這支手機，回到有網路的地方再同步。">{{ t('離線時先暫存在這支手機，回到有網路的地方再同步。') }}</span></p></div><nav class="offline-page-links" aria-label="{{ t('離線頁面導覽') }}" data-i18n-aria-label="離線頁面導覽"><a class="offline-back-link" href="/dashboard" data-offline-home><span data-offline-home-label data-i18n="返回巡檢總覽">{{ t('返回巡檢總覽') }}</span> {{ icon('arrow') }}</a><a class="offline-back-link" href="#offline-readiness"><span data-i18n="離線準備">{{ t('離線準備') }}</span> {{ icon('download') }}</a></nav></div>
   <noscript><p class="offline-notice offline-notice-error"><span data-i18n="此功能需要 JavaScript。請啟用後重新開啟；有網路時也可返回巡檢總覽打卡。">{{ t('此功能需要 JavaScript。請啟用後重新開啟；有網路時也可返回巡檢總覽打卡。') }}</span></p></noscript>
   <div class="offline-status" data-offline-status role="status" aria-live="polite" aria-atomic="true" tabindex="-1"><span data-i18n="正在讀取這支裝置的離線資料…">{{ t('正在讀取這支裝置的離線資料…') }}</span></div>
 

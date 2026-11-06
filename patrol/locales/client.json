@@ -1,4 +1,32 @@
 {
+  "職安巡檢員": {
+    "id": "Petugas inspeksi K3",
+    "vi": "Nhân viên kiểm tra an toàn lao động"
+  },
+  "總務巡檢員": {
+    "id": "Petugas inspeksi urusan umum",
+    "vi": "Nhân viên kiểm tra tổng vụ"
+  },
+  "總務管理員": {
+    "id": "Admin urusan umum",
+    "vi": "Quản lý tổng vụ"
+  },
+  "工務巡檢員": {
+    "id": "Petugas inspeksi teknik",
+    "vi": "Nhân viên kiểm tra kỹ thuật"
+  },
+  "系統管理員": {
+    "id": "Administrator sistem",
+    "vi": "Quản trị viên hệ thống"
+  },
+  "尚未指派": {
+    "id": "Belum ditugaskan",
+    "vi": "Chưa phân công"
+  },
+  "目前沒有網路，請連線後再返回首頁；此手機的暫存仍保留。": {
+    "id": "Tidak ada koneksi. Sambungkan internet sebelum kembali ke beranda. Catatan di ponsel ini tetap tersimpan.",
+    "vi": "Hiện không có mạng. Hãy kết nối lại trước khi về trang chủ. Các bản ghi trên điện thoại này vẫn được giữ."
+  },
   "最多可附 3 張照片。": {
     "id": "Maksimal 3 foto.",
     "vi": "Tối đa 3 ảnh."

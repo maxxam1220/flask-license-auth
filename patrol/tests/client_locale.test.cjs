@@ -42,6 +42,17 @@ test('every static Chinese client source has a translation catalog entry', () =>
   }
 });
 
+test('offline account role metadata has translations without changing user display names', () => {
+  for (const locale of ['id', 'vi']) {
+    const i18n = runtime(locale);
+    for (const title of ['職安巡檢員', '總務巡檢員', '總務管理員', '工務巡檢員', '系統管理員', '尚未指派']) {
+      assert.equal(i18n.t(title), catalog[title][locale]);
+      assert(!/[\u4e00-\u9fff]/.test(i18n.t(title)), title);
+    }
+    assert.equal(i18n.t('Nguyễn / Budi / 使用者原名'), 'Nguyễn / Budi / 使用者原名');
+  }
+});
+
 for (const locale of ['id', 'vi']) {
   test('dynamic sync/photo messages translate in ' + locale + ' while user values remain exact', () => {
     const i18n = runtime(locale);
@@ -52,5 +63,17 @@ for (const locale of ['id', 'vi']) {
     assert.equal(i18n.t('Unknown custom point / 原始姓名'), 'Unknown custom point / 原始姓名');
     i18n.setLocale('zh-Hant'); assert.equal(i18n.t('移除'), '移除');
     assert.equal(i18n.t(source, { number: 2, name }), '移除照片 2：' + name);
+  });
+
+  test('zero, queue limit and multiline values remain exact in ' + locale + ' progress text', () => {
+    const i18n = runtime(locale);
+    const source = '正在處理 {processed}/{total} 筆 · 已確認 {saved} 筆 · {seconds} 秒';
+    const values = { processed: 0, total: 200, saved: 0, seconds: 30 };
+    const expected = catalog[source][locale].replace(/\{(\w+)\}/g, (_, key) => String(values[key]));
+    assert.equal(i18n.t(source, values), expected);
+    assert.equal(i18n.t('正在處理 0/200 筆 · 已確認 0 筆 · 30 秒'), expected);
+    const label = '移除照片 {number}：{name}', name = 'Budi-Nguyễn-原始照片\n{count}.png';
+    assert.equal(i18n.t(label, { number: 0, name }), catalog[label][locale].replace('{number}', '0').replace('{name}', name));
+    assert.equal(i18n.t('同步逾時 0/200 / unknown server detail'), '同步逾時 0/200 / unknown server detail');
   });
 }

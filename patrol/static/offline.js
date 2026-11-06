@@ -208,7 +208,7 @@
       const receivedMs = now(), offsetMs = Date.parse(json?.server_time) - receivedMs;
       if (!response.ok || !validManifest(json)) {
         if ([401, 403].includes(response.status)) await lock('請先登入並使用已核准的綁定手機。', { revision });
-        throw fault(json?.code || 'prepare', json?.message || '無法準備離線資料，請先確認登入與手機綁定。');
+        throw fault(json?.code || 'prepare', json?.message_source || json?.message || '無法準備離線資料，請先確認登入與手機綁定。');
       }
       if (expectedIdentity && (String(json.identity.id) !== String(expectedIdentity.id) || String(json.identity.auth_version) !== String(expectedIdentity.version))) {
         await lock('帳號已變更，請重新載入頁面。', { revision }); throw fault('owner', '帳號已變更，請重新載入頁面。');
@@ -378,7 +378,7 @@
               });
               syncState.saved++;
             } else {
-              const reason = json?.message || '伺服器未確認這筆紀錄，資料仍保留，請重試。';
+              const reason = json?.message_source || json?.message || '伺服器未確認這筆紀錄，資料仍保留，請重試。';
               // A single point can reject an otherwise authorized inspector
               // (for example, reviewing their own earlier execution). Keep
               // other points available instead of discarding the manifest.
@@ -471,6 +471,15 @@
     const stageText = stage => ({ execute: t('執行簽到'), inspect: t('巡檢'), visit: t('直接簽到') }[stage] || t('巡檢'));
     const timeText = iso => { try { return new Date(iso).toLocaleString(({ id: 'id-ID', vi: 'vi-VN' })[root.PatrolI18n?.getLocale()] || 'zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); } catch { return iso; } };
     const reportError = error => { text('status', t(error.message || '操作未完成，原有資料仍保留。')); if (one('status')) one('status').dataset.state = 'error'; one('status')?.focus(); };
+    // Home pages require a live session and are deliberately never cached.
+    // Keep the current draft/queue in place when the device knows it is offline.
+    for (const home of all('home')) home.addEventListener('click', event => {
+      if (navigator.onLine !== false) return;
+      event.preventDefault();
+      text('status', t('目前沒有網路，請連線後再返回首頁；此手機的暫存仍保留。'));
+      if (one('status')) one('status').dataset.state = 'offline';
+      one('status')?.focus();
+    });
     async function showPoint() {
       const run = ++pointGeneration, section = one('point'); if (!section) return;
       if (latestState?.storageUnavailable) { section.hidden = true; if (one('save')) one('save').disabled = true; return; }
@@ -507,13 +516,14 @@
         const locale = ['id', 'vi'].includes(state.identity?.ui_language) ? state.identity.ui_language : 'zh';
         updatingLocale = true;
         try { root.PatrolI18n?.setLocale(locale); } finally { updatingLocale = false; }
-        const simple = Boolean(state.identity?.simple_executor_ui);
+        const simple = state.identity?.role === 'executor' && Boolean(state.identity?.simple_executor_ui);
         body.classList.toggle('simple-executor-ui', simple); body.dataset.uiLanguage = locale;
-        const home = document.querySelector('[data-offline-home]');
-        if (home) {
+        for (const home of all('home')) {
           home.href = simple ? '/ready' : '/dashboard';
-          const label = home.querySelector('[data-i18n]');
-          if (label) { const source = simple ? '返回今日待簽到' : '返回巡檢總覽'; label.dataset.i18n = source; label.textContent = t(source); }
+          const source = simple ? '返回今日待簽到' : '返回巡檢總覽';
+          home.dataset.i18nAriaLabel = source; home.setAttribute('aria-label', t(source));
+          const label = home.querySelector('[data-offline-home-label]');
+          if (label) { label.dataset.i18n = source; label.textContent = t(source); }
         }
       }
       text('count', state.pending ? String(state.pending) : '');

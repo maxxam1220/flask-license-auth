@@ -54,6 +54,10 @@ html[lang="id"] .checkin-card h1,
 html[lang="vi"] .checkin-card h1 { overflow-wrap: anywhere; }
 html[lang="id"] .checkin-card .badge,
 html[lang="vi"] .checkin-card .badge { white-space: normal; }
+/* The offline brand is a home link, so keep a full touch target. */
+.offline-header > .brand { min-height: 44px; }
+html[lang="id"] .mobile-header > .brand,
+html[lang="vi"] .mobile-header > .brand { min-height: 44px; }
 .simple-executor-ui .sidebar .nav-link { min-height: 52px; padding-block: .7rem; }
 .simple-executor-ui .sidebar .sidebar-label { margin-bottom: .6rem; }
 .simple-executor-ui .page-heading { gap: .75rem; }
@@ -89,7 +93,7 @@ html[lang="vi"] .checkin-card .badge { white-space: normal; }
   html[lang="id"] .mobile-header > .brand,
   html[lang="vi"] .mobile-header > .brand,
   html[lang="id"] .offline-header > .brand,
-  html[lang="vi"] .offline-header > .brand { flex: 0 0 34px; width: 34px; min-width: 34px; }
+  html[lang="vi"] .offline-header > .brand { flex: 0 0 44px; width: 44px; min-width: 44px; justify-content: center; }
   html[lang="id"] .mobile-header > .brand > span:last-child,
   html[lang="vi"] .mobile-header > .brand > span:last-child,
   html[lang="id"] .offline-header > .brand > span:last-child,
@@ -146,9 +150,9 @@ html[lang="vi"] .checkin-card .badge { white-space: normal; }
 }
 @media (max-width: 300px) {
   html[lang="id"] .mobile-header > .brand,
-  html[lang="vi"] .mobile-header > .brand,
-  html[lang="id"] .offline-header > .brand,
-  html[lang="vi"] .offline-header > .brand { display: none; }
+  html[lang="vi"] .mobile-header > .brand { display: none; }
+  html[lang="id"] .offline-header .scan-trigger-header .icon,
+  html[lang="vi"] .offline-header .scan-trigger-header .icon { display: none; }
   html[lang="id"] .mobile-header .field-header-actions,
   html[lang="vi"] .mobile-header .field-header-actions { margin-inline-start: auto; }
   html[lang="id"] .ready-filters,
