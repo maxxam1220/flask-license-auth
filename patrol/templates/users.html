@@ -15,7 +15,7 @@
     <label>員工帳號<input name="username" required minlength="3" maxlength="80" pattern="[A-Za-z0-9_.\-]{3,80}" title="3 至 80 個英數字、底線、句點或短橫線" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：staff001"><small>3 至 80 個英數字，可使用底線、句點、短橫線。</small></label>
     <label>顯示姓名<input name="display_name" required maxlength="80" placeholder="員工姓名"></label>
     <label>角色<select name="role" required aria-describedby="role-guide">{{ role_options(none, '請選擇角色') }}</select></label>
-    <label>初始密碼<input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password"><small>至少 12 個字元；員工首次登入須更改。</small></label>
+    <label>初始密碼<input name="password" type="password" required minlength="{{ password_min_length }}" maxlength="{{ password_max_length }}" autocomplete="new-password"><small>至少 {{ password_min_length }} 個字元；員工首次登入須更改。</small></label>
   </div><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立人員</button></div></form>
 </details>
 <div class="section-heading outside"><h2>所有人員</h2><span class="count-label">{{ users|length }} 人</span></div>
@@ -34,7 +34,7 @@
       </div>
       <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if user.active %}checked{% endif %} {% if user.id == current_user.id %}disabled{% endif %}>啟用此帳號</label>{% if user.id == current_user.id %}<input type="hidden" name="active" value="on">{% endif %}<button class="button button-primary button-small">儲存變更</button></div>
     </form>
-    {% if user.id != current_user.id %}<form method="post" action="{{ url_for('reset_password', user_id=user.id) }}" class="password-reset-form" data-confirm="重設 {{ user.display_name }} 的密碼後，此人員須使用新密碼重新登入。" data-confirm-title="重設人員密碼" data-confirm-label="確認重設" data-confirm-danger="true">{{ csrf() }}{{ management_revision(user) }}<label>重設初始密碼<input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password" placeholder="至少 12 個字元"></label><button class="button button-secondary button-small">重設密碼</button></form>
+    {% if user.id != current_user.id %}<form method="post" action="{{ url_for('reset_password', user_id=user.id) }}" class="password-reset-form" data-confirm="重設 {{ user.display_name }} 的密碼後，此人員須使用新密碼重新登入。" data-confirm-title="重設人員密碼" data-confirm-label="確認重設" data-confirm-danger="true">{{ csrf() }}{{ management_revision(user) }}<label>重設初始密碼<input name="password" type="password" required minlength="{{ password_min_length }}" maxlength="{{ password_max_length }}" autocomplete="new-password" placeholder="至少 {{ password_min_length }} 個字元"></label><button class="button button-secondary button-small">重設密碼</button></form>
     {% else %}<div class="fine-note">如需變更自己的密碼，請使用<a href="{{ url_for('change_password') }}">變更密碼</a>功能。</div>{% endif %}
   </details>
 </article>

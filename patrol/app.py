@@ -45,6 +45,8 @@ from issues import IssueActionError, issue_state, issue_version, open_issue_cond
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
 QR_RETURN_PATH = re.compile(r"/c/([A-Za-z0-9_-]{1,100})")
+PASSWORD_MIN_LENGTH = 6
+PASSWORD_MAX_LENGTH = 256
 
 
 def now_utc():
@@ -305,6 +307,7 @@ def create_app(config=None):
                 "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
                 "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
                 "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
+                "password_min_length": PASSWORD_MIN_LENGTH, "password_max_length": PASSWORD_MAX_LENGTH,
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
                 "floor_label": floor_label, "category_label": category_label,
                 "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
@@ -695,8 +698,8 @@ def create_app(config=None):
             password = request.form.get("new_password", "")
             if not g.user.check_password(request.form.get("current_password", "")):
                 flash("目前密碼不正確。", "error")
-            elif len(password) < 12 or len(password) > 256:
-                flash("新密碼請使用 12 至 256 個字元。", "error")
+            elif not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+                flash(f"新密碼請使用 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元。", "error")
             elif password != request.form.get("confirm_password"):
                 flash("兩次輸入的新密碼不同。", "error")
             elif g.user.check_password(password):
@@ -2050,8 +2053,8 @@ def create_app(config=None):
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
         choice = submitted_role()
-        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not 12 <= len(password) <= 256:
-            abort(400, description="請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與至少 12 字元的密碼。")
+        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+            abort(400, description=f"請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元的密碼。")
         user = User(username=username, display_name=name, role=choice.role, patrol_category=choice.category,
                     general_manager_title=choice.manager_title, must_change_password=True)
         user.set_password(password)
@@ -2103,8 +2106,8 @@ def create_app(config=None):
         if conflict := check_management_state(user, url_for("users")):
             return conflict
         password = request.form.get("password", "")
-        if not 12 <= len(password) <= 256:
-            abort(400, description="密碼需為 12 至 256 個字元。")
+        if not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+            abort(400, description=f"密碼需為 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元。")
         user.set_password(password)
         user.must_change_password = True
         user.auth_version += 1
@@ -2161,8 +2164,8 @@ def create_app(config=None):
     @click.password_option()
     def create_admin(username, name, password):
         username = username.strip().lower()
-        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not name.strip() or not 12 <= len(password) <= 256:
-            raise click.ClickException("Use a valid username/name and a password with 12–256 characters.")
+        if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not name.strip() or not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
+            raise click.ClickException(f"Use a valid username/name and a password with {PASSWORD_MIN_LENGTH}–{PASSWORD_MAX_LENGTH} characters.")
         if db.session.scalar(select(User).where(User.username == username)):
             raise click.ClickException("Username already exists.")
         user = User(username=username, display_name=name.strip()[:100], role="admin")
