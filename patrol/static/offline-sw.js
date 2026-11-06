@@ -1,9 +1,15 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261106-v5';
-const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'];
+const CACHE = 'patrol-offline-shell-20261106-v6';
+const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'];
 const allowed = new Set(REQUIRED);
+// Without a cached shell no account language is available. Offer neutral
+// recovery instructions in every supported language without reading identity.
+const unavailable = () => new Response('離線頁面尚未備妥。請連線後重新開啟巡檢網站。' + '\n\n' +
+  'Halaman offline belum siap. Hubungkan internet lalu buka kembali situs inspeksi.' + '\n\n' +
+  'Trang ngoại tuyến chưa sẵn sàng. Kết nối mạng rồi mở lại trang kiểm tra.',
+  { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const responses = await Promise.all(REQUIRED.map(async path => {
@@ -40,7 +46,7 @@ self.addEventListener('fetch', event => {
   if (request.mode !== 'navigate' || !(url.pathname === '/offline' || /^\/c\/[A-Za-z0-9_-]{1,100}$/.test(url.pathname))) return;
   event.respondWith((async () => {
     const fallback = async () => (await caches.open(CACHE)).match('/offline');
-    if (self.navigator?.onLine === false) return (await fallback()) || new Response('離線頁面尚未備妥，請連線後重試。', { status: 503 });
+    if (self.navigator?.onLine === false) return (await fallback()) || unavailable();
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const response = await fetch(request, { signal: controller.signal });
@@ -51,7 +57,7 @@ self.addEventListener('fetch', event => {
       await response.clone().arrayBuffer();
       return response;
     } catch (_) {
-      return (await fallback()) || new Response('離線頁面尚未備妥。請連線後重新開啟巡檢網站。', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+      return (await fallback()) || unavailable();
     } finally { clearTimeout(timeout); }
   })());
 });

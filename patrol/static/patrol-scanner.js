@@ -1,5 +1,6 @@
 /* Scan locally. A successful read only opens the existing confirmation page. */
 (() => {
+  const t = source => window.PatrolI18n?.t(source) ?? source;
   const starts = document.querySelectorAll('[data-qr-start]');
   const dialog = document.querySelector('[data-qr-dialog]');
   if (!starts.length || !dialog) return;
@@ -146,10 +147,15 @@
     return null;
   }
 
+  let currentMessage;
   function message(text, english) {
+    currentMessage = { text, english };
     if (englishStatus && englishStatus.textContent !== english) englishStatus.textContent = english;
-    if (status.textContent !== text) status.textContent = text;
+    if (englishStatus) englishStatus.hidden = ['id', 'vi'].includes(window.PatrolI18n?.getLocale());
+    const translated = t(text);
+    if (status.textContent !== translated) status.textContent = translated;
   }
+  document.addEventListener('patrol:locale-changed', () => { if (currentMessage) message(currentMessage.text, currentMessage.english); });
 
   function edited(field, form) {
     // A waiting two-stage check-in carries the previous report in hidden inputs.

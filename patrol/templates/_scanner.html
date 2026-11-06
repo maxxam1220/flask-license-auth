@@ -2,15 +2,15 @@
 {% macro scanner_button(entry, label) %}
 <button type="button" class="button button-primary scan-trigger scan-trigger-{{ entry }}" data-qr-start data-qr-entry="{{ entry }}" aria-haspopup="dialog" aria-controls="patrol-scanner" hidden>
   {{ icon('qr') }}<span lang="en">{{ 'SCAN NEXT' if entry == 'next' else 'SCAN' }}</span>
-  <span{% if entry == 'header' %} class="sr-only"{% endif %}>{{ label }}</span>
+  <span{% if entry == 'header' %} class="sr-only"{% endif %}><span data-i18n="{{ label }}">{{ t(label) }}</span></span>
 </button>
 {% endmacro %}
 
 {% macro scanner_dialog(executor=false) %}
 <dialog id="patrol-scanner" class="scanner-dialog" data-qr-dialog data-qr-decoder="{{ url_for('static', filename='vendor/jsqr-1.4.0.js') }}" role="dialog" aria-labelledby="patrol-scanner-title" aria-describedby="patrol-scanner-help">
   <div class="scanner-heading">
-    <h2 id="patrol-scanner-title">{% if executor %}<span lang="en">Scan QR code</span>{% else %}掃描巡檢點{% endif %}</h2>
-    <button class="scanner-close" type="button" data-qr-close aria-label="{{ 'Close / 關閉掃描視窗' if executor else '關閉掃描視窗' }}">{{ icon('close') }}</button>
+    <h2 id="patrol-scanner-title">{% if executor %}<span data-i18n="Scan QR code">{{ t('Scan QR code') }}</span>{% else %}<span data-i18n="掃描巡檢點">{{ t('掃描巡檢點') }}</span>{% endif %}</h2>
+    <button class="scanner-close" type="button" data-qr-close aria-label="{{ t('關閉掃描視窗') }}" data-i18n-aria-label="關閉掃描視窗">{{ icon('close') }}</button>
   </div>
   <div class="scanner-body">
     <div class="scanner-preview" aria-hidden="true">
@@ -18,14 +18,14 @@
       <span class="scanner-guide"></span>
     </div>
     <div class="scanner-instructions">
-      <p id="patrol-scanner-help">{% if executor %}<span lang="en">Scan the QR code. Check the location, then tap OK.</span>{% else %}將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。{% endif %}</p>
-      <p class="scanner-status" data-qr-status role="status" aria-live="polite" aria-atomic="true">{% if executor %}<span lang="en" data-qr-status-en>Allow camera access.</span> {% endif %}<span data-qr-status-zh>請允許此網站使用相機。</span></p>
-      <button class="button button-secondary" type="button" data-qr-retry hidden>{{ icon('camera') }}{% if executor %}<span lang="en">Retry</span>{% endif %}重新開啟相機</button>
+      <p id="patrol-scanner-help">{% if executor %}<span data-i18n="Scan the QR code. Check the location, then tap OK.">{{ t('Scan the QR code. Check the location, then tap OK.') }}</span>{% else %}<span data-i18n="將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。">{{ t('將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。') }}</span>{% endif %}</p>
+      <p class="scanner-status" data-qr-status role="status" aria-live="polite" aria-atomic="true">{% if executor %}<span lang="en" data-legacy-english data-qr-status-en>Allow camera access.</span> {% endif %}<span data-qr-status-zh>{{ t('請允許此網站使用相機。') }}</span></p>
+      <button class="button button-secondary" type="button" data-qr-retry hidden>{{ icon('camera') }}{% if executor %}<span lang="en" data-legacy-english>Retry</span>{% endif %}<span data-i18n="重新開啟相機">{{ t('重新開啟相機') }}</span></button>
       <div class="scanner-draft-actions" data-qr-draft-actions hidden>
-        <button class="button button-primary" type="button" data-qr-keep>{% if executor %}<span lang="en">Keep editing</span>{% endif %}保留內容並返回</button>
-        <button class="button button-danger" type="button" data-qr-discard>{% if executor %}<span lang="en">Discard and go</span>{% endif %}放棄內容並前往巡檢點</button>
+        <button class="button button-primary" type="button" data-qr-keep>{% if executor %}<span lang="en" data-legacy-english>Keep editing</span>{% endif %}<span data-i18n="保留內容並返回">{{ t('保留內容並返回') }}</span></button>
+        <button class="button button-danger" type="button" data-qr-discard>{% if executor %}<span lang="en" data-legacy-english>Discard and go</span>{% endif %}<span data-i18n="放棄內容並前往巡檢點">{{ t('放棄內容並前往巡檢點') }}</span></button>
       </div>
-      <p class="scanner-fallback">也可關閉此視窗，改用手機內建相機掃描標籤。</p>
+      <p class="scanner-fallback"><span data-i18n="也可關閉此視窗，改用手機內建相機掃描標籤。">{{ t('也可關閉此視窗，改用手機內建相機掃描標籤。') }}</span></p>
     </div>
   </div>
 </dialog>

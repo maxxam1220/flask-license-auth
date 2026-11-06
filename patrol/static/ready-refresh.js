@@ -1,5 +1,6 @@
 /* Refresh today's list in place, keeping the current filters and focus. */
 (() => {
+  const t = (source, params = {}) => window.PatrolI18n?.t(source, params) ?? String(source).replace(/\{(\w+)\}/g, (match, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : match);
   let panel = document.querySelector('[data-ready-panel]');
   if (!panel || !window.fetch || !window.AbortController) return;
   let busy = false;
@@ -64,7 +65,8 @@
       updateLink(next).href = updateLink(panel).href;
       panel.replaceWith(next);
       panel = next;
-      if (manual) panel.querySelector('[data-ready-feedback]').textContent = '已更新列表。';
+      window.PatrolI18n?.apply(next);
+      if (manual) panel.querySelector('[data-ready-feedback]').textContent = t('已更新列表。');
       scheduleShiftChange();
       if (focusedPanel || focusedRefresh) {
         (focusedPanel ? panel : updateLink(panel)).focus({preventScroll: true});
@@ -75,7 +77,7 @@
       }
     } catch {
       const feedback = panel.querySelector('[data-ready-feedback]');
-      if (feedback) feedback.textContent = '暫時無法更新，目前顯示上次查詢結果。請稍後再按「更新列表」。';
+      if (feedback) feedback.textContent = t('暫時無法更新，目前顯示上次查詢結果。請稍後再按「更新列表」。');
     } finally {
       clearTimeout(timeout);
       panel.removeAttribute('aria-busy');

@@ -11,6 +11,7 @@
 {% set submit_label = '確認直接簽到' if visit else '確認執行簽到' if execute else '確認巡檢' if paired else '確認單段巡檢' if spot else '確認打卡' %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
+{% if simple_executor_ui %}{% include '_executor_checkin.html' %}{% else %}
 <div class="checkin-wrap checkin-wrap-wide">
   <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>
   <div class="checkin-card{% if long_period %} cross-period-checkin{% endif %}">
@@ -135,4 +136,4 @@
   </div>
   <p class="checkin-outside-note">{% if existing %}{% if daily2_existing_daily_record %}此點頻率已調整，原有紀錄已計入今日打卡限制，今天不需再打。{% elif flexible_daily2 %}{{ '本人' if personal else '此點' }}今日兩次皆已完成，可繼續前往下一個巡檢點。{% else %}{{ '本人本次' if personal and point.frequency == 'daily2' else '本人當日' if personal else '本次' if point.frequency == 'daily2' else '本期' }}已有完成紀錄，可繼續前往下一個巡檢點。{% endif %}{% elif can_confirm and not simple_signin %}離開前，請確認畫面顯示「打卡成功」。{% endif %}</p>
 </div>
-{% endblock %}
+{% endif %}{% endblock %}

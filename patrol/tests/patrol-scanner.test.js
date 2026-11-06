@@ -101,6 +101,7 @@ function simulate(options = {}) {
     }
   });
   const window = element({
+    PatrolI18n: options.i18n,
     PatrolOffline: options.route ? { route: options.route, allowNavigation: options.allowNavigation } : undefined,
     document, URL, location: { origin, pathname: options.pathname || '/dashboard', assign(value) { destinations.push(value); } },
     navigator: { mediaDevices: options.unsupported ? undefined : {
@@ -132,6 +133,21 @@ function simulate(options = {}) {
   }
   return { start, starts, draft, keep, discard, close, retry, status, englishStatus, dialog, video, track, stream, document, window, frames, background,
     requests, constraints, destinations, timers, click, step };
+}
+
+for (const selected of ['id', 'vi']) {
+  test('scanner errors localize to ' + selected + ' and restore default Chinese without restarting the camera', async () => {
+    const catalog = JSON.parse(fs.readFileSync(path.join(staticDir, '../locales/client.json'), 'utf8'));
+    let locale = selected;
+    const i18n = { t(source) { return catalog[source]?.[locale] || source; }, getLocale() { return locale; } };
+    const s = simulate({ unsupported: true, executor: true, i18n });
+    s.click(s.start); await nextTurn();
+    const original = '此瀏覽器無法開啟相機。請用手機內建相機掃描巡檢點 QR Code。';
+    assert.equal(s.status.textContent, catalog[original][selected]); assert.equal(s.englishStatus.hidden, true);
+    locale = 'zh-Hant'; s.document.dispatchEvent(new Event('patrol:locale-changed'));
+    assert.equal(s.status.textContent, original); assert.equal(s.englishStatus.hidden, false);
+    assert.equal(s.constraints.length, 0); assert.equal(s.destinations.length, 0);
+  });
 }
 
 for (const failure of ['missing API', 'throwing API']) {

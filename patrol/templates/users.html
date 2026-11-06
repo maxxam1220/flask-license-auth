@@ -8,6 +8,13 @@
   <option value="{{ value }}"{% if selected == value %} selected{% endif %}>{{ label }}</option>
   {% endfor %}
 {%- endmacro %}
+{% macro language_options(selected) -%}
+  {% for value,label in ui_languages.items() %}<option value="{{ value }}"{% if selected == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+{%- endmacro %}
+{% macro interface_options(simple=false) -%}
+  <option value="0"{% if not simple %} selected{% endif %}>標準介面</option>
+  <option value="1"{% if simple %} selected{% endif %}>簡易簽到（執行人員）</option>
+{%- endmacro %}
 {% block content %}
 <div class="page-heading"><div><h1>人員管理</h1><p id="role-guide">總務管理員、工務巡檢員與總務巡檢員權限相同，共用總務點位。只有系統管理員可管理人員、點位及審核裝置。</p></div><span class="heading-icon">{{ icon('users') }}</span></div>
 <details class="panel disclosure create-disclosure"><summary><span>{{ icon('plus') }}新增人員</span>{{ icon('down') }}</summary>
@@ -16,6 +23,8 @@
     <label>顯示姓名<input name="display_name" required maxlength="80" placeholder="員工姓名"></label>
     <label>角色<select name="role" required aria-describedby="role-guide">{{ role_options(none, '請選擇角色') }}</select></label>
     <label>初始密碼<input name="password" type="password" required minlength="{{ password_min_length }}" maxlength="{{ password_max_length }}" autocomplete="new-password"><small>至少 {{ password_min_length }} 個字元；員工首次登入須更改。</small></label>
+    <label>顯示語言<select name="ui_language">{{ language_options('zh-Hant') }}</select><small>依帳號設定，登入後自動使用此語言。</small></label>
+    <label>操作介面<select name="simple_executor_ui">{{ interface_options() }}</select><small>簡易介面只適用總務執行人員；權限與打卡規則不變。</small></label>
   </div><div class="form-actions"><button class="button button-primary">{{ icon('plus') }}建立人員</button></div></form>
 </details>
 <div class="section-heading outside"><h2>所有人員</h2><span class="count-label">{{ users|length }} 人</span></div>
@@ -23,7 +32,7 @@
 {% set selected_role=account_role_choice(user) %}
 <article class="panel user-management" id="user-{{ user.id }}" aria-labelledby="user-name-{{ user.id }}" tabindex="-1">
   <div class="management-top"><div class="management-identity"><span class="avatar large-avatar" aria-hidden="true">{{ user.display_name[:1] }}</span><div><h3 id="user-name-{{ user.id }}">{{ user.display_name }}{% if user.id == current_user.id %}<small class="you-label">你</small>{% endif %}</h3><span class="muted">{{ user.username }}</span></div></div>
-    <div class="management-meta"><span class="badge {{ 'badge-todo' if not selected_role else 'badge-neutral' }}">{{ role_label(user) }}</span><span class="badge {{ 'badge-done' if user.active else 'badge-revoked' }}">{{ '啟用中' if user.active else '已停用' }}</span></div>
+    <div class="management-meta"><span class="badge {{ 'badge-todo' if not selected_role else 'badge-neutral' }}">{{ role_label(user) }}</span><span class="badge {{ 'badge-done' if user.active else 'badge-revoked' }}">{{ '啟用中' if user.active else '已停用' }}</span>{% if user.ui_language != 'zh-Hant' %}<span class="badge badge-neutral">{{ '印尼文' if user.ui_language == 'id' else '越南文' }}</span>{% endif %}{% if user.simple_executor_ui and user.role == 'executor' %}<span class="badge badge-neutral">僅今日待簽到</span>{% endif %}</div>
   </div>
   {% if not selected_role %}<p class="assignment-note">{{ icon('info') }}請在帳號設定指派角色，此人員才能開始巡檢。</p>{% endif %}
   <details class="disclosure compact-disclosure"><summary aria-label="帳號設定 · {{ user.display_name }}（{{ user.username }}）"><span>帳號設定</span>{{ icon('down') }}</summary>
@@ -31,6 +40,8 @@
       <div class="form-grid two-fields">
         <label>顯示姓名<input name="display_name" value="{{ user.display_name }}" required maxlength="80"></label>
         <label>角色<select name="role" required aria-describedby="role-guide"{% if user.id == current_user.id %} disabled{% endif %}>{{ role_options(selected_role, '尚未指派，請選擇角色') }}</select>{% if user.id == current_user.id %}<input type="hidden" name="role" value="admin">{% endif %}</label>
+        <label>顯示語言<select name="ui_language">{{ language_options(user.ui_language) }}</select></label>
+        <label>操作介面<select name="simple_executor_ui">{{ interface_options(user.simple_executor_ui and user.role == 'executor') }}</select><small>簡易介面只適用總務執行人員；切換為其他角色時會恢復標準介面。</small></label>
       </div>
       <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if user.active %}checked{% endif %} {% if user.id == current_user.id %}disabled{% endif %}>啟用此帳號</label>{% if user.id == current_user.id %}<input type="hidden" name="active" value="on">{% endif %}<button class="button button-primary button-small">儲存變更</button></div>
     </form>

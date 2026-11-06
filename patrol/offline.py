@@ -20,6 +20,7 @@ from domain import floor_label
 from general_workflow import execution_in_slot, new_execution, personal_inspection_in_slot
 from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, process_uploads
 from issues import open_issue_for
+from i18n import client_catalog, t, translate
 from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
 from patrol_access import can_access_category
 
@@ -45,14 +46,16 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
     signer = URLSafeSerializer(app.secret_key, salt="patrol-offline-v1")
 
     def fail(code, message, status=409, retryable=False):
-        return jsonify(ok=False, code=code, message=message, retryable=retryable), status
+        return jsonify(ok=False, code=code, message=t(message), retryable=retryable), status
 
     def owner(user, binding):
         return f"u{user.id}v{user.auth_version}b{binding.id}-{user.role}-{user.patrol_category or 'all'}"
 
     def identity(user, binding):
         return dict(id=user.id, name=user.display_name, role=user.role, category=user.patrol_category,
-                    binding_id=binding.id, auth_version=user.auth_version, role_label=role_label(user))
+                    binding_id=binding.id, auth_version=user.auth_version, role_label=role_label(user),
+                    ui_language=user.ui_language,
+                    simple_executor_ui=bool(user.role == 'executor' and user.simple_executor_ui))
 
     def actor(lock=False):
         if not g.get("user"):
@@ -95,7 +98,12 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
     def offline_page():
         # This document is intentionally identical across sessions. It contains
         # no user, CSRF token, flash, point or server-provided private content.
-        return render_template("offline.html")
+        g.patrol_ui_locale = "zh-Hant"  # Also covers macros imported without context.
+        # Cache only a public shell and the full static catalog. Never bake the
+        # requesting account's locale into a shared service-worker response.
+        return render_template("offline.html", ui_locale="zh-Hant", client_i18n=client_catalog("zh-Hant"),
+                               simple_executor_ui=False, home_url="/dashboard",
+                               t=lambda source, **values: translate(source, "zh-Hant", **values))
 
     @app.get("/offline-sw.js")
     def offline_worker():
@@ -163,6 +171,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             else:
                 used = [slot for slot in slots if (point.id, point.frequency, key, slot) in shared_used]
             rows.append(dict(id=point.id, token=point.qr_token, revision=point_revision(point), code=point.code, name=point.name,
+                             name_i18n={language: translate(point.name, language) for language in ("id", "vi")},
                              floor=floor_label(point.floor), frequency=point.frequency, workflow_mode=point.workflow_mode,
                              stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed,
                              grant=signer.dumps(grant)))

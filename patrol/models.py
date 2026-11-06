@@ -57,6 +57,11 @@ class User(db.Model):
     engineering_inspector_title = db.Column(db.Boolean, db.CheckConstraint(
         ENGINEERING_TITLE_RULE, name="patrol_engineering_inspector_title"),
         nullable=False, default=False, server_default=db.false())
+    ui_language = db.Column(db.String(10), db.CheckConstraint(
+        "ui_language IN ('zh-Hant', 'id', 'vi')", name="patrol_user_ui_language"),
+        nullable=False, default="zh-Hant", server_default="zh-Hant")
+    # Presentation only: applied solely to executors, never an access permission.
+    simple_executor_ui = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     active = db.Column(db.Boolean, nullable=False, default=True)
     must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     auth_version = db.Column(db.Integer, nullable=False, default=1)

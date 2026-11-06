@@ -51,7 +51,7 @@ def test_v13_adds_only_false_title_and_preserves_old_rows_and_external_fk(engine
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == LATEST_VERSION == 13
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert not any(statement.lstrip().upper().startswith(("DROP TABLE", "DELETE ", "UPDATE ")) for statement in statements)
@@ -67,11 +67,11 @@ def test_v13_adds_only_false_title_and_preserves_old_rows_and_external_fk(engine
             general_manager_title=False, active=True, must_change_password=False, auth_version=1,
             created_at=datetime(2026, 11, 6)))
         connection.execute(User.__table__.update().where(User.id == 2).values(engineering_inspector_title=True))
-    assert upgrade_schema(engine) == 13
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         assert connection.execute(select(User.id, User.engineering_inspector_title).where(User.id.in_((2, 7)))
                                   .order_by(User.id)).all() == [(2, True), (7, False)]
-        assert connection.scalar(select(func.count()).where(SchemaVersion.version == 13)) == 1
+        assert connection.scalar(select(func.count()).where(SchemaVersion.version == LATEST_VERSION)) == 1
 
 
 @pytest.mark.parametrize("identifier", [1, 3, 4, 5, 6])

@@ -506,3 +506,34 @@ test('optional storage persistence failures never interrupt offline preparation'
   }
   await new Promise(resolve => setImmediate(resolve));
 });
+
+test('account locale and private point translations survive offline reopen without translating user content', async t => {
+  const h = harness(); t.after(() => h.core.close());
+  h.state.manifest.identity = { ...h.state.manifest.identity, ui_language: 'id', simple_executor_ui: true };
+  h.state.manifest.points[0].name_i18n = { id: 'Ruang mesin', vi: 'Phòng máy' };
+  await h.core.prepare();
+  const note = '姓名不可翻譯：Nguyễn / Budi；點位備註保持原文';
+  const entry = await h.core.enqueue({ ...input, note });
+  const reopened = harness({ databaseName: h.dbName }); t.after(() => reopened.core.close());
+  const state = await reopened.core.getState();
+  assert.equal(state.identity.ui_language, 'id'); assert.equal(state.identity.simple_executor_ui, true);
+  assert.equal(state.queue[0].note, note); assert.equal(state.queue[0].name, 'Point');
+  assert.deepEqual(state.queue[0].name_i18n, { id: 'Ruang mesin', vi: 'Phòng máy' });
+  await reopened.core.sync();
+  const [receipt] = await rows(h.dbName, 'receipts');
+  assert.equal(receipt.client_id, entry.client_id); assert.equal(receipt.name_i18n.vi, 'Phòng máy');
+  await reopened.core.lock(); assert.equal((await reopened.core.getState()).identity, null);
+});
+
+test('locale preference refresh preserves the queued grant and never leaks the previous account identity', async t => {
+  const h = await prepared(t); const entry = await h.core.enqueue(input);
+  h.state.manifest.identity = { ...h.state.manifest.identity, ui_language: 'vi', simple_executor_ui: true };
+  await h.core.prepare();
+  const same = await h.core.getState(); assert.equal(same.identity.ui_language, 'vi'); assert.equal(same.pending, 1);
+  const [queued] = await rows(h.dbName, 'queue'); assert.equal(queued.client_id, entry.client_id); assert.equal(queued.grant, 'signed-grant');
+  await h.core.lock();
+  h.state.manifest = manifest({ owner: 'u2v1b22inspectorgeneral', identity: { id: 2, auth_version: 1, binding_id: 22, name: 'Other', role: 'inspector', category: 'general', ui_language: 'id', simple_executor_ui: false } });
+  await h.core.prepare();
+  const other = await h.core.getState(); assert.equal(other.identity.ui_language, 'id'); assert.equal(other.pending, 0); assert.equal(other.receipts.length, 0);
+  assert.equal((await rows(h.dbName, 'queue')).length, 1);
+});

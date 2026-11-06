@@ -1,0 +1,726 @@
+{
+  "停車場": {
+    "id": "Area parkir",
+    "vi": "Bãi đỗ xe"
+  },
+  "1.2客梯廁所": {
+    "id": "Toilet lift penumpang 1–2",
+    "vi": "Nhà vệ sinh thang máy 1–2"
+  },
+  "消防泵浦室": {
+    "id": "Ruang pompa kebakaran",
+    "vi": "Phòng bơm chữa cháy"
+  },
+  "壓紙區及垃圾區": {
+    "id": "Area pemadat kertas dan sampah",
+    "vi": "Khu ép giấy và rác"
+  },
+  "發電機室": {
+    "id": "Ruang generator",
+    "vi": "Phòng máy phát điện"
+  },
+  "空調機房": {
+    "id": "Ruang mesin AC",
+    "vi": "Phòng máy điều hòa"
+  },
+  "1.2客梯梯廳": {
+    "id": "Lobi lift penumpang 1–2",
+    "vi": "Sảnh thang máy 1–2"
+  },
+  "吸菸區": {
+    "id": "Area merokok",
+    "vi": "Khu hút thuốc"
+  },
+  "甲梯、乙梯": {
+    "id": "Tangga A dan B",
+    "vi": "Cầu thang A và B"
+  },
+  "警衛室": {
+    "id": "Pos satpam",
+    "vi": "Phòng bảo vệ"
+  },
+  "人行道": {
+    "id": "Jalur pejalan kaki",
+    "vi": "Lối đi bộ"
+  },
+  "機車棚": {
+    "id": "Parkir sepeda motor",
+    "vi": "Nhà để xe máy"
+  },
+  "廚餘室": {
+    "id": "Ruang sisa makanan",
+    "vi": "Phòng rác thực phẩm"
+  },
+  "防火巷": {
+    "id": "Jalur pemadam kebakaran",
+    "vi": "Lối phòng cháy"
+  },
+  "參觀走道": {
+    "id": "Koridor pengunjung",
+    "vi": "Hành lang tham quan"
+  },
+  "參觀步道": {
+    "id": "Jalur pengunjung",
+    "vi": "Lối tham quan"
+  },
+  "充電區": {
+    "id": "Area pengisian baterai",
+    "vi": "Khu sạc điện"
+  },
+  "烘衣室": {
+    "id": "Ruang pengering pakaian",
+    "vi": "Phòng sấy quần áo"
+  },
+  "IQF機房": {
+    "id": "Ruang mesin IQF",
+    "vi": "Phòng máy IQF"
+  },
+  "女員工宿舍": {
+    "id": "Asrama karyawan wanita",
+    "vi": "Ký túc xá nữ"
+  },
+  "男員工宿舍": {
+    "id": "Asrama karyawan pria",
+    "vi": "Ký túc xá nam"
+  },
+  "員工餐廳": {
+    "id": "Kantin karyawan",
+    "vi": "Nhà ăn nhân viên"
+  },
+  "包材區": {
+    "id": "Area bahan kemasan",
+    "vi": "Khu vật liệu đóng gói"
+  },
+  "廚房": {
+    "id": "Dapur",
+    "vi": "Nhà bếp"
+  },
+  "熱泵機室": {
+    "id": "Ruang pompa panas",
+    "vi": "Phòng máy bơm nhiệt"
+  },
+  "棧板/空籃放置區": {
+    "id": "Area palet dan keranjang kosong",
+    "vi": "Khu để pallet và giỏ rỗng"
+  },
+  "抽風機/冷卻水塔/桶槽區": {
+    "id": "Area kipas buang, menara pendingin, dan tangki",
+    "vi": "Khu quạt hút, tháp giải nhiệt và bồn chứa"
+  },
+  "201會議室": {
+    "id": "Ruang rapat 201",
+    "vi": "Phòng họp 201"
+  },
+  "202會議室": {
+    "id": "Ruang rapat 202",
+    "vi": "Phòng họp 202"
+  },
+  "203會議室": {
+    "id": "Ruang rapat 203",
+    "vi": "Phòng họp 203"
+  },
+  "204會議室": {
+    "id": "Ruang rapat 204",
+    "vi": "Phòng họp 204"
+  },
+  "205會議室": {
+    "id": "Ruang rapat 205",
+    "vi": "Phòng họp 205"
+  },
+  "B2男廁所": {
+    "id": "B2 · Toilet pria",
+    "vi": "B2 · WC nam"
+  },
+  "B2男廁所-甲": {
+    "id": "B2 · Toilet pria · A",
+    "vi": "B2 · WC nam · A"
+  },
+  "B2男廁所-乙": {
+    "id": "B2 · Toilet pria · B",
+    "vi": "B2 · WC nam · B"
+  },
+  "B2男廁所-C": {
+    "id": "B2 · Toilet pria · C",
+    "vi": "B2 · WC nam · C"
+  },
+  "B2男廁所-D": {
+    "id": "B2 · Toilet pria · D",
+    "vi": "B2 · WC nam · D"
+  },
+  "B2男廁所-警": {
+    "id": "B2 · Toilet pria · satpam",
+    "vi": "B2 · WC nam · bảo vệ"
+  },
+  "B2女廁所": {
+    "id": "B2 · Toilet wanita",
+    "vi": "B2 · WC nữ"
+  },
+  "B2女廁所-甲": {
+    "id": "B2 · Toilet wanita · A",
+    "vi": "B2 · WC nữ · A"
+  },
+  "B2女廁所-乙": {
+    "id": "B2 · Toilet wanita · B",
+    "vi": "B2 · WC nữ · B"
+  },
+  "B2女廁所-C": {
+    "id": "B2 · Toilet wanita · C",
+    "vi": "B2 · WC nữ · C"
+  },
+  "B2女廁所-D": {
+    "id": "B2 · Toilet wanita · D",
+    "vi": "B2 · WC nữ · D"
+  },
+  "B2女廁所-警": {
+    "id": "B2 · Toilet wanita · satpam",
+    "vi": "B2 · WC nữ · bảo vệ"
+  },
+  "B2充電區": {
+    "id": "B2 · Area pengisian baterai",
+    "vi": "B2 · Khu sạc điện"
+  },
+  "B1男廁所": {
+    "id": "B1 · Toilet pria",
+    "vi": "B1 · WC nam"
+  },
+  "B1男廁所-甲": {
+    "id": "B1 · Toilet pria · A",
+    "vi": "B1 · WC nam · A"
+  },
+  "B1男廁所-乙": {
+    "id": "B1 · Toilet pria · B",
+    "vi": "B1 · WC nam · B"
+  },
+  "B1男廁所-C": {
+    "id": "B1 · Toilet pria · C",
+    "vi": "B1 · WC nam · C"
+  },
+  "B1男廁所-D": {
+    "id": "B1 · Toilet pria · D",
+    "vi": "B1 · WC nam · D"
+  },
+  "B1男廁所-警": {
+    "id": "B1 · Toilet pria · satpam",
+    "vi": "B1 · WC nam · bảo vệ"
+  },
+  "B1女廁所": {
+    "id": "B1 · Toilet wanita",
+    "vi": "B1 · WC nữ"
+  },
+  "B1女廁所-甲": {
+    "id": "B1 · Toilet wanita · A",
+    "vi": "B1 · WC nữ · A"
+  },
+  "B1女廁所-乙": {
+    "id": "B1 · Toilet wanita · B",
+    "vi": "B1 · WC nữ · B"
+  },
+  "B1女廁所-C": {
+    "id": "B1 · Toilet wanita · C",
+    "vi": "B1 · WC nữ · C"
+  },
+  "B1女廁所-D": {
+    "id": "B1 · Toilet wanita · D",
+    "vi": "B1 · WC nữ · D"
+  },
+  "B1女廁所-警": {
+    "id": "B1 · Toilet wanita · satpam",
+    "vi": "B1 · WC nữ · bảo vệ"
+  },
+  "B1充電區": {
+    "id": "B1 · Area pengisian baterai",
+    "vi": "B1 · Khu sạc điện"
+  },
+  "b2男廁所": {
+    "id": "B2 · Toilet pria",
+    "vi": "B2 · WC nam"
+  },
+  "b2男廁所-甲": {
+    "id": "B2 · Toilet pria · A",
+    "vi": "B2 · WC nam · A"
+  },
+  "b2男廁所-乙": {
+    "id": "B2 · Toilet pria · B",
+    "vi": "B2 · WC nam · B"
+  },
+  "b2男廁所-C": {
+    "id": "B2 · Toilet pria · C",
+    "vi": "B2 · WC nam · C"
+  },
+  "b2男廁所-D": {
+    "id": "B2 · Toilet pria · D",
+    "vi": "B2 · WC nam · D"
+  },
+  "b2男廁所-警": {
+    "id": "B2 · Toilet pria · satpam",
+    "vi": "B2 · WC nam · bảo vệ"
+  },
+  "b2女廁所": {
+    "id": "B2 · Toilet wanita",
+    "vi": "B2 · WC nữ"
+  },
+  "b2女廁所-甲": {
+    "id": "B2 · Toilet wanita · A",
+    "vi": "B2 · WC nữ · A"
+  },
+  "b2女廁所-乙": {
+    "id": "B2 · Toilet wanita · B",
+    "vi": "B2 · WC nữ · B"
+  },
+  "b2女廁所-C": {
+    "id": "B2 · Toilet wanita · C",
+    "vi": "B2 · WC nữ · C"
+  },
+  "b2女廁所-D": {
+    "id": "B2 · Toilet wanita · D",
+    "vi": "B2 · WC nữ · D"
+  },
+  "b2女廁所-警": {
+    "id": "B2 · Toilet wanita · satpam",
+    "vi": "B2 · WC nữ · bảo vệ"
+  },
+  "b2充電區": {
+    "id": "B2 · Area pengisian baterai",
+    "vi": "B2 · Khu sạc điện"
+  },
+  "b1男廁所": {
+    "id": "B1 · Toilet pria",
+    "vi": "B1 · WC nam"
+  },
+  "b1男廁所-甲": {
+    "id": "B1 · Toilet pria · A",
+    "vi": "B1 · WC nam · A"
+  },
+  "b1男廁所-乙": {
+    "id": "B1 · Toilet pria · B",
+    "vi": "B1 · WC nam · B"
+  },
+  "b1男廁所-C": {
+    "id": "B1 · Toilet pria · C",
+    "vi": "B1 · WC nam · C"
+  },
+  "b1男廁所-D": {
+    "id": "B1 · Toilet pria · D",
+    "vi": "B1 · WC nam · D"
+  },
+  "b1男廁所-警": {
+    "id": "B1 · Toilet pria · satpam",
+    "vi": "B1 · WC nam · bảo vệ"
+  },
+  "b1女廁所": {
+    "id": "B1 · Toilet wanita",
+    "vi": "B1 · WC nữ"
+  },
+  "b1女廁所-甲": {
+    "id": "B1 · Toilet wanita · A",
+    "vi": "B1 · WC nữ · A"
+  },
+  "b1女廁所-乙": {
+    "id": "B1 · Toilet wanita · B",
+    "vi": "B1 · WC nữ · B"
+  },
+  "b1女廁所-C": {
+    "id": "B1 · Toilet wanita · C",
+    "vi": "B1 · WC nữ · C"
+  },
+  "b1女廁所-D": {
+    "id": "B1 · Toilet wanita · D",
+    "vi": "B1 · WC nữ · D"
+  },
+  "b1女廁所-警": {
+    "id": "B1 · Toilet wanita · satpam",
+    "vi": "B1 · WC nữ · bảo vệ"
+  },
+  "b1充電區": {
+    "id": "B1 · Area pengisian baterai",
+    "vi": "B1 · Khu sạc điện"
+  },
+  "1F男廁所": {
+    "id": "1F · Toilet pria",
+    "vi": "1F · WC nam"
+  },
+  "1F男廁所-甲": {
+    "id": "1F · Toilet pria · A",
+    "vi": "1F · WC nam · A"
+  },
+  "1F男廁所-乙": {
+    "id": "1F · Toilet pria · B",
+    "vi": "1F · WC nam · B"
+  },
+  "1F男廁所-C": {
+    "id": "1F · Toilet pria · C",
+    "vi": "1F · WC nam · C"
+  },
+  "1F男廁所-D": {
+    "id": "1F · Toilet pria · D",
+    "vi": "1F · WC nam · D"
+  },
+  "1F男廁所-警": {
+    "id": "1F · Toilet pria · satpam",
+    "vi": "1F · WC nam · bảo vệ"
+  },
+  "1F女廁所": {
+    "id": "1F · Toilet wanita",
+    "vi": "1F · WC nữ"
+  },
+  "1F女廁所-甲": {
+    "id": "1F · Toilet wanita · A",
+    "vi": "1F · WC nữ · A"
+  },
+  "1F女廁所-乙": {
+    "id": "1F · Toilet wanita · B",
+    "vi": "1F · WC nữ · B"
+  },
+  "1F女廁所-C": {
+    "id": "1F · Toilet wanita · C",
+    "vi": "1F · WC nữ · C"
+  },
+  "1F女廁所-D": {
+    "id": "1F · Toilet wanita · D",
+    "vi": "1F · WC nữ · D"
+  },
+  "1F女廁所-警": {
+    "id": "1F · Toilet wanita · satpam",
+    "vi": "1F · WC nữ · bảo vệ"
+  },
+  "1F充電區": {
+    "id": "1F · Area pengisian baterai",
+    "vi": "1F · Khu sạc điện"
+  },
+  "1M男廁所": {
+    "id": "1M · Toilet pria",
+    "vi": "1M · WC nam"
+  },
+  "1M男廁所-甲": {
+    "id": "1M · Toilet pria · A",
+    "vi": "1M · WC nam · A"
+  },
+  "1M男廁所-乙": {
+    "id": "1M · Toilet pria · B",
+    "vi": "1M · WC nam · B"
+  },
+  "1M男廁所-C": {
+    "id": "1M · Toilet pria · C",
+    "vi": "1M · WC nam · C"
+  },
+  "1M男廁所-D": {
+    "id": "1M · Toilet pria · D",
+    "vi": "1M · WC nam · D"
+  },
+  "1M男廁所-警": {
+    "id": "1M · Toilet pria · satpam",
+    "vi": "1M · WC nam · bảo vệ"
+  },
+  "1M女廁所": {
+    "id": "1M · Toilet wanita",
+    "vi": "1M · WC nữ"
+  },
+  "1M女廁所-甲": {
+    "id": "1M · Toilet wanita · A",
+    "vi": "1M · WC nữ · A"
+  },
+  "1M女廁所-乙": {
+    "id": "1M · Toilet wanita · B",
+    "vi": "1M · WC nữ · B"
+  },
+  "1M女廁所-C": {
+    "id": "1M · Toilet wanita · C",
+    "vi": "1M · WC nữ · C"
+  },
+  "1M女廁所-D": {
+    "id": "1M · Toilet wanita · D",
+    "vi": "1M · WC nữ · D"
+  },
+  "1M女廁所-警": {
+    "id": "1M · Toilet wanita · satpam",
+    "vi": "1M · WC nữ · bảo vệ"
+  },
+  "1M充電區": {
+    "id": "1M · Area pengisian baterai",
+    "vi": "1M · Khu sạc điện"
+  },
+  "2F男廁所": {
+    "id": "2F · Toilet pria",
+    "vi": "2F · WC nam"
+  },
+  "2F男廁所-甲": {
+    "id": "2F · Toilet pria · A",
+    "vi": "2F · WC nam · A"
+  },
+  "2F男廁所-乙": {
+    "id": "2F · Toilet pria · B",
+    "vi": "2F · WC nam · B"
+  },
+  "2F男廁所-C": {
+    "id": "2F · Toilet pria · C",
+    "vi": "2F · WC nam · C"
+  },
+  "2F男廁所-D": {
+    "id": "2F · Toilet pria · D",
+    "vi": "2F · WC nam · D"
+  },
+  "2F男廁所-警": {
+    "id": "2F · Toilet pria · satpam",
+    "vi": "2F · WC nam · bảo vệ"
+  },
+  "2F女廁所": {
+    "id": "2F · Toilet wanita",
+    "vi": "2F · WC nữ"
+  },
+  "2F女廁所-甲": {
+    "id": "2F · Toilet wanita · A",
+    "vi": "2F · WC nữ · A"
+  },
+  "2F女廁所-乙": {
+    "id": "2F · Toilet wanita · B",
+    "vi": "2F · WC nữ · B"
+  },
+  "2F女廁所-C": {
+    "id": "2F · Toilet wanita · C",
+    "vi": "2F · WC nữ · C"
+  },
+  "2F女廁所-D": {
+    "id": "2F · Toilet wanita · D",
+    "vi": "2F · WC nữ · D"
+  },
+  "2F女廁所-警": {
+    "id": "2F · Toilet wanita · satpam",
+    "vi": "2F · WC nữ · bảo vệ"
+  },
+  "2F充電區": {
+    "id": "2F · Area pengisian baterai",
+    "vi": "2F · Khu sạc điện"
+  },
+  "3F男廁所": {
+    "id": "3F · Toilet pria",
+    "vi": "3F · WC nam"
+  },
+  "3F男廁所-甲": {
+    "id": "3F · Toilet pria · A",
+    "vi": "3F · WC nam · A"
+  },
+  "3F男廁所-乙": {
+    "id": "3F · Toilet pria · B",
+    "vi": "3F · WC nam · B"
+  },
+  "3F男廁所-C": {
+    "id": "3F · Toilet pria · C",
+    "vi": "3F · WC nam · C"
+  },
+  "3F男廁所-D": {
+    "id": "3F · Toilet pria · D",
+    "vi": "3F · WC nam · D"
+  },
+  "3F男廁所-警": {
+    "id": "3F · Toilet pria · satpam",
+    "vi": "3F · WC nam · bảo vệ"
+  },
+  "3F女廁所": {
+    "id": "3F · Toilet wanita",
+    "vi": "3F · WC nữ"
+  },
+  "3F女廁所-甲": {
+    "id": "3F · Toilet wanita · A",
+    "vi": "3F · WC nữ · A"
+  },
+  "3F女廁所-乙": {
+    "id": "3F · Toilet wanita · B",
+    "vi": "3F · WC nữ · B"
+  },
+  "3F女廁所-C": {
+    "id": "3F · Toilet wanita · C",
+    "vi": "3F · WC nữ · C"
+  },
+  "3F女廁所-D": {
+    "id": "3F · Toilet wanita · D",
+    "vi": "3F · WC nữ · D"
+  },
+  "3F女廁所-警": {
+    "id": "3F · Toilet wanita · satpam",
+    "vi": "3F · WC nữ · bảo vệ"
+  },
+  "3F充電區": {
+    "id": "3F · Area pengisian baterai",
+    "vi": "3F · Khu sạc điện"
+  },
+  "4F男廁所": {
+    "id": "4F · Toilet pria",
+    "vi": "4F · WC nam"
+  },
+  "4F男廁所-甲": {
+    "id": "4F · Toilet pria · A",
+    "vi": "4F · WC nam · A"
+  },
+  "4F男廁所-乙": {
+    "id": "4F · Toilet pria · B",
+    "vi": "4F · WC nam · B"
+  },
+  "4F男廁所-C": {
+    "id": "4F · Toilet pria · C",
+    "vi": "4F · WC nam · C"
+  },
+  "4F男廁所-D": {
+    "id": "4F · Toilet pria · D",
+    "vi": "4F · WC nam · D"
+  },
+  "4F男廁所-警": {
+    "id": "4F · Toilet pria · satpam",
+    "vi": "4F · WC nam · bảo vệ"
+  },
+  "4F女廁所": {
+    "id": "4F · Toilet wanita",
+    "vi": "4F · WC nữ"
+  },
+  "4F女廁所-甲": {
+    "id": "4F · Toilet wanita · A",
+    "vi": "4F · WC nữ · A"
+  },
+  "4F女廁所-乙": {
+    "id": "4F · Toilet wanita · B",
+    "vi": "4F · WC nữ · B"
+  },
+  "4F女廁所-C": {
+    "id": "4F · Toilet wanita · C",
+    "vi": "4F · WC nữ · C"
+  },
+  "4F女廁所-D": {
+    "id": "4F · Toilet wanita · D",
+    "vi": "4F · WC nữ · D"
+  },
+  "4F女廁所-警": {
+    "id": "4F · Toilet wanita · satpam",
+    "vi": "4F · WC nữ · bảo vệ"
+  },
+  "4F充電區": {
+    "id": "4F · Area pengisian baterai",
+    "vi": "4F · Khu sạc điện"
+  },
+  "4M男廁所": {
+    "id": "4M · Toilet pria",
+    "vi": "4M · WC nam"
+  },
+  "4M男廁所-甲": {
+    "id": "4M · Toilet pria · A",
+    "vi": "4M · WC nam · A"
+  },
+  "4M男廁所-乙": {
+    "id": "4M · Toilet pria · B",
+    "vi": "4M · WC nam · B"
+  },
+  "4M男廁所-C": {
+    "id": "4M · Toilet pria · C",
+    "vi": "4M · WC nam · C"
+  },
+  "4M男廁所-D": {
+    "id": "4M · Toilet pria · D",
+    "vi": "4M · WC nam · D"
+  },
+  "4M男廁所-警": {
+    "id": "4M · Toilet pria · satpam",
+    "vi": "4M · WC nam · bảo vệ"
+  },
+  "4M女廁所": {
+    "id": "4M · Toilet wanita",
+    "vi": "4M · WC nữ"
+  },
+  "4M女廁所-甲": {
+    "id": "4M · Toilet wanita · A",
+    "vi": "4M · WC nữ · A"
+  },
+  "4M女廁所-乙": {
+    "id": "4M · Toilet wanita · B",
+    "vi": "4M · WC nữ · B"
+  },
+  "4M女廁所-C": {
+    "id": "4M · Toilet wanita · C",
+    "vi": "4M · WC nữ · C"
+  },
+  "4M女廁所-D": {
+    "id": "4M · Toilet wanita · D",
+    "vi": "4M · WC nữ · D"
+  },
+  "4M女廁所-警": {
+    "id": "4M · Toilet wanita · satpam",
+    "vi": "4M · WC nữ · bảo vệ"
+  },
+  "4M充電區": {
+    "id": "4M · Area pengisian baterai",
+    "vi": "4M · Khu sạc điện"
+  },
+  "5F男廁所": {
+    "id": "5F · Toilet pria",
+    "vi": "5F · WC nam"
+  },
+  "5F男廁所-甲": {
+    "id": "5F · Toilet pria · A",
+    "vi": "5F · WC nam · A"
+  },
+  "5F男廁所-乙": {
+    "id": "5F · Toilet pria · B",
+    "vi": "5F · WC nam · B"
+  },
+  "5F男廁所-C": {
+    "id": "5F · Toilet pria · C",
+    "vi": "5F · WC nam · C"
+  },
+  "5F男廁所-D": {
+    "id": "5F · Toilet pria · D",
+    "vi": "5F · WC nam · D"
+  },
+  "5F男廁所-警": {
+    "id": "5F · Toilet pria · satpam",
+    "vi": "5F · WC nam · bảo vệ"
+  },
+  "5F女廁所": {
+    "id": "5F · Toilet wanita",
+    "vi": "5F · WC nữ"
+  },
+  "5F女廁所-甲": {
+    "id": "5F · Toilet wanita · A",
+    "vi": "5F · WC nữ · A"
+  },
+  "5F女廁所-乙": {
+    "id": "5F · Toilet wanita · B",
+    "vi": "5F · WC nữ · B"
+  },
+  "5F女廁所-C": {
+    "id": "5F · Toilet wanita · C",
+    "vi": "5F · WC nữ · C"
+  },
+  "5F女廁所-D": {
+    "id": "5F · Toilet wanita · D",
+    "vi": "5F · WC nữ · D"
+  },
+  "5F女廁所-警": {
+    "id": "5F · Toilet wanita · satpam",
+    "vi": "5F · WC nữ · bảo vệ"
+  },
+  "5F充電區": {
+    "id": "5F · Area pengisian baterai",
+    "vi": "5F · Khu sạc điện"
+  },
+  "1、2號客梯機房": {
+    "id": "Ruang mesin lift penumpang 1 & 2",
+    "vi": "Phòng máy thang khách 1 & 2"
+  },
+  "3、4號客梯機房": {
+    "id": "Ruang mesin lift penumpang 3 & 4",
+    "vi": "Phòng máy thang khách 3 & 4"
+  },
+  "5、6號貨梯機房": {
+    "id": "Ruang mesin lift barang 5 & 6",
+    "vi": "Phòng máy thang hàng 5 & 6"
+  },
+  "7、8號貨梯機房": {
+    "id": "Ruang mesin lift barang 7 & 8",
+    "vi": "Phòng máy thang hàng 7 & 8"
+  },
+  "7、9號貨梯機房": {
+    "id": "Ruang mesin lift barang 7 & 9",
+    "vi": "Phòng máy thang hàng 7 & 9"
+  },
+  "7、10號貨梯機房": {
+    "id": "Ruang mesin lift barang 7 & 10",
+    "vi": "Phòng máy thang hàng 7 & 10"
+  }
+}

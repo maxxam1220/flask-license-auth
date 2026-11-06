@@ -14,6 +14,7 @@
 {% set title = ('直接簽到收據' if visit else '執行簽到收據' if executed else '巡檢收據') if reviewing else ('直接簽到完成' if visit else '執行簽到完成' if executed else '打卡成功') %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
+{% if simple_executor_ui %}{% include '_executor_success.html' %}{% else %}
 <div class="checkin-wrap receipt-wrap">
   {% if from_results %}<a class="back-link" href="{{ results_link }}">{{ icon('back') }}返回查詢結果</a>{% endif %}
   <div class="checkin-card success-card{% if can_scan and not from_results %} receipt-can-scan{% endif %}">
@@ -42,4 +43,4 @@
   {% elif executed %}<a class="button button-text button-full" href="{{ results_link }}">{{ '查看當日執行紀錄' if from_scan else '返回執行紀錄' }}</a>
   {% else %}<a class="button button-text button-full" href="{{ url_for('record_detail', record_id=record.id, return_to=back_url if reviewing else none) }}">{{ '查看並處理本次異常' if issue_state(record) == 'open' and (is_patrol_admin or own_record) else '查看本次異常詳情' if record.is_abnormal else '查看本次備註與照片' if record.note or record.photos else '查看完整巡檢紀錄' }}</a>{% endif %}
   {% if not reviewing %}<p class="checkin-footnote">{% if flexible_daily2 %}再次掃描同一點位可登記另一次，每次仍須確認；今日已完成兩次則可前往下一點。{% else %}到下一個點位後，也可以用手機內建相機掃描標籤。{% endif %}</p>{% endif %}
-</div></div>{% endblock %}
+</div></div>{% endif %}{% endblock %}

@@ -1,0 +1,1082 @@
+{
+  "巡點": {
+    "id": "Check-in",
+    "vi": "Điểm danh"
+  },
+  "今日待簽到": {
+    "id": "Check-in hari ini",
+    "vi": "Điểm danh hôm nay"
+  },
+  "待簽到點位": {
+    "id": "Lokasi yang menunggu",
+    "vi": "Điểm chờ điểm danh"
+  },
+  "待巡點位": {
+    "id": "Lokasi menunggu inspeksi",
+    "vi": "Điểm chờ kiểm tra"
+  },
+  "今日待巡": {
+    "id": "Inspeksi hari ini",
+    "vi": "Kiểm tra hôm nay"
+  },
+  "掃描現場 QR Code，再按 OK 簽到。": {
+    "id": "Pindai QR di lokasi, lalu tekan OK untuk check-in.",
+    "vi": "Quét mã QR tại chỗ, rồi nhấn OK để điểm danh."
+  },
+  "返回今日待簽到": {
+    "id": "Kembali ke daftar hari ini",
+    "vi": "Về danh sách hôm nay"
+  },
+  "查看今日待簽到": {
+    "id": "Lihat daftar hari ini",
+    "vi": "Xem danh sách hôm nay"
+  },
+  "工作空間": {
+    "id": "Menu",
+    "vi": "Menu"
+  },
+  "主要導覽": {
+    "id": "Menu utama",
+    "vi": "Menu chính"
+  },
+  "手機主要導覽": {
+    "id": "Menu ponsel",
+    "vi": "Menu điện thoại"
+  },
+  "廠區巡檢管理": {
+    "id": "Pemeriksaan fasilitas",
+    "vi": "Kiểm tra nhà máy"
+  },
+  "巡點 · 廠區巡檢系統": {
+    "id": "Sistem pemeriksaan fasilitas",
+    "vi": "Hệ thống kiểm tra nhà máy"
+  },
+  "時間以台灣時間顯示": {
+    "id": "Waktu Taiwan",
+    "vi": "Giờ Đài Loan"
+  },
+  "跳到主要內容": {
+    "id": "Ke konten utama",
+    "vi": "Đến nội dung chính"
+  },
+  "現場打卡工具": {
+    "id": "Alat check-in",
+    "vi": "Công cụ điểm danh"
+  },
+  "福和生鮮農產股份有限公司": {
+    "id": "福和生鮮農產股份有限公司",
+    "vi": "福和生鮮農產股份有限公司"
+  },
+  "巡檢總覽": {
+    "id": "Ringkasan inspeksi",
+    "vi": "Tổng quan kiểm tra"
+  },
+  "巡檢紀錄": {
+    "id": "Riwayat inspeksi",
+    "vi": "Lịch sử kiểm tra"
+  },
+  "執行紀錄": {
+    "id": "Riwayat check-in",
+    "vi": "Lịch sử điểm danh"
+  },
+  "漏打查詢": {
+    "id": "Check-in terlewat",
+    "vi": "Lượt bị bỏ lỡ"
+  },
+  "異常追蹤": {
+    "id": "Laporan masalah",
+    "vi": "Theo dõi sự cố"
+  },
+  "我的綁定": {
+    "id": "Ponsel saya",
+    "vi": "Điện thoại của tôi"
+  },
+  "開啟選單": {
+    "id": "Buka menu",
+    "vi": "Mở menu"
+  },
+  "變更密碼": {
+    "id": "Ubah kata sandi",
+    "vi": "Đổi mật khẩu"
+  },
+  "登出": {
+    "id": "Keluar",
+    "vi": "Đăng xuất"
+  },
+  "同步": {
+    "id": "Sinkron",
+    "vi": "Đồng bộ"
+  },
+  "待確認": {
+    "id": "Memeriksa",
+    "vi": "Đang kiểm tra"
+  },
+  "開啟離線打卡與同步": {
+    "id": "Buka check-in offline dan sinkronisasi",
+    "vi": "Mở điểm danh ngoại tuyến và đồng bộ"
+  },
+  "確認這項操作": {
+    "id": "Konfirmasi tindakan",
+    "vi": "Xác nhận thao tác"
+  },
+  "取消": {
+    "id": "Batal",
+    "vi": "Hủy"
+  },
+  "確認繼續": {
+    "id": "Lanjutkan",
+    "vi": "Tiếp tục"
+  },
+  "樓層": {
+    "id": "Lantai",
+    "vi": "Tầng"
+  },
+  "全部樓層": {
+    "id": "Semua lantai",
+    "vi": "Tất cả tầng"
+  },
+  "全部分類": {
+    "id": "Semua kategori",
+    "vi": "Tất cả nhóm"
+  },
+  "套用篩選": {
+    "id": "Terapkan",
+    "vi": "Áp dụng"
+  },
+  "重設": {
+    "id": "Atur ulang",
+    "vi": "Đặt lại"
+  },
+  "篩選今日點位": {
+    "id": "Filter lokasi hari ini",
+    "vi": "Lọc điểm hôm nay"
+  },
+  "更新列表": {
+    "id": "Perbarui",
+    "vi": "Làm mới"
+  },
+  "更新今日待簽到列表": {
+    "id": "Perbarui daftar check-in hari ini",
+    "vi": "Làm mới danh sách điểm danh hôm nay"
+  },
+  "更新今日待巡列表": {
+    "id": "Perbarui daftar inspeksi hari ini",
+    "vi": "Làm mới danh sách kiểm tra hôm nay"
+  },
+  "更新於": {
+    "id": "Diperbarui",
+    "vi": "Cập nhật"
+  },
+  "{count} 個點位": {
+    "id": "{count} lokasi",
+    "vi": "{count} điểm"
+  },
+  "樓層／編號 · 地點": {
+    "id": "Lantai / Kode · Lokasi",
+    "vi": "Tầng / Mã · Địa điểm"
+  },
+  "編號": {
+    "id": "Kode",
+    "vi": "Mã"
+  },
+  "地點": {
+    "id": "Lokasi",
+    "vi": "Địa điểm"
+  },
+  "簽到狀態": {
+    "id": "Status",
+    "vi": "Trạng thái"
+  },
+  "巡檢狀態": {
+    "id": "Status inspeksi",
+    "vi": "Trạng thái kiểm tra"
+  },
+  "週巡": {
+    "id": "Mingguan",
+    "vi": "Hằng tuần"
+  },
+  "月巡": {
+    "id": "Bulanan",
+    "vi": "Hằng tháng"
+  },
+  "今日到期": {
+    "id": "Batas hari ini",
+    "vi": "Hạn hôm nay"
+  },
+  "{date} 到期": {
+    "id": "Batas {date}",
+    "vi": "Hạn {date}"
+  },
+  "目前沒有待簽到的點位。": {
+    "id": "Tidak ada lokasi yang menunggu check-in.",
+    "vi": "Hiện không có điểm nào chờ điểm danh."
+  },
+  "目前沒有可巡檢的排程點位。": {
+    "id": "Tidak ada lokasi inspeksi terjadwal saat ini.",
+    "vi": "Hiện không có điểm kiểm tra theo lịch."
+  },
+  "等待指派巡檢分類": {
+    "id": "Menunggu penugasan",
+    "vi": "Chờ phân công"
+  },
+  "請聯絡系統管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。": {
+    "id": "Hubungi admin untuk penugasan. Setelah itu, Anda dapat melihat lokasi dan check-in.",
+    "vi": "Liên hệ quản trị viên để được phân công. Sau đó bạn có thể xem địa điểm và điểm danh."
+  },
+  "總務執行人員": {
+    "id": "Petugas pelaksana",
+    "vi": "Nhân viên thực hiện"
+  },
+  "總務": {
+    "id": "Urusan umum",
+    "vi": "Tổng vụ"
+  },
+  "未簽到": {
+    "id": "Belum check-in",
+    "vi": "Chưa điểm danh"
+  },
+  "待簽到": {
+    "id": "Menunggu check-in",
+    "vi": "Chờ điểm danh"
+  },
+  "可直接簽到": {
+    "id": "Bisa check-in",
+    "vi": "Có thể điểm danh"
+  },
+  "每日一次": {
+    "id": "1 kali / hari",
+    "vi": "1 lần / ngày"
+  },
+  "每日兩次": {
+    "id": "2 kali / hari",
+    "vi": "2 lần / ngày"
+  },
+  "每週一次": {
+    "id": "1 kali / minggu",
+    "vi": "1 lần / tuần"
+  },
+  "每月一次": {
+    "id": "1 kali / bulan",
+    "vi": "1 lần / tháng"
+  },
+  "不定期": {
+    "id": "Tidak terjadwal",
+    "vi": "Không định kỳ"
+  },
+  "第 1 次": {
+    "id": "Ke-1",
+    "vi": "Lần 1"
+  },
+  "第 2 次": {
+    "id": "Ke-2",
+    "vi": "Lần 2"
+  },
+  "本週": {
+    "id": "Minggu ini",
+    "vi": "Tuần này"
+  },
+  "本次打卡": {
+    "id": "Check-in ini",
+    "vi": "Lượt điểm danh"
+  },
+  "打卡確認": {
+    "id": "Konfirmasi check-in",
+    "vi": "Xác nhận điểm danh"
+  },
+  "確認簽到": {
+    "id": "Konfirmasi check-in",
+    "vi": "Xác nhận điểm danh"
+  },
+  "請先核對點位，再按 OK。": {
+    "id": "Pastikan lokasi benar, lalu tekan OK.",
+    "vi": "Kiểm tra đúng địa điểm, rồi nhấn OK."
+  },
+  "正在儲存簽到…": {
+    "id": "Menyimpan check-in…",
+    "vi": "Đang lưu điểm danh…"
+  },
+  "看到「簽到完成」後，即可前往下一點。": {
+    "id": "Lanjut ke lokasi berikutnya setelah muncul “Check-in berhasil”.",
+    "vi": "Chỉ đến điểm tiếp theo khi thấy “Điểm danh thành công”."
+  },
+  "已完成簽到": {
+    "id": "Sudah check-in",
+    "vi": "Đã điểm danh"
+  },
+  "目前無法簽到": {
+    "id": "Belum bisa check-in",
+    "vi": "Chưa thể điểm danh"
+  },
+  "此點已有完成紀錄，請前往下一點。": {
+    "id": "Lokasi ini sudah selesai. Silakan ke lokasi berikutnya.",
+    "vi": "Điểm này đã hoàn thành. Hãy đến điểm tiếp theo."
+  },
+  "請返回列表確認可簽到的點位。": {
+    "id": "Kembali ke daftar untuk melihat lokasi yang tersedia.",
+    "vi": "Về danh sách để xem điểm có thể điểm danh."
+  },
+  "查看簽到收據": {
+    "id": "Lihat bukti check-in",
+    "vi": "Xem biên nhận điểm danh"
+  },
+  "簽到人員": {
+    "id": "Petugas",
+    "vi": "Người điểm danh"
+  },
+  "有效期間": {
+    "id": "Periode berlaku",
+    "vi": "Thời hạn hiệu lực"
+  },
+  "日期": {
+    "id": "Tanggal",
+    "vi": "Ngày"
+  },
+  "此點每天可直接簽到一次。": {
+    "id": "Anda dapat check-in langsung di sini satu kali per hari.",
+    "vi": "Bạn có thể điểm danh trực tiếp tại đây một lần mỗi ngày."
+  },
+  "本期只需完成一次執行簽到。": {
+    "id": "Cukup satu check-in pelaksanaan dalam periode ini.",
+    "vi": "Chỉ cần điểm danh thực hiện một lần trong kỳ này."
+  },
+  "每日可簽到兩次，兩次可連續完成。": {
+    "id": "Dua check-in per hari; boleh dilakukan berturut-turut.",
+    "vi": "Có thể điểm danh hai lần mỗi ngày, không cần chờ giữa hai lần."
+  },
+  "簽到收據": {
+    "id": "Bukti check-in",
+    "vi": "Biên nhận điểm danh"
+  },
+  "簽到完成": {
+    "id": "Check-in berhasil",
+    "vi": "Điểm danh thành công"
+  },
+  "執行簽到完成": {
+    "id": "Check-in berhasil",
+    "vi": "Điểm danh thành công"
+  },
+  "直接簽到完成": {
+    "id": "Check-in berhasil",
+    "vi": "Điểm danh thành công"
+  },
+  "執行簽到收據": {
+    "id": "Bukti check-in",
+    "vi": "Biên nhận điểm danh"
+  },
+  "直接簽到收據": {
+    "id": "Bukti check-in",
+    "vi": "Biên nhận điểm danh"
+  },
+  "紀錄已儲存，可以繼續下一點。": {
+    "id": "Catatan tersimpan. Silakan ke lokasi berikutnya.",
+    "vi": "Đã lưu bản ghi. Bạn có thể đến điểm tiếp theo."
+  },
+  "手機記錄時間": {
+    "id": "Waktu di ponsel",
+    "vi": "Thời gian ghi trên điện thoại"
+  },
+  "簽到時間": {
+    "id": "Waktu check-in",
+    "vi": "Thời gian điểm danh"
+  },
+  "同步收件時間": {
+    "id": "Diterima server",
+    "vi": "Thời gian máy chủ nhận"
+  },
+  "第二階段": {
+    "id": "Tahap 2",
+    "vi": "Giai đoạn 2"
+  },
+  "已巡檢": {
+    "id": "Sudah diperiksa",
+    "vi": "Đã kiểm tra"
+  },
+  "待巡檢": {
+    "id": "Menunggu pemeriksaan",
+    "vi": "Chờ kiểm tra"
+  },
+  "已到期、未巡檢": {
+    "id": "Lewat batas, belum diperiksa",
+    "vi": "Quá hạn, chưa kiểm tra"
+  },
+  "未巡檢（期間未明）": {
+    "id": "Belum diperiksa (periode tidak diketahui)",
+    "vi": "Chưa kiểm tra (chưa rõ kỳ)"
+  },
+  "再次掃描同一點可登記第二次；完成兩次後請前往下一點。": {
+    "id": "Pindai lagi lokasi yang sama untuk check-in kedua. Setelah dua kali, lanjut ke lokasi berikutnya.",
+    "vi": "Quét lại cùng điểm để ghi lần hai. Sau hai lần, hãy đến điểm tiếp theo."
+  },
+  "掃描巡檢點": {
+    "id": "Pindai QR",
+    "vi": "Quét mã QR"
+  },
+  "繼續掃描": {
+    "id": "Pindai berikutnya",
+    "vi": "Quét điểm tiếp theo"
+  },
+  "繼續下一點": {
+    "id": "Lokasi berikutnya",
+    "vi": "Điểm tiếp theo"
+  },
+  "關閉掃描視窗": {
+    "id": "Tutup pemindai",
+    "vi": "Đóng máy quét"
+  },
+  "掃描 QR Code，核對點位後按 OK。": {
+    "id": "Pindai QR, periksa lokasinya, lalu tekan OK.",
+    "vi": "Quét QR, kiểm tra địa điểm, rồi nhấn OK."
+  },
+  "請允許此網站使用相機。": {
+    "id": "Izinkan situs ini menggunakan kamera.",
+    "vi": "Cho phép trang web sử dụng máy ảnh."
+  },
+  "重新開啟相機": {
+    "id": "Coba kamera lagi",
+    "vi": "Mở lại máy ảnh"
+  },
+  "保留內容並返回": {
+    "id": "Simpan draf dan kembali",
+    "vi": "Giữ nội dung và quay lại"
+  },
+  "放棄內容並前往巡檢點": {
+    "id": "Buang draf dan lanjutkan",
+    "vi": "Bỏ nội dung và đến điểm mới"
+  },
+  "也可關閉此視窗，改用手機內建相機掃描標籤。": {
+    "id": "Anda juga bisa menutup jendela ini dan memindai label dengan kamera ponsel.",
+    "vi": "Bạn cũng có thể đóng cửa sổ này và dùng máy ảnh điện thoại để quét nhãn."
+  },
+  "將鏡頭對準現場 QR Code。掃描成功後，請在確認頁核對點位並打卡。": {
+    "id": "Arahkan kamera ke QR di lokasi. Periksa lokasi pada halaman konfirmasi, lalu check-in.",
+    "vi": "Hướng máy ảnh vào QR tại chỗ. Kiểm tra địa điểm trên trang xác nhận rồi điểm danh."
+  },
+  "離線打卡與同步": {
+    "id": "Check-in offline & sinkron",
+    "vi": "Điểm danh ngoại tuyến và đồng bộ"
+  },
+  "離線打卡與同步 · 巡點": {
+    "id": "Check-in offline & sinkron",
+    "vi": "Điểm danh ngoại tuyến và đồng bộ"
+  },
+  "巡點離線打卡": {
+    "id": "Check-in offline",
+    "vi": "Điểm danh ngoại tuyến"
+  },
+  "查看待傳紀錄": {
+    "id": "Lihat catatan tertunda",
+    "vi": "Xem bản ghi chờ gửi"
+  },
+  "離線時先暫存在這支手機，回到有網路的地方再同步。": {
+    "id": "Saat offline, simpan di ponsel ini. Sinkronkan setelah ada internet.",
+    "vi": "Khi mất mạng, lưu tạm trên điện thoại này. Đồng bộ khi có mạng trở lại."
+  },
+  "離線頁面導覽": {
+    "id": "Menu offline",
+    "vi": "Menu ngoại tuyến"
+  },
+  "返回巡檢總覽": {
+    "id": "Kembali ke ringkasan",
+    "vi": "Về tổng quan"
+  },
+  "離線準備": {
+    "id": "Persiapan offline",
+    "vi": "Chuẩn bị ngoại tuyến"
+  },
+  "此功能需要 JavaScript。請啟用後重新開啟；有網路時也可返回巡檢總覽打卡。": {
+    "id": "Fitur ini perlu JavaScript. Aktifkan lalu buka lagi, atau check-in online dari halaman utama.",
+    "vi": "Tính năng này cần JavaScript. Bật rồi mở lại, hoặc điểm danh trực tuyến từ trang chính."
+  },
+  "正在讀取這支裝置的離線資料…": {
+    "id": "Membaca data offline ponsel ini…",
+    "vi": "Đang đọc dữ liệu ngoại tuyến trên điện thoại…"
+  },
+  "關閉點位確認": {
+    "id": "Tutup konfirmasi lokasi",
+    "vi": "Đóng xác nhận địa điểm"
+  },
+  "確認暫存打卡": {
+    "id": "Simpan check-in offline",
+    "vi": "Lưu điểm danh tạm"
+  },
+  "暫存成功後仍需同步，系統確認收件才算完成。": {
+    "id": "Setelah disimpan, tetap perlu sinkronisasi. Selesai setelah server mengonfirmasi.",
+    "vi": "Sau khi lưu tạm vẫn cần đồng bộ. Chỉ hoàn thành khi máy chủ xác nhận."
+  },
+  "本次現場回報": {
+    "id": "Laporan lokasi",
+    "vi": "Báo cáo tại chỗ"
+  },
+  "發現異常": {
+    "id": "Ada masalah",
+    "vi": "Phát hiện sự cố"
+  },
+  "同步成功後列入異常追蹤。": {
+    "id": "Masalah dicatat setelah sinkron berhasil.",
+    "vi": "Sự cố được ghi nhận sau khi đồng bộ thành công."
+  },
+  "巡檢備註": {
+    "id": "Catatan",
+    "vi": "Ghi chú"
+  },
+  "選填": {
+    "id": "Opsional",
+    "vi": "Không bắt buộc"
+  },
+  "記錄現場狀況、發現的問題或處理方式…": {
+    "id": "Catat kondisi, masalah, atau tindakan…",
+    "vi": "Ghi tình trạng, sự cố hoặc cách xử lý…"
+  },
+  "最多 2,000 字。正常巡檢可留空。": {
+    "id": "Maksimal 2.000 karakter. Kosongkan jika tidak ada masalah.",
+    "vi": "Tối đa 2.000 ký tự. Có thể để trống nếu bình thường."
+  },
+  "現場照片": {
+    "id": "Foto lokasi",
+    "vi": "Ảnh hiện trường"
+  },
+  "最多 3 張，每張最多 8 MB。支援 JPG、PNG、WebP、HEIC。": {
+    "id": "Maksimal 3 foto, 8 MB per foto. JPG, PNG, WebP, HEIC.",
+    "vi": "Tối đa 3 ảnh, mỗi ảnh 8 MB. JPG, PNG, WebP, HEIC."
+  },
+  "清空照片": {
+    "id": "Hapus pilihan foto",
+    "vi": "Bỏ ảnh đã chọn"
+  },
+  "已暫存在這支手機": {
+    "id": "Tersimpan di ponsel ini",
+    "vi": "Đã lưu tạm trên điện thoại"
+  },
+  "尚未同步。回到有網路的地方後，請按同步完成上傳。": {
+    "id": "Belum tersinkron. Saat ada internet, tekan Sinkron untuk mengirim.",
+    "vi": "Chưa đồng bộ. Khi có mạng, nhấn Đồng bộ để gửi."
+  },
+  "待傳紀錄": {
+    "id": "Belum terkirim",
+    "vi": "Bản ghi chờ gửi"
+  },
+  "尚無待傳紀錄": {
+    "id": "Tidak ada yang tertunda",
+    "vi": "Không có bản ghi chờ gửi"
+  },
+  "同步待傳紀錄": {
+    "id": "Sinkronkan catatan",
+    "vi": "Đồng bộ bản ghi"
+  },
+  "取消本輪同步": {
+    "id": "Batalkan sinkron ini",
+    "vi": "Hủy lượt đồng bộ"
+  },
+  "連線檢查最多 5 秒，每筆上傳最多 30 秒。逾時或取消後，尚未確認的紀錄仍保留，可稍後重試。": {
+    "id": "Cek koneksi hingga 5 detik; setiap catatan hingga 30 detik. Jika batal atau habis waktu, catatan yang belum dikonfirmasi tetap tersimpan untuk dicoba lagi.",
+    "vi": "Kiểm tra mạng tối đa 5 giây; gửi mỗi bản ghi tối đa 30 giây. Khi hủy hoặc quá giờ, bản ghi chưa xác nhận vẫn được giữ để thử lại."
+  },
+  "目前沒有待傳紀錄": {
+    "id": "Tidak ada catatan tertunda",
+    "vi": "Hiện không có bản ghi chờ gửi"
+  },
+  "掃描現場 QR Code，再確認打卡。": {
+    "id": "Pindai QR di lokasi, lalu konfirmasi check-in.",
+    "vi": "Quét QR tại chỗ, rồi xác nhận điểm danh."
+  },
+  "本機待傳打卡紀錄": {
+    "id": "Catatan check-in tertunda di ponsel",
+    "vi": "Bản ghi điểm danh chờ gửi trên máy"
+  },
+  "尚未讀取帳號": {
+    "id": "Akun belum dibaca",
+    "vi": "Chưa đọc tài khoản"
+  },
+  "請先在有網路時登入，使用已核准的手機完成準備。": {
+    "id": "Login saat online dan siapkan offline dengan ponsel yang disetujui.",
+    "vi": "Đăng nhập khi có mạng và chuẩn bị bằng điện thoại đã được duyệt."
+  },
+  "更新離線資料": {
+    "id": "Perbarui data offline",
+    "vi": "Cập nhật dữ liệu ngoại tuyến"
+  },
+  "登入帳號": {
+    "id": "Login",
+    "vi": "Đăng nhập"
+  },
+  "暫存紀錄只保存在目前瀏覽器。同步完成前，請保留瀏覽器資料。": {
+    "id": "Catatan hanya tersimpan di browser ini. Jangan hapus data browser sebelum sinkron selesai.",
+    "vi": "Bản ghi chỉ lưu trong trình duyệt này. Không xóa dữ liệu trình duyệt trước khi đồng bộ xong."
+  },
+  "請等候系統管理員核准": {
+    "id": "Tunggu persetujuan admin",
+    "vi": "Chờ quản trị viên phê duyệt"
+  },
+  "請先完成瀏覽器綁定": {
+    "id": "Daftarkan browser terlebih dahulu",
+    "vi": "Vui lòng đăng ký trình duyệt trước"
+  },
+  "只有已核准的手機瀏覽器可以提交打卡。": {
+    "id": "Hanya browser ponsel yang disetujui dapat check-in.",
+    "vi": "Chỉ trình duyệt điện thoại đã được duyệt mới có thể điểm danh."
+  },
+  "前往我的綁定": {
+    "id": "Buka pengaturan ponsel",
+    "vi": "Mở cài đặt điện thoại"
+  },
+  "此點位已停用，無法打卡。": {
+    "id": "Lokasi ini nonaktif. Check-in tidak tersedia.",
+    "vi": "Điểm này đã ngừng hoạt động, không thể điểm danh."
+  },
+  "目前的瀏覽器": {
+    "id": "Browser ini",
+    "vi": "Trình duyệt hiện tại"
+  },
+  "目前瀏覽器": {
+    "id": "Browser ini",
+    "vi": "Trình duyệt hiện tại"
+  },
+  "已核准": {
+    "id": "Disetujui",
+    "vi": "Đã duyệt"
+  },
+  "待審核": {
+    "id": "Menunggu persetujuan",
+    "vi": "Chờ duyệt"
+  },
+  "已解除": {
+    "id": "Dibatalkan",
+    "vi": "Đã hủy liên kết"
+  },
+  "未核准": {
+    "id": "Tidak disetujui",
+    "vi": "Chưa được duyệt"
+  },
+  "尚未綁定": {
+    "id": "Belum terdaftar",
+    "vi": "Chưa đăng ký"
+  },
+  "已完成": {
+    "id": "Selesai",
+    "vi": "Hoàn thành"
+  },
+  "不需巡檢": {
+    "id": "Tidak perlu inspeksi",
+    "vi": "Không cần kiểm tra"
+  },
+  "· 請使用本人帳號與已核准的手機瀏覽器簽到。": {
+    "id": "· Gunakan akun sendiri dan browser ponsel yang disetujui.",
+    "vi": "· Dùng tài khoản của bạn và trình duyệt điện thoại đã được duyệt."
+  },
+  "目前可打卡：": {
+    "id": "Saat ini dapat check-in:",
+    "vi": "Hiện có thể điểm danh:"
+  },
+  "此瀏覽器正在等待核准；核准前，原本的綁定仍可打卡。": {
+    "id": "Browser ini menunggu persetujuan. Browser lama tetap dapat check-in sampai disetujui.",
+    "vi": "Trình duyệt này đang chờ duyệt. Trình duyệt cũ vẫn dùng được đến khi được duyệt."
+  },
+  "只查詢紀錄不需要更換綁定。換機申請經系統管理員核准後，原本的瀏覽器才會失效。": {
+    "id": "Tidak perlu mengganti browser untuk melihat riwayat. Browser lama nonaktif setelah admin menyetujui penggantian.",
+    "vi": "Không cần đổi liên kết để xem lịch sử. Trình duyệt cũ chỉ mất hiệu lực khi quản trị viên duyệt đổi máy."
+  },
+  "請使用自己的手機瀏覽器打卡": {
+    "id": "Gunakan browser ponsel Anda sendiri",
+    "vi": "Dùng trình duyệt điện thoại của chính bạn"
+  },
+  "此瀏覽器仍有其他帳號的綁定或待審申請。你可以在這裡查紀錄；若要移交此瀏覽器，請原使用者或系統管理員先解除舊綁定或撤回申請。": {
+    "id": "Browser ini terdaftar atau diajukan oleh akun lain. Minta pemilik sebelumnya atau admin membatalkan pendaftaran lama sebelum dipindahkan.",
+    "vi": "Trình duyệt này đã được tài khoản khác đăng ký hoặc đang chờ duyệt. Hãy nhờ người dùng cũ hoặc quản trị viên hủy liên kết hay yêu cầu cũ trước khi chuyển."
+  },
+  "這個瀏覽器已核准，可以掃碼打卡。": {
+    "id": "Browser ini disetujui. Anda dapat memindai QR untuk check-in.",
+    "vi": "Trình duyệt đã được duyệt. Bạn có thể quét QR để điểm danh."
+  },
+  "在兩階段點完成執行簽到，或到指定的不定期點直接簽到。": {
+    "id": "Check-in tahap pelaksanaan di lokasi dua tahap, atau check-in langsung di lokasi tidak terjadwal yang diizinkan.",
+    "vi": "Điểm danh thực hiện tại điểm hai giai đoạn, hoặc điểm danh trực tiếp tại điểm không định kỳ được cho phép."
+  },
+  "返回原巡檢點": {
+    "id": "Kembali ke lokasi",
+    "vi": "Trở lại địa điểm"
+  },
+  "綁定申請已送出": {
+    "id": "Pendaftaran sudah dikirim",
+    "vi": "Đã gửi yêu cầu đăng ký"
+  },
+  "請系統管理員至「綁定審核」核准。": {
+    "id": "Minta admin menyetujui pendaftaran browser.",
+    "vi": "Nhờ quản trị viên phê duyệt đăng ký trình duyệt."
+  },
+  "重新確認審核狀態": {
+    "id": "Periksa persetujuan",
+    "vi": "Kiểm tra trạng thái duyệt"
+  },
+  "原綁定已解除": {
+    "id": "Pendaftaran sebelumnya dibatalkan",
+    "vi": "Liên kết cũ đã bị hủy"
+  },
+  "此申請未核准": {
+    "id": "Pendaftaran tidak disetujui",
+    "vi": "Yêu cầu chưa được duyệt"
+  },
+  "如需繼續使用這個瀏覽器打卡，請重新申請並聯繫系統管理員確認。": {
+    "id": "Daftar ulang dan hubungi admin untuk memakai browser ini lagi.",
+    "vi": "Đăng ký lại và liên hệ quản trị viên để tiếp tục dùng trình duyệt này."
+  },
+  "此瀏覽器尚未核准": {
+    "id": "Browser belum disetujui",
+    "vi": "Trình duyệt chưa được duyệt"
+  },
+  "綁定此手機瀏覽器": {
+    "id": "Daftarkan browser ponsel ini",
+    "vi": "Đăng ký trình duyệt điện thoại này"
+  },
+  "申請後需經系統管理員核准，才能提交打卡。": {
+    "id": "Pendaftaran harus disetujui admin sebelum check-in.",
+    "vi": "Cần quản trị viên duyệt đăng ký trước khi điểm danh."
+  },
+  "需要換機？申請改用此瀏覽器": {
+    "id": "Ganti ponsel? Daftarkan browser ini",
+    "vi": "Đổi máy? Đăng ký trình duyệt này"
+  },
+  "辨識名稱": {
+    "id": "Nama perangkat",
+    "vi": "Tên thiết bị"
+  },
+  "例如：小陳的 iPhone Safari": {
+    "id": "Contoh: iPhone Safari saya",
+    "vi": "Ví dụ: iPhone Safari của tôi"
+  },
+  "填寫方便你與系統管理員辨識的名稱。": {
+    "id": "Isi nama yang mudah dikenali oleh Anda dan admin.",
+    "vi": "Nhập tên để bạn và quản trị viên dễ nhận biết."
+  },
+  "正在送出…": {
+    "id": "Mengirim…",
+    "vi": "Đang gửi…"
+  },
+  "送出換機申請": {
+    "id": "Ajukan ganti perangkat",
+    "vi": "Gửi yêu cầu đổi máy"
+  },
+  "申請綁定此瀏覽器": {
+    "id": "Daftarkan browser",
+    "vi": "Đăng ký trình duyệt"
+  },
+  "綁定與換機說明": {
+    "id": "Panduan perangkat",
+    "vi": "Hướng dẫn liên kết và đổi máy"
+  },
+  "固定使用同一個瀏覽器": {
+    "id": "Gunakan browser yang sama",
+    "vi": "Dùng cố định một trình duyệt"
+  },
+  "用手機相機掃碼後，在平常使用的 Safari 或 Chrome 開啟。": {
+    "id": "Setelah memindai dengan kamera, buka di Safari atau Chrome yang biasa Anda gunakan.",
+    "vi": "Sau khi quét bằng máy ảnh, mở bằng Safari hoặc Chrome thường dùng."
+  },
+  "保留網站資料": {
+    "id": "Simpan data situs",
+    "vi": "Giữ dữ liệu trang web"
+  },
+  "無痕模式、LINE 內建瀏覽器或清除網站資料，可能無法辨識原本的綁定。": {
+    "id": "Mode privat, browser LINE, atau menghapus data situs dapat membuat pendaftaran tidak dikenali.",
+    "vi": "Chế độ riêng tư, trình duyệt LINE hoặc xóa dữ liệu trang web có thể làm mất nhận diện liên kết."
+  },
+  "換機時重新申請": {
+    "id": "Daftar ulang saat ganti ponsel",
+    "vi": "Đăng ký lại khi đổi điện thoại"
+  },
+  "系統管理員核准新綁定後，舊綁定會立即失效。手機遺失也可請系統管理員解除。": {
+    "id": "Setelah admin menyetujui browser baru, browser lama langsung nonaktif. Hubungi admin jika ponsel hilang.",
+    "vi": "Khi quản trị viên duyệt liên kết mới, liên kết cũ mất hiệu lực ngay. Nếu mất điện thoại, hãy nhờ quản trị viên hủy liên kết."
+  },
+  "綁定辨識的是此瀏覽器的認證資料，不是手機硬體序號，也不代表已驗證人員到場。": {
+    "id": "Pendaftaran mengenali data browser, bukan nomor perangkat atau bukti keberadaan di lokasi.",
+    "vi": "Liên kết nhận diện dữ liệu trình duyệt, không phải số phần cứng hay bằng chứng đã đến địa điểm."
+  },
+  "我的綁定紀錄": {
+    "id": "Riwayat perangkat saya",
+    "vi": "Lịch sử liên kết của tôi"
+  },
+  "每個帳號同時只允許一個有效綁定。": {
+    "id": "Satu akun hanya boleh memiliki satu browser aktif.",
+    "vi": "Mỗi tài khoản chỉ có một liên kết có hiệu lực."
+  },
+  "狀態": {
+    "id": "Status",
+    "vi": "Trạng thái"
+  },
+  "申請時間": {
+    "id": "Waktu pengajuan",
+    "vi": "Thời gian đăng ký"
+  },
+  "最後使用": {
+    "id": "Terakhir digunakan",
+    "vi": "Lần dùng cuối"
+  },
+  "操作": {
+    "id": "Tindakan",
+    "vi": "Thao tác"
+  },
+  "尚無使用紀錄": {
+    "id": "Belum digunakan",
+    "vi": "Chưa có lịch sử sử dụng"
+  },
+  "撤回申請": {
+    "id": "Batalkan pengajuan",
+    "vi": "Rút yêu cầu"
+  },
+  "解除綁定": {
+    "id": "Batalkan pendaftaran",
+    "vi": "Hủy liên kết"
+  },
+  "撤回綁定申請": {
+    "id": "Batalkan pengajuan browser",
+    "vi": "Rút yêu cầu đăng ký"
+  },
+  "解除瀏覽器綁定": {
+    "id": "Batalkan pendaftaran browser",
+    "vi": "Hủy liên kết trình duyệt"
+  },
+  "確認撤回": {
+    "id": "Ya, batalkan",
+    "vi": "Xác nhận rút"
+  },
+  "確認解除": {
+    "id": "Ya, hapus pendaftaran",
+    "vi": "Xác nhận hủy"
+  },
+  "尚無綁定紀錄": {
+    "id": "Belum ada pendaftaran",
+    "vi": "Chưa có lịch sử liên kết"
+  },
+  "先在此頁申請綁定你的手機瀏覽器。": {
+    "id": "Daftarkan browser ponsel Anda di halaman ini.",
+    "vi": "Đăng ký trình duyệt điện thoại tại trang này."
+  },
+  "設定你的新密碼": {
+    "id": "Atur kata sandi baru",
+    "vi": "Đặt mật khẩu mới"
+  },
+  "請先更改系統管理員提供的初始密碼，完成後會回到原巡檢點。": {
+    "id": "Ubah kata sandi awal dari admin. Setelah selesai, Anda kembali ke lokasi check-in.",
+    "vi": "Đổi mật khẩu ban đầu do quản trị viên cấp. Sau đó bạn sẽ trở lại điểm vừa quét."
+  },
+  "首次登入，請先更改系統管理員提供的初始密碼。": {
+    "id": "Pada login pertama, ubah kata sandi awal dari admin.",
+    "vi": "Lần đầu đăng nhập, hãy đổi mật khẩu ban đầu do quản trị viên cấp."
+  },
+  "變更密碼後，其他登入階段將失效。": {
+    "id": "Mengubah kata sandi akan mengakhiri sesi login lain.",
+    "vi": "Đổi mật khẩu sẽ kết thúc các phiên đăng nhập khác."
+  },
+  "目前密碼": {
+    "id": "Kata sandi saat ini",
+    "vi": "Mật khẩu hiện tại"
+  },
+  "新密碼": {
+    "id": "Kata sandi baru",
+    "vi": "Mật khẩu mới"
+  },
+  "再次輸入新密碼": {
+    "id": "Ulangi kata sandi baru",
+    "vi": "Nhập lại mật khẩu mới"
+  },
+  "密碼長度：{min} 至 {max} 個字元。": {
+    "id": "Panjang kata sandi: {min}–{max} karakter.",
+    "vi": "Độ dài mật khẩu: {min}–{max} ký tự."
+  },
+  "儲存新密碼": {
+    "id": "Simpan kata sandi",
+    "vi": "Lưu mật khẩu mới"
+  },
+  "巡點 ·": {
+    "id": "Check-in ·",
+    "vi": "Điểm danh ·"
+  },
+  "登入": {
+    "id": "Login",
+    "vi": "Đăng nhập"
+  },
+  "登入巡檢系統": {
+    "id": "Login ke sistem",
+    "vi": "Đăng nhập hệ thống"
+  },
+  "員工帳號": {
+    "id": "Akun pegawai",
+    "vi": "Tài khoản nhân viên"
+  },
+  "密碼": {
+    "id": "Kata sandi",
+    "vi": "Mật khẩu"
+  },
+  "請輸入帳號": {
+    "id": "Masukkan akun",
+    "vi": "Nhập tài khoản"
+  },
+  "請輸入密碼": {
+    "id": "Masukkan kata sandi",
+    "vi": "Nhập mật khẩu"
+  },
+  "請使用系統管理員提供的帳密。": {
+    "id": "Gunakan akun dan kata sandi dari admin.",
+    "vi": "Dùng tài khoản và mật khẩu do quản trị viên cấp."
+  },
+  "首次使用手機": {
+    "id": "Pertama kali memakai ponsel",
+    "vi": "Lần đầu dùng điện thoại"
+  },
+  "登入後申請瀏覽器綁定，核准即可打卡。": {
+    "id": "Setelah login, daftarkan browser. Check-in setelah disetujui.",
+    "vi": "Đăng nhập rồi đăng ký trình duyệt. Điểm danh sau khi được duyệt."
+  },
+  "帳密問題請聯繫系統管理員。": {
+    "id": "Hubungi admin untuk masalah akun atau kata sandi.",
+    "vi": "Liên hệ quản trị viên nếu gặp vấn đề về tài khoản hoặc mật khẩu."
+  },
+  "巡檢工作台": {
+    "id": "Check-in fasilitas",
+    "vi": "Điểm danh nhà máy"
+  },
+  "廠區巡檢": {
+    "id": "Pemeriksaan fasilitas",
+    "vi": "Kiểm tra nhà máy"
+  },
+  "管理系統": {
+    "id": "Sistem pengelolaan",
+    "vi": "Hệ thống quản lý"
+  },
+  "到點掃描 QR Code，登記現場狀況。": {
+    "id": "Pindai QR di lokasi untuk mencatat pekerjaan.",
+    "vi": "Quét QR tại địa điểm để ghi nhận công việc."
+  },
+  "錯誤": {
+    "id": "Kesalahan",
+    "vi": "Lỗi"
+  },
+  "請確認送出的資料": {
+    "id": "Periksa data yang dikirim",
+    "vi": "Kiểm tra dữ liệu đã gửi"
+  },
+  "此帳號無法進行這項操作": {
+    "id": "Akun ini tidak dapat melakukan tindakan ini",
+    "vi": "Tài khoản không được thực hiện thao tác này"
+  },
+  "找不到這個頁面": {
+    "id": "Halaman tidak ditemukan",
+    "vi": "Không tìm thấy trang"
+  },
+  "這個網址無法直接操作": {
+    "id": "Gunakan tombol di halaman",
+    "vi": "Hãy dùng nút trên trang"
+  },
+  "目前無法完成操作": {
+    "id": "Tindakan belum dapat diselesaikan",
+    "vi": "Chưa thể hoàn tất thao tác"
+  },
+  "上傳內容過大": {
+    "id": "Unggahan terlalu besar",
+    "vi": "Nội dung tải lên quá lớn"
+  },
+  "請稍後再試": {
+    "id": "Coba lagi nanti",
+    "vi": "Vui lòng thử lại sau"
+  },
+  "無法完成操作": {
+    "id": "Tidak dapat menyelesaikan tindakan",
+    "vi": "Không thể hoàn tất thao tác"
+  },
+  "請檢查填寫的內容後再試一次。": {
+    "id": "Periksa isian, lalu coba lagi.",
+    "vi": "Kiểm tra nội dung đã nhập rồi thử lại."
+  },
+  "請確認目前使用的帳號具備這項操作的權限。": {
+    "id": "Pastikan akun ini memiliki izin untuk tindakan tersebut.",
+    "vi": "Đảm bảo tài khoản có quyền thực hiện thao tác này."
+  },
+  "請確認連結是否正確，或重新掃描巡檢點的 QR Code。": {
+    "id": "Periksa tautan atau pindai ulang QR di lokasi.",
+    "vi": "Kiểm tra liên kết hoặc quét lại QR tại địa điểm."
+  },
+  "請回到系統頁面，使用對應的按鈕完成操作。": {
+    "id": "Kembali ke halaman sistem dan gunakan tombol yang sesuai.",
+    "vi": "Quay lại hệ thống và dùng nút tương ứng để thao tác."
+  },
+  "資料狀態已變更，請返回查看最新狀態。": {
+    "id": "Data berubah. Kembali untuk melihat status terbaru.",
+    "vi": "Dữ liệu đã thay đổi. Quay lại xem trạng thái mới nhất."
+  },
+  "請縮小檔案或減少上傳數量後再試。": {
+    "id": "Kurangi ukuran atau jumlah file, lalu coba lagi.",
+    "vi": "Giảm kích thước hoặc số tệp rồi thử lại."
+  },
+  "目前的操作次數過多，請稍候再試。": {
+    "id": "Terlalu banyak percobaan. Tunggu sebentar lalu coba lagi.",
+    "vi": "Thao tác quá nhiều lần. Chờ một chút rồi thử lại."
+  },
+  "請返回再試一次，或聯繫系統管理員。": {
+    "id": "Kembali dan coba lagi, atau hubungi admin.",
+    "vi": "Quay lại thử lần nữa hoặc liên hệ quản trị viên."
+  },
+  "返回登入": {
+    "id": "Kembali ke login",
+    "vi": "Về trang đăng nhập"
+  },
+  "人員管理": {
+    "id": "Kelola akun",
+    "vi": "Quản lý tài khoản"
+  },
+  "巡檢分類": {
+    "id": "Kategori inspeksi",
+    "vi": "Nhóm kiểm tra"
+  },
+  "巡檢點管理": {
+    "id": "Kelola lokasi",
+    "vi": "Quản lý địa điểm"
+  },
+  "登入紀錄": {
+    "id": "Riwayat login",
+    "vi": "Lịch sử đăng nhập"
+  },
+  "管理設定": {
+    "id": "Pengaturan admin",
+    "vi": "Cài đặt quản trị"
+  },
+  "綁定審核": {
+    "id": "Persetujuan perangkat",
+    "vi": "Duyệt liên kết"
+  },
+  "本機示範環境": {
+    "id": "Mode demo lokal",
+    "vi": "Môi trường thử nghiệm"
+  },
+  "資料與正式系統分開儲存": {
+    "id": "Data terpisah dari sistem utama",
+    "vi": "Dữ liệu tách biệt với hệ thống chính"
+  },
+  "兩階段點位會在執行人員簽到後列入。": {
+    "id": "Lokasi dua tahap muncul setelah petugas pelaksana check-in.",
+    "vi": "Điểm hai giai đoạn xuất hiện sau khi nhân viên thực hiện điểm danh."
+  },
+  "列出目前尚待完成的職安巡檢點。": {
+    "id": "Lokasi keselamatan yang belum selesai.",
+    "vi": "Các điểm an toàn lao động chưa hoàn thành."
+  },
+  "可前往執行簽到的兩階段點位。": {
+    "id": "Lokasi dua tahap yang siap untuk check-in.",
+    "vi": "Điểm hai giai đoạn có thể điểm danh thực hiện."
+  },
+  "確定撤回「{label}」的待審申請？": {
+    "id": "Batalkan pengajuan untuk “{label}”?",
+    "vi": "Rút yêu cầu đang chờ duyệt của “{label}”?"
+  },
+  "解除「{label}」後，該瀏覽器將無法打卡。確定解除？": {
+    "id": "Setelah “{label}” dibatalkan, browser itu tidak dapat check-in. Lanjutkan?",
+    "vi": "Sau khi hủy “{label}”, trình duyệt đó không thể điểm danh. Bạn chắc chắn muốn hủy?"
+  },
+  "Scan QR code": {
+    "id": "Pindai QR",
+    "vi": "Quét mã QR"
+  },
+  "Scan the QR code. Check the location, then tap OK.": {
+    "id": "Pindai QR, periksa lokasinya, lalu tekan OK.",
+    "vi": "Quét QR, kiểm tra địa điểm, rồi nhấn OK."
+  }
+}

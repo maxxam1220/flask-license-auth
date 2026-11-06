@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import click
-from flask import Flask, abort, before_render_template, flash, g, make_response, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, abort, before_render_template, flash as flask_flash, g, make_response, redirect, render_template, request, send_file, session, url_for
 import qrcode
 import qrcode.image.svg
 from itsdangerous import BadData, URLSafeSerializer
@@ -28,6 +28,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from account_roles import ACCOUNT_CHOICES, ACCOUNT_ROLE_LABELS, account_role_choice, role_label
+from i18n import client_catalog, get_locale, point_name as localized_point_name, t
 
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
 from login_client import classify_login_client
@@ -48,6 +49,16 @@ DEVICE_COOKIE = "patrol_device"
 QR_RETURN_PATH = re.compile(r"/c/([A-Za-z0-9_-]{1,100})")
 PASSWORD_MIN_LENGTH = 6
 PASSWORD_MAX_LENGTH = 256
+UI_LANGUAGES = {"zh-Hant": "繁體中文", "id": "Bahasa Indonesia（印尼文）", "vi": "Tiếng Việt（越南文）"}
+
+
+def flash(message, category="message"):
+    """Translate at presentation time without changing stored audit or record data."""
+    return flask_flash(t(message), category)
+
+
+def uses_simple_executor_ui(user):
+    return bool(user and user.role == "executor" and user.simple_executor_ui)
 
 
 def now_utc():
@@ -88,6 +99,10 @@ def management_state(item):
             values += ("general_manager",)
         if item.engineering_inspector_title:
             values += ("engineering_inspector",)
+        if item.ui_language != "zh-Hant":
+            values += ("ui_language", item.ui_language)
+        if item.simple_executor_ui:
+            values += ("simple_executor_ui",)
     return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
 
 
@@ -282,6 +297,7 @@ def create_app(config=None):
     app.jinja_env.globals["csrf_token"] = csrf_token
     app.jinja_env.globals["issue_state"] = issue_state
     app.jinja_env.globals["management_state"] = management_state
+    app.jinja_env.globals["t"] = t
 
     @app.template_global()
     def reporter_name(record):
@@ -307,6 +323,9 @@ def create_app(config=None):
     def common_context():
         user = g.get("user")
         return {"current_user": user, "role_label": role_label, "is_patrol_admin": bool(user and user.role == "admin"),
+                "t": t, "ui_locale": get_locale(), "ui_languages": UI_LANGUAGES,
+                "simple_executor_ui": uses_simple_executor_ui(user), "home_url": home_url(user),
+                "localized_point_name": localized_point_name, "client_i18n": client_catalog(),
                 "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
                 "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
                 "csrf_token": csrf_token, "today": local_dt(now_utc()).date(),
@@ -344,15 +363,20 @@ def create_app(config=None):
                     User.auth_version == session.get("auth_version"), ~session_revoked()
                 ).execution_options(populate_existing=True))
             if not g.user:
+                language = get_locale()
                 session.clear()
+                if language != "zh-Hant":
+                    session["ui_language"] = language
+            else:
+                session["ui_language"] = get_locale()
         # An expired protected submission has no authority to write. Recover its
         # safe GET confirmation page before checking the now-missing CSRF secret;
         # the sign-in form itself retains its normal CSRF protection.
         if request.path.startswith("/api/offline/"):
             if not g.user:
-                return {"ok": False, "code": "login_required", "message": "請連網登入原帳號後再同步；暫存仍保留。", "retryable": False}, 401
+                return {"ok": False, "code": "login_required", "message": t("請連網登入原帳號後再同步；暫存仍保留。"), "retryable": False}, 401
             if g.user.must_change_password:
-                return {"ok": False, "code": "password_required", "message": "請先完成密碼變更；暫存仍保留。", "retryable": False}, 403
+                return {"ok": False, "code": "password_required", "message": t("請先完成密碼變更；暫存仍保留。"), "retryable": False}, 403
         if not g.user and request.method == "POST":
             if request.endpoint == "logout":
                 # A second open tab may still show the previous logout button.
@@ -514,8 +538,11 @@ def create_app(config=None):
         except ValueError:
             abort(400, description="日期格式不正確。")
 
-    def safe_next(value):
-        fallback = url_for("dashboard")
+    def home_url(user=None):
+        return url_for("ready" if uses_simple_executor_ui(user or g.get("user")) else "dashboard")
+
+    def safe_next(value, user=None):
+        fallback = home_url(user)
         if not value or len(value) > 2048 or not value.startswith("/") or value.startswith("//") or "\\" in value or any(ord(c) < 32 or ord(c) == 127 for c in value):
             return fallback
         try:
@@ -621,7 +648,7 @@ def create_app(config=None):
 
     @app.get("/")
     def index():
-        return redirect(url_for("dashboard") if g.user else url_for("login"))
+        return redirect(home_url() if g.user else url_for("login"))
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -641,7 +668,7 @@ def create_app(config=None):
                 db.session.commit()
                 flash("帳號或密碼不正確，或帳號已停用。", "error")
             else:
-                next_url = safe_next(request.form.get("next") or request.args.get("next"))
+                next_url = safe_next(request.form.get("next") or request.args.get("next"), user)
                 # Use the identity and version that actually matched the password.
                 user_id, version, change_required = user.id, user.auth_version, user.must_change_password
                 client_type, browser = classify_login_client(request.user_agent.string, request.headers.get("Sec-CH-UA-Mobile"))
@@ -655,7 +682,9 @@ def create_app(config=None):
                     ["user_id", "username", "display_name", "client_type", "browser", "created_at"], source
                 ).returning(LoginEvent.id))
                 db.session.commit()
+                language = user.ui_language
                 session.clear()
+                session["ui_language"] = language
                 if saved_id is None:
                     flash("帳號設定已更新，請重新登入。", "error")
                     return redirect(url_for("login", next=next_url))
@@ -691,10 +720,13 @@ def create_app(config=None):
 
     @app.post("/logout")
     def logout():
+        language = get_locale()
         revoke_current_login()
         if g.user:
             db.session.commit()
         session.clear()
+        if language != "zh-Hant":
+            session["ui_language"] = language
         return redirect(url_for("login"))
 
     @app.route("/change-password", methods=["GET", "POST"])
@@ -707,7 +739,7 @@ def create_app(config=None):
             if not g.user.check_password(request.form.get("current_password", "")):
                 flash("目前密碼不正確。", "error")
             elif not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
-                flash(f"新密碼請使用 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元。", "error")
+                flash(t("新密碼請使用 {minimum} 至 {maximum} 個字元。", minimum=PASSWORD_MIN_LENGTH, maximum=PASSWORD_MAX_LENGTH), "error")
             elif password != request.form.get("confirm_password"):
                 flash("兩次輸入的新密碼不同。", "error")
             elif g.user.check_password(password):
@@ -733,16 +765,32 @@ def create_app(config=None):
         floor, category = scope_filters()
         local_now = local_dt(now_utc())
         points = []
+        simple_executor = uses_simple_executor_ui(g.user)
         if category or g.user.role == "admin":
             query = select(Point).where(Point.active.is_(True), Point.deleted_at.is_(None),
-                                        Point.schedule_start <= local_now.date(), Point.frequency != "irregular")
+                                        Point.schedule_start <= local_now.date())
+            if not simple_executor:
+                query = query.where(Point.frequency != "irregular")
             if category:
                 query = query.where(Point.category == category)
             if floor:
                 query = query.where(Point.floor == int(floor))
             points = db.session.scalars(query.options(selectinload(Point.schedules)).order_by(*point_order())).all()
+        ready_points = ready_patrol_points(points, g.user, local_now, floor, category)
+        if simple_executor:
+            visits = [point for point in points if point.frequency == "irregular"
+                      and point.workflow_mode == "spot" and executor_can_scan(point)]
+            if visits:
+                completed = set(db.session.scalars(select(Inspection.point_id).where(
+                    Inspection.point_id.in_([point.id for point in visits]), Inspection.user_id == g.user.id,
+                    Inspection.personal_day == local_now.date())))
+                ready_points.extend(dict(id=point.id, floor=point.floor, code=point.code, name=point.name,
+                                         frequency=point.frequency, period_end=local_now.date(),
+                                         status_key="visit", status_label="可直接簽到")
+                                    for point in visits if point.id not in completed)
+                ready_points.sort(key=lambda row: (FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)), row["code"]))
         return dict(selected_floor=floor, selected_category=category,
-                    ready_points=ready_patrol_points(points, g.user, local_now, floor, category),
+                    ready_points=ready_points,
                     ready_date=local_now.date(), ready_as_of=local_now,
                     ready_slot_label="不限時段")
 
@@ -759,6 +807,8 @@ def create_app(config=None):
     @app.get("/dashboard")
     @login_required
     def dashboard():
+        if uses_simple_executor_ui(g.user):
+            return redirect(url_for("ready", **({"floor": request.args["floor"]} if request.args.get("floor") else {})))
         from missed import VIEW_FREQUENCIES, schedule_snapshot, schedule_timeline, slot_plans
         instant = now_utc()
         local_now = local_dt(instant)
@@ -947,7 +997,8 @@ def create_app(config=None):
             query = query.with_for_update().execution_options(populate_existing=True)
         point = db.session.scalar(query)
         if not point or (g.user.role == "executor" and not executor_can_scan(point)):
-            abort(404, description="巡檢點不存在，或這張 QR Code 已被更新。")
+            abort(404, description=("此點不開放執行人員簽到，或 QR Code 已更新。" if g.user.role == "executor"
+                                    else "巡檢點不存在，或這張 QR Code 已被更新。"))
         if not point.active or point.schedule_start > local_dt(now_utc()).date():
             abort(403, description="此巡檢點目前尚未啟用或已停用。")
         return point
@@ -1082,7 +1133,7 @@ def create_app(config=None):
                 existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
         return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
-                               stage=stage, can_confirm=allowed and not existing, stage_notice=notice, receipt_url=receipt_url,
+                               stage=stage, can_confirm=allowed and not existing, stage_notice=t(notice), receipt_url=receipt_url,
                                waiting_for_execution=(point.workflow_mode == "two_stage" and g.user.role == "inspector"
                                                       and not first and not existing),
                                previous_period=previous_period, draft_day=report_day, draft_slot=report_slot,
@@ -1100,7 +1151,7 @@ def create_app(config=None):
                                current_slot=slot, current_slot_label=slot_label(slot), current_period_key=key, period_label=label,
                                note=request.form.get("note", ""), is_abnormal=request.form.get("is_abnormal", "") in ("on", "1", "true", "yes"),
                                point_open_issue_count=(open_issue_counts([point.id], category=patrol_scope(g.user)).get(point.id, 0)
-                                                       if g.user.role != "executor" else 0), form_error=error), status
+                                                       if g.user.role != "executor" else 0), form_error=t(error) if error else error), status
 
     def changed_checkin_settings(point, *, require_location=False):
         if request.form.get("frequency") != point.frequency:
@@ -2157,6 +2208,18 @@ def create_app(config=None):
             abort(400, description="請從人員角色清單選擇一個角色。")
         return ACCOUNT_CHOICES[selections[0]]
 
+    def submitted_ui_preferences(choice, user=None):
+        """Old administration forms preserve new preferences; names never select a locale."""
+        languages = request.form.getlist("ui_language")
+        simple_values = request.form.getlist("simple_executor_ui")
+        if len(languages) > 1 or (languages and languages[0] not in UI_LANGUAGES):
+            abort(400, description="請從顯示語言清單選擇一種語言。")
+        if len(simple_values) > 1 or (simple_values and simple_values[0] not in ("0", "1")):
+            abort(400, description="請選擇有效的操作介面。")
+        language = languages[0] if languages else (user.ui_language if user else "zh-Hant")
+        simple = simple_values[0] == "1" if simple_values else bool(user and user.simple_executor_ui)
+        return language, simple and choice.role == "executor"
+
     @app.post("/admin/users/create")
     @admin_required
     def create_user():
@@ -2165,10 +2228,12 @@ def create_app(config=None):
         name = request.form.get("display_name", "").strip()
         password = request.form.get("password", "")
         choice = submitted_role()
+        language, simple = submitted_ui_preferences(choice)
         if not re.fullmatch(r"[a-z0-9_.-]{3,80}", username) or not valid_label(name) or not PASSWORD_MIN_LENGTH <= len(password) <= PASSWORD_MAX_LENGTH:
             abort(400, description=f"請填寫有效帳號（3–80 個英數字或 _.-）、姓名、角色與 {PASSWORD_MIN_LENGTH} 至 {PASSWORD_MAX_LENGTH} 個字元的密碼。")
         user = User(username=username, display_name=name, role=choice.role, patrol_category=choice.category,
                     general_manager_title=choice.manager_title, engineering_inspector_title=choice.engineering_title,
+                    ui_language=language, simple_executor_ui=simple,
                     must_change_password=True)
         user.set_password(password)
         db.session.add(user)
@@ -2191,20 +2256,26 @@ def create_app(config=None):
             return conflict
         name = request.form.get("display_name", "").strip()
         choice = submitted_role()
+        language, simple = submitted_ui_preferences(choice, user)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
         if not valid_label(name):
             abort(400)
         if user.id == g.user.id and (choice.role != "admin" or not active):
             abort(400, description="不能停用自己或移除自己的系統管理員權限。")
         previous = account_role_choice(user) or user.role
+        previous_preferences = (user.ui_language, user.simple_executor_ui)
         if user.role != choice.role or user.patrol_category != choice.category or user.active != active:
             user.auth_version += 1
         user.display_name, user.role, user.patrol_category, user.active = name, choice.role, choice.category, active
         user.general_manager_title = choice.manager_title
         user.engineering_inspector_title = choice.engineering_title
+        user.ui_language, user.simple_executor_ui = language, simple
         if not active:
             db.session.execute(db.update(DeviceBinding).where(DeviceBinding.user_id == user.id, DeviceBinding.status.in_(["approved", "pending"])).values(status="revoked"))
-        audit("user_updated", user.username, f"{previous} -> {account_role_choice(user)}")
+        detail = f"{previous} -> {account_role_choice(user)}"
+        if previous_preferences != (language, simple):
+            detail += f"; ui_language={language}; simple_executor_ui={int(simple)}"
+        audit("user_updated", user.username, detail)
         db.session.commit()
         flash("帳號設定已更新。", "success")
         return redirect(url_for("users", _anchor=f"user-{user.id}"))
@@ -2240,18 +2311,18 @@ def create_app(config=None):
     def show_error(error):
         # Bare HTTP exceptions carry English framework text; the template
         # supplies a localized fallback while preserving our route messages.
-        message = None if error.description == type(error).description else error.description
+        message = None if error.description == type(error).description else t(error.description)
         if request.path.startswith("/api/offline/"):
-            return {"ok": False, "code": "request_rejected", "message": message or "同步未完成，暫存仍保留；請重新連線後再試。", "retryable": error.code in (429,)}, error.code
+            return {"ok": False, "code": "request_rejected", "message": message or t("同步未完成，暫存仍保留；請重新連線後再試。"), "retryable": error.code in (429,)}, error.code
         if request.endpoint == "confirm_checkin" and g.get("user") and error.code in (400, 413):
             # The multipart parser may already have rejected the body. Recover
             # by GET from the matched route; never parse or replay the old form.
             if error.code == 413:
-                message = "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。"
+                message = t("上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。")
             label = "Retry · 返回此點重新確認" if g.user.role == "executor" else "返回此點重新確認"
             return render_template("error.html", code=error.code, message=message,
                                    recovery_url=url_for("checkin", token=request.view_args["token"]),
-                                   recovery_label=label), error.code
+                                   recovery_label=t(label)), error.code
         # Preserve the protocol headers (particularly Allow for 405) while
         # displaying the same recovery links as our other error pages.
         response = error.get_response()

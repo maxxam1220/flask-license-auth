@@ -26,7 +26,7 @@ function worker(options = {}) {
 }
 test('install caches every required asset and only a generic offline shell', async () => {
   const w = worker(); await w.lifecycle('install');
-  assert.deepEqual(w.writes.sort(), ['/offline', '/static/app.css', '/static/offline.css', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'].sort());
+  assert.deepEqual(w.writes.sort(), ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'].sort());
   assert(w.requests.every(request => request.credentials === 'omit' && request.redirect === 'error'));
 });
 test('one missing required asset fails install before any cache write', async () => {
@@ -92,4 +92,12 @@ test('buffered online navigation returns the original response with its redirect
   const result = await w.fetchPage('/c/test-token');
   assert.equal(result, original); assert.equal(result.url, origin + '/login'); assert.equal(result.redirected, true);
   assert.equal(await result.text(), 'LOGIN PAGE'); assert.equal(result.headers.get('Content-Security-Policy'), "default-src 'self'");
+});
+
+test('missing cached shell offers recovery instructions in all account languages without identity', async () => {
+  const w = worker(); w.self.navigator.onLine = false;
+  const result = await w.fetchPage('/c/test-token'); const text = await result.text();
+  assert.equal(result.status, 503); assert.match(result.headers.get('Content-Type'), /utf-8/);
+  assert.match(text, /離線頁面尚未備妥/); assert.match(text, /Halaman offline/); assert.match(text, /Trang ngoại tuyến/);
+  assert.equal(w.requests.length, 0); assert.equal(w.writes.length, 0);
 });

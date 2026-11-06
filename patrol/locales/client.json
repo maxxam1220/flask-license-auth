@@ -1,0 +1,682 @@
+{
+  "最多可附 3 張照片。": {
+    "id": "Maksimal 3 foto.",
+    "vi": "Tối đa 3 ảnh."
+  },
+  "照片須為 JPG、PNG、WebP 或 HEIC，每張大於 0 且不超過 8 MB。": {
+    "id": "Gunakan JPG, PNG, WebP atau HEIC. Setiap foto harus berisi data dan maksimal 8 MB.",
+    "vi": "Ảnh phải là JPG, PNG, WebP hoặc HEIC, có dữ liệu và không quá 8 MB mỗi ảnh."
+  },
+  "此瀏覽器無法建立安全的離線編號，目前僅支援線上打卡；請連線操作或更新瀏覽器。": {
+    "id": "Browser ini tidak dapat membuat ID offline yang aman. Gunakan check-in online atau perbarui browser.",
+    "vi": "Trình duyệt không thể tạo mã ngoại tuyến an toàn. Hãy chấm công trực tuyến hoặc cập nhật trình duyệt."
+  },
+  "離線暫存需要 HTTPS 安全連線，目前僅支援線上打卡；請使用正式網站網址。": {
+    "id": "Penyimpanan offline memerlukan HTTPS. Saat ini hanya check-in online tersedia. Gunakan alamat situs resmi.",
+    "vi": "Lưu ngoại tuyến cần kết nối HTTPS. Hiện chỉ hỗ trợ chấm công trực tuyến. Hãy dùng địa chỉ trang chính thức."
+  },
+  "此瀏覽器無法啟用安全離線暫存，目前僅支援線上打卡；請連線操作或更新瀏覽器。": {
+    "id": "Penyimpanan offline yang aman tidak tersedia. Gunakan check-in online atau perbarui browser.",
+    "vi": "Không thể bật lưu ngoại tuyến an toàn. Hãy chấm công trực tuyến hoặc cập nhật trình duyệt."
+  },
+  "手機儲存空間不足，這筆尚未保存。請先補傳既有紀錄；原表單與照片仍保留。": {
+    "id": "Penyimpanan ponsel penuh. Catatan ini belum disimpan. Sinkronkan catatan sebelumnya; formulir dan foto tetap tersedia.",
+    "vi": "Bộ nhớ điện thoại đầy. Bản ghi này chưa được lưu. Hãy đồng bộ các bản ghi trước; biểu mẫu và ảnh vẫn được giữ."
+  },
+  "手機離線儲存暫時無法使用；已保存的資料不會刪除，請重試。": {
+    "id": "Penyimpanan offline sementara tidak tersedia. Data yang sudah disimpan tidak dihapus. Coba lagi.",
+    "vi": "Bộ nhớ ngoại tuyến tạm thời không dùng được. Dữ liệu đã lưu không bị xóa. Hãy thử lại."
+  },
+  "此瀏覽器無法使用離線儲存，請在線上打卡。": {
+    "id": "Browser ini tidak mendukung penyimpanan offline. Lakukan check-in saat online.",
+    "vi": "Trình duyệt không hỗ trợ lưu ngoại tuyến. Hãy chấm công khi có mạng."
+  },
+  "無法開啟手機儲存空間，請檢查瀏覽器設定或改用線上打卡。": {
+    "id": "Penyimpanan ponsel tidak dapat dibuka. Periksa pengaturan browser atau gunakan check-in online.",
+    "vi": "Không thể mở bộ nhớ điện thoại. Kiểm tra cài đặt trình duyệt hoặc chấm công trực tuyến."
+  },
+  "請關閉其他舊版巡檢分頁，再重試。": {
+    "id": "Tutup tab inspeksi versi lama, lalu coba lagi.",
+    "vi": "Đóng các tab kiểm tra phiên bản cũ rồi thử lại."
+  },
+  "原登入版本或手機綁定已變更。此筆保留供處理，不會使用新授權補傳；請聯絡管理員。": {
+    "id": "Sesi login atau ponsel terdaftar telah berubah. Catatan ini tetap disimpan, tetapi tidak dikirim dengan izin baru. Hubungi admin.",
+    "vi": "Phiên đăng nhập hoặc điện thoại liên kết đã thay đổi. Bản ghi vẫn được giữ nhưng không gửi bằng quyền mới. Hãy liên hệ quản trị viên."
+  },
+  "目前沒有網路，資料仍保留在此手機。": {
+    "id": "Tidak ada koneksi internet. Data tetap tersimpan di ponsel ini.",
+    "vi": "Hiện không có mạng. Dữ liệu vẫn được giữ trên điện thoại này."
+  },
+  "伺服器回應無法確認，資料仍保留，請重試。": {
+    "id": "Respons server belum dapat dipastikan. Data tetap disimpan. Coba lagi.",
+    "vi": "Chưa xác nhận được phản hồi của máy chủ. Dữ liệu vẫn được giữ. Hãy thử lại."
+  },
+  "已停止補傳，尚未確認的資料仍保留。": {
+    "id": "Sinkronisasi dihentikan. Data yang belum dikonfirmasi tetap disimpan.",
+    "vi": "Đã dừng đồng bộ. Dữ liệu chưa được xác nhận vẫn được giữ."
+  },
+  "連線逾時，資料仍保留，請重試。": {
+    "id": "Koneksi melewati batas waktu. Data tetap disimpan. Coba lagi.",
+    "vi": "Kết nối hết thời gian chờ. Dữ liệu vẫn được giữ. Hãy thử lại."
+  },
+  "請先登入並使用已核准的綁定手機。": {
+    "id": "Masuk menggunakan ponsel terdaftar yang sudah disetujui.",
+    "vi": "Hãy đăng nhập bằng điện thoại liên kết đã được phê duyệt."
+  },
+  "無法準備離線資料，請先確認登入與手機綁定。": {
+    "id": "Data offline belum dapat disiapkan. Periksa login dan pendaftaran ponsel.",
+    "vi": "Chưa thể chuẩn bị dữ liệu ngoại tuyến. Kiểm tra đăng nhập và liên kết điện thoại."
+  },
+  "帳號已變更，請重新載入頁面。": {
+    "id": "Akun telah berubah. Muat ulang halaman.",
+    "vi": "Tài khoản đã thay đổi. Hãy tải lại trang."
+  },
+  "帳號狀態已變更，請重試。": {
+    "id": "Status akun telah berubah. Coba lagi.",
+    "vi": "Trạng thái tài khoản đã thay đổi. Hãy thử lại."
+  },
+  "帳號狀態已變更，請重新準備。": {
+    "id": "Status akun telah berubah. Siapkan data lagi.",
+    "vi": "Trạng thái tài khoản đã thay đổi. Hãy chuẩn bị lại dữ liệu."
+  },
+  "帳號狀態已變更，請重新登入後準備離線資料。": {
+    "id": "Status akun telah berubah. Masuk kembali, lalu siapkan data offline.",
+    "vi": "Trạng thái tài khoản đã thay đổi. Đăng nhập lại rồi chuẩn bị dữ liệu ngoại tuyến."
+  },
+  "今日離線資料已備妥。未上傳的紀錄只保留在這支手機。": {
+    "id": "Data offline hari ini siap. Catatan yang belum dikirim hanya tersimpan di ponsel ini.",
+    "vi": "Dữ liệu ngoại tuyến hôm nay đã sẵn sàng. Bản ghi chưa gửi chỉ được lưu trên điện thoại này."
+  },
+  "巡檢備註最多 2,000 字。": {
+    "id": "Catatan inspeksi maksimal 2.000 karakter.",
+    "vi": "Ghi chú kiểm tra tối đa 2.000 ký tự."
+  },
+  "巡檢備註含無法儲存的字元，請移除特殊控制字元後重試。": {
+    "id": "Catatan berisi karakter yang tidak dapat disimpan. Hapus karakter kontrol khusus lalu coba lagi.",
+    "vi": "Ghi chú chứa ký tự không thể lưu. Xóa ký tự điều khiển đặc biệt rồi thử lại."
+  },
+  "請先連線登入，準備今日離線資料。": {
+    "id": "Hubungkan internet, masuk, lalu siapkan data offline hari ini.",
+    "vi": "Kết nối mạng, đăng nhập rồi chuẩn bị dữ liệu ngoại tuyến hôm nay."
+  },
+  "帳號或手機綁定已變更，請重新開啟點位。": {
+    "id": "Akun atau ponsel terdaftar telah berubah. Buka kembali titik ini.",
+    "vi": "Tài khoản hoặc liên kết điện thoại đã thay đổi. Hãy mở lại điểm này."
+  },
+  "今日離線資料已到期，請連線重新準備。原有待補傳資料仍保留。": {
+    "id": "Data offline hari ini sudah kedaluwarsa. Hubungkan internet untuk menyiapkannya lagi. Catatan tertunda tetap disimpan.",
+    "vi": "Dữ liệu ngoại tuyến hôm nay đã hết hạn. Kết nối mạng để chuẩn bị lại. Các bản ghi chờ gửi vẫn được giữ."
+  },
+  "此點不在本帳號的離線清單中，請連線更新。": {
+    "id": "Titik ini tidak ada dalam daftar offline akun Anda. Hubungkan internet untuk memperbarui.",
+    "vi": "Điểm này không có trong danh sách ngoại tuyến của tài khoản. Hãy kết nối mạng để cập nhật."
+  },
+  "這份打卡表單的日期、階段或點位設定已變更，請重新掃描。原內容尚未送出。": {
+    "id": "Tanggal, tahap atau pengaturan titik telah berubah. Pindai ulang. Isi formulir belum dikirim.",
+    "vi": "Ngày, bước hoặc thiết lập điểm đã thay đổi. Hãy quét lại. Nội dung biểu mẫu chưa được gửi."
+  },
+  "執行與直接簽到只記錄人員、點位與時間。": {
+    "id": "Check-in pelaksanaan dan check-in langsung hanya mencatat petugas, titik, dan waktu.",
+    "vi": "Điểm danh thực hiện và điểm danh trực tiếp chỉ ghi người, điểm và thời gian."
+  },
+  "此點今日可登記的次數已完成或已暫存。": {
+    "id": "Jumlah check-in hari ini di titik ini sudah selesai atau tersimpan.",
+    "vi": "Số lần chấm công hôm nay tại điểm này đã hoàn tất hoặc đã được lưu tạm."
+  },
+  "這份表單的次數已完成或已暫存，請重新掃描下一次；不會自動改成另一個次數。": {
+    "id": "Putaran ini sudah selesai atau tersimpan. Pindai ulang untuk putaran berikutnya; nomor putaran tidak diubah otomatis.",
+    "vi": "Lần này đã hoàn tất hoặc lưu tạm. Quét lại cho lần tiếp theo; hệ thống không tự chuyển sang lần khác."
+  },
+  "待補傳資料已達本機上限（200 筆或 256 MB 照片），請先補傳既有紀錄。這筆原表單與照片仍保留。": {
+    "id": "Batas lokal tercapai: 200 catatan atau 256 MB foto. Sinkronkan catatan sebelumnya. Formulir dan foto ini tetap tersedia.",
+    "vi": "Đã đạt giới hạn cục bộ: 200 bản ghi hoặc 256 MB ảnh. Hãy đồng bộ các bản ghi trước. Biểu mẫu và ảnh này vẫn được giữ."
+  },
+  "已暫存此手機，尚未上傳。請保持頁面開啟，連線後按「同步待傳紀錄」。": {
+    "id": "Tersimpan di ponsel, belum dikirim. Biarkan halaman terbuka. Setelah online, tekan “Sinkronkan catatan”.",
+    "vi": "Đã lưu trên điện thoại, chưa gửi. Giữ trang mở. Khi có mạng, nhấn “Đồng bộ bản ghi”."
+  },
+  "刪除本機紀錄需要明確確認。": {
+    "id": "Penghapusan catatan lokal memerlukan konfirmasi.",
+    "vi": "Cần xác nhận rõ ràng để xóa bản ghi trên điện thoại."
+  },
+  "請先停止補傳，再刪除本機紀錄。": {
+    "id": "Hentikan sinkronisasi sebelum menghapus catatan lokal.",
+    "vi": "Hãy dừng đồng bộ trước khi xóa bản ghi trên điện thoại."
+  },
+  "其他分頁正在補傳，請稍後再刪除。": {
+    "id": "Tab lain sedang menyinkronkan. Hapus setelah proses selesai.",
+    "vi": "Tab khác đang đồng bộ. Hãy đợi rồi mới xóa."
+  },
+  "無法操作其他帳號的本機資料。": {
+    "id": "Data lokal akun lain tidak dapat diubah.",
+    "vi": "Không thể thao tác dữ liệu cục bộ của tài khoản khác."
+  },
+  "已刪除這筆尚未確認的本機資料。": {
+    "id": "Catatan lokal yang belum dikonfirmasi telah dihapus.",
+    "vi": "Đã xóa bản ghi cục bộ chưa được xác nhận này."
+  },
+  "帳號已變更，已停止補傳。": {
+    "id": "Akun telah berubah. Sinkronisasi dihentikan.",
+    "vi": "Tài khoản đã thay đổi. Đã dừng đồng bộ."
+  },
+  "請先連線登入原帳號，再補傳。": {
+    "id": "Hubungkan internet dan masuk ke akun semula sebelum menyinkronkan.",
+    "vi": "Kết nối mạng và đăng nhập tài khoản ban đầu trước khi đồng bộ."
+  },
+  "另一個分頁正在補傳，請稍候。": {
+    "id": "Tab lain sedang menyinkronkan. Mohon tunggu.",
+    "vi": "Tab khác đang đồng bộ. Vui lòng chờ."
+  },
+  "登入或手機綁定已變更，請用原帳號重新登入後補傳。": {
+    "id": "Login atau ponsel terdaftar telah berubah. Masuk kembali ke akun semula untuk menyinkronkan.",
+    "vi": "Đăng nhập hoặc liên kết điện thoại đã thay đổi. Đăng nhập lại tài khoản ban đầu để đồng bộ."
+  },
+  "登入或手機綁定已變更，待補傳資料仍保留。": {
+    "id": "Login atau ponsel terdaftar telah berubah. Data tertunda tetap disimpan.",
+    "vi": "Đăng nhập hoặc liên kết điện thoại đã thay đổi. Dữ liệu chờ gửi vẫn được giữ."
+  },
+  "目前無法確認伺服器連線，暫存與離線準備仍保留；請稍後重試。": {
+    "id": "Koneksi server belum dapat dipastikan. Catatan tersimpan dan data offline tetap tersedia. Coba lagi nanti.",
+    "vi": "Chưa xác nhận được kết nối máy chủ. Bản ghi và dữ liệu ngoại tuyến vẫn được giữ. Hãy thử lại sau."
+  },
+  "伺服器未確認這筆紀錄，資料仍保留，請重試。": {
+    "id": "Server belum mengonfirmasi catatan ini. Data tetap disimpan. Coba lagi.",
+    "vi": "Máy chủ chưa xác nhận bản ghi này. Dữ liệu vẫn được giữ. Hãy thử lại."
+  },
+  "連線失敗，資料仍保留。": {
+    "id": "Koneksi gagal. Data tetap disimpan.",
+    "vi": "Kết nối thất bại. Dữ liệu vẫn được giữ."
+  },
+  "無法連線，待補傳資料仍保留。": {
+    "id": "Tidak dapat terhubung. Data tertunda tetap disimpan.",
+    "vi": "Không thể kết nối. Dữ liệu chờ gửi vẫn được giữ."
+  },
+  "補傳已停止，但手機儲存狀態暫時無法讀取；請重試。未收到確認的資料仍保留。": {
+    "id": "Sinkronisasi dihentikan, tetapi status penyimpanan belum dapat dibaca. Coba lagi. Data yang belum dikonfirmasi tetap disimpan.",
+    "vi": "Đã dừng đồng bộ nhưng tạm thời không đọc được trạng thái bộ nhớ. Hãy thử lại. Dữ liệu chưa được xác nhận vẫn được giữ."
+  },
+  "這不是本站的巡檢點網址。": {
+    "id": "Ini bukan alamat titik inspeksi situs ini.",
+    "vi": "Đây không phải địa chỉ điểm kiểm tra của trang này."
+  },
+  "帳號已變更，請重新準備離線資料。": {
+    "id": "Akun telah berubah. Siapkan data offline lagi.",
+    "vi": "Tài khoản đã thay đổi. Hãy chuẩn bị lại dữ liệu ngoại tuyến."
+  },
+  "此瀏覽器無法啟用離線頁面，請使用 HTTPS 網址與支援的瀏覽器。": {
+    "id": "Halaman offline tidak tersedia. Gunakan alamat HTTPS dan browser yang mendukung.",
+    "vi": "Không thể bật trang ngoại tuyến. Hãy dùng địa chỉ HTTPS và trình duyệt được hỗ trợ."
+  },
+  "離線頁面準備逾時，請連線後再試。": {
+    "id": "Persiapan halaman offline melewati batas waktu. Hubungkan internet dan coba lagi.",
+    "vi": "Chuẩn bị trang ngoại tuyến hết thời gian chờ. Kết nối mạng rồi thử lại."
+  },
+  "離線頁面尚未備妥，請重試。": {
+    "id": "Halaman offline belum siap. Coba lagi.",
+    "vi": "Trang ngoại tuyến chưa sẵn sàng. Hãy thử lại."
+  },
+  "離線頁面檔案不完整，請重試。": {
+    "id": "Berkas halaman offline belum lengkap. Coba lagi.",
+    "vi": "Tệp trang ngoại tuyến chưa đầy đủ. Hãy thử lại."
+  },
+  "第 1 次": {
+    "id": "Putaran 1",
+    "vi": "Lần 1"
+  },
+  "第 2 次": {
+    "id": "Putaran 2",
+    "vi": "Lần 2"
+  },
+  "本次": {
+    "id": "Kali ini",
+    "vi": "Lần này"
+  },
+  "執行簽到": {
+    "id": "Check-in pelaksanaan",
+    "vi": "Điểm danh thực hiện"
+  },
+  "巡檢": {
+    "id": "Inspeksi",
+    "vi": "Kiểm tra"
+  },
+  "直接簽到": {
+    "id": "Check-in langsung",
+    "vi": "Điểm danh trực tiếp"
+  },
+  "操作未完成，原有資料仍保留。": {
+    "id": "Tindakan belum selesai. Data semula tetap disimpan.",
+    "vi": "Thao tác chưa hoàn tất. Dữ liệu ban đầu vẫn được giữ."
+  },
+  "尚未取得點位": {
+    "id": "Titik belum tersedia",
+    "vi": "Chưa có thông tin điểm"
+  },
+  "請連線登入並準備今日離線資料。": {
+    "id": "Masuk saat online dan siapkan data offline hari ini.",
+    "vi": "Đăng nhập khi có mạng và chuẩn bị dữ liệu ngoại tuyến hôm nay."
+  },
+  "每日兩次": {
+    "id": "2 kali sehari",
+    "vi": "2 lần/ngày"
+  },
+  "每週一次": {
+    "id": "1 kali seminggu",
+    "vi": "1 lần/tuần"
+  },
+  "每月一次": {
+    "id": "1 kali sebulan",
+    "vi": "1 lần/tháng"
+  },
+  "不定期": {
+    "id": "Tidak terjadwal",
+    "vi": "Không định kỳ"
+  },
+  "每日一次": {
+    "id": "1 kali sehari",
+    "vi": "1 lần/ngày"
+  },
+  "點位或日期已變更，請重新掃描": {
+    "id": "Titik atau tanggal berubah. Pindai ulang.",
+    "vi": "Điểm hoặc ngày đã thay đổi. Hãy quét lại."
+  },
+  "本次已完成、已暫存或已到期，請重新掃描確認": {
+    "id": "Putaran ini selesai, tersimpan, atau kedaluwarsa. Pindai ulang untuk memeriksa.",
+    "vi": "Lần này đã hoàn tất, đã lưu hoặc hết hạn. Quét lại để kiểm tra."
+  },
+  "僅限線上": {
+    "id": "Hanya online",
+    "vi": "Chỉ trực tuyến"
+  },
+  "離線": {
+    "id": "Offline",
+    "vi": "Ngoại tuyến"
+  },
+  "補傳中": {
+    "id": "Menyinkronkan",
+    "vi": "Đang đồng bộ"
+  },
+  "待補傳": {
+    "id": "Belum dikirim",
+    "vi": "Chờ gửi"
+  },
+  "已備妥": {
+    "id": "Siap",
+    "vi": "Sẵn sàng"
+  },
+  "離線準備": {
+    "id": "Siapkan offline",
+    "vi": "Chuẩn bị ngoại tuyến"
+  },
+  "正在上傳本筆紀錄（最多 30 秒）": {
+    "id": "Mengirim catatan ini (maks. 30 detik)",
+    "vi": "Đang gửi bản ghi này (tối đa 30 giây)"
+  },
+  "正在檢查連線（最多 5 秒）": {
+    "id": "Memeriksa koneksi (maks. 5 detik)",
+    "vi": "Đang kiểm tra kết nối (tối đa 5 giây)"
+  },
+  "已保存在手機，正在開啟收據或待傳紀錄…": {
+    "id": "Tersimpan di ponsel. Membuka bukti atau daftar tertunda…",
+    "vi": "Đã lưu trên điện thoại. Đang mở biên nhận hoặc danh sách chờ gửi…"
+  },
+  "尚未解鎖離線資料": {
+    "id": "Data offline belum dibuka",
+    "vi": "Dữ liệu ngoại tuyến chưa được mở khóa"
+  },
+  "請先連線登入原帳號，並準備今日資料。": {
+    "id": "Masuk ke akun semula saat online, lalu siapkan data hari ini.",
+    "vi": "Đăng nhập tài khoản ban đầu khi có mạng rồi chuẩn bị dữ liệu hôm nay."
+  },
+  "今日資料已到期。待補傳紀錄仍保留，請連線補傳。": {
+    "id": "Data hari ini kedaluwarsa. Catatan tertunda tetap disimpan. Hubungkan internet untuk menyinkronkan.",
+    "vi": "Dữ liệu hôm nay đã hết hạn. Bản ghi chờ gửi vẫn được giữ. Kết nối mạng để đồng bộ."
+  },
+  "目前離線。暫存不等於打卡完成，請連線後補傳。": {
+    "id": "Sedang offline. Tersimpan belum berarti check-in selesai. Sinkronkan saat online.",
+    "vi": "Hiện đang ngoại tuyến. Lưu tạm chưa có nghĩa là chấm công hoàn tất. Hãy đồng bộ khi có mạng."
+  },
+  "今日離線資料已備妥。": {
+    "id": "Data offline hari ini siap.",
+    "vi": "Dữ liệu ngoại tuyến hôm nay đã sẵn sàng."
+  },
+  "請先準備今日離線資料。": {
+    "id": "Siapkan data offline hari ini terlebih dahulu.",
+    "vi": "Hãy chuẩn bị dữ liệu ngoại tuyến hôm nay trước."
+  },
+  "已同步完成": {
+    "id": "Sinkronisasi selesai",
+    "vi": "Đã đồng bộ xong"
+  },
+  "已暫存在這支手機": {
+    "id": "Tersimpan di ponsel ini",
+    "vi": "Đã lưu trên điện thoại này"
+  },
+  "已暫存此手機，尚未收到伺服器確認。": {
+    "id": "Tersimpan di ponsel. Belum dikonfirmasi server.",
+    "vi": "Đã lưu trên điện thoại. Chưa nhận được xác nhận của máy chủ."
+  },
+  "異常回報": {
+    "id": "Laporan masalah",
+    "vi": "Báo cáo bất thường"
+  },
+  "刪除本機紀錄": {
+    "id": "Hapus catatan lokal",
+    "vi": "Xóa bản ghi trên máy"
+  },
+  "可繼續加入或移除照片。": {
+    "id": "Anda dapat menambah atau menghapus foto.",
+    "vi": "Có thể thêm hoặc xóa ảnh."
+  },
+  "重新選取會取代目前照片。": {
+    "id": "Pilihan baru akan mengganti foto saat ini.",
+    "vi": "Chọn lại sẽ thay thế ảnh hiện tại."
+  },
+  "無法預覽，請核對照片檔案": {
+    "id": "Pratinjau tidak tersedia. Periksa berkas foto.",
+    "vi": "Không thể xem trước. Hãy kiểm tra tệp ảnh."
+  },
+  "移除": {
+    "id": "Hapus",
+    "vi": "Xóa"
+  },
+  "此瀏覽器不支援逐張移除，請清空後重新選擇。": {
+    "id": "Browser ini tidak dapat menghapus satu per satu. Kosongkan foto lalu pilih lagi.",
+    "vi": "Trình duyệt không hỗ trợ xóa từng ảnh. Xóa tất cả rồi chọn lại."
+  },
+  "本筆已暫存在手機。請連線登入原帳號後，到同步查看。": {
+    "id": "Catatan tersimpan di ponsel. Masuk ke akun semula saat online lalu buka Sinkronisasi.",
+    "vi": "Bản ghi đã lưu trên điện thoại. Khi có mạng, đăng nhập tài khoản ban đầu rồi mở Đồng bộ."
+  },
+  "離開點位會放棄尚未暫存的內容，確定離開？": {
+    "id": "Meninggalkan titik ini akan membuang isi yang belum disimpan. Lanjutkan?",
+    "vi": "Rời điểm này sẽ bỏ nội dung chưa lưu. Bạn chắc chắn muốn rời đi?"
+  },
+  "目前有尚未保存的內容，確定放棄並登出？": {
+    "id": "Ada isi yang belum disimpan. Buang dan keluar?",
+    "vi": "Có nội dung chưa lưu. Bạn muốn bỏ nội dung và đăng xuất?"
+  },
+  "尚未登出：無法鎖定本機暫存，請重試登出。": {
+    "id": "Belum keluar: data lokal belum dapat dikunci. Coba keluar lagi.",
+    "vi": "Chưa đăng xuất: không thể khóa dữ liệu lưu trên máy. Hãy thử đăng xuất lại."
+  },
+  "正在保存／送出…": {
+    "id": "Menyimpan / mengirim…",
+    "vi": "Đang lưu / gửi…"
+  },
+  "正在保存到手機；請稍候…": {
+    "id": "Menyimpan ke ponsel. Mohon tunggu…",
+    "vi": "Đang lưu vào điện thoại. Vui lòng chờ…"
+  },
+  "取消上傳，保留待傳": {
+    "id": "Batal kirim, simpan tertunda",
+    "vi": "Hủy gửi, giữ bản chờ"
+  },
+  "正在停止上傳，紀錄仍保留在手機…": {
+    "id": "Menghentikan pengiriman. Catatan tetap tersimpan di ponsel…",
+    "vi": "Đang dừng gửi. Bản ghi vẫn được giữ trên điện thoại…"
+  },
+  "無法保存，原本的備註與照片仍保留在表單中。": {
+    "id": "Belum dapat menyimpan. Catatan dan foto tetap ada di formulir.",
+    "vi": "Không thể lưu. Ghi chú và ảnh ban đầu vẫn ở trong biểu mẫu."
+  },
+  "資料正在送出。請等候儲存完成後再掃描。": {
+    "id": "Data sedang dikirim. Tunggu sampai tersimpan sebelum memindai lagi.",
+    "vi": "Dữ liệu đang được gửi. Chờ lưu xong rồi quét tiếp."
+  },
+  "此瀏覽器無法開啟相機。請用手機內建相機掃描巡檢點 QR Code。": {
+    "id": "Browser ini tidak dapat membuka kamera. Gunakan aplikasi kamera ponsel untuk memindai QR titik inspeksi.",
+    "vi": "Trình duyệt không mở được camera. Dùng ứng dụng camera của điện thoại để quét mã QR tại điểm kiểm tra."
+  },
+  "請允許使用相機，並將鏡頭對準巡檢點 QR Code。": {
+    "id": "Izinkan kamera, lalu arahkan ke QR titik inspeksi.",
+    "vi": "Cho phép dùng camera rồi hướng vào mã QR tại điểm kiểm tra."
+  },
+  "相機連線已中斷。請重新開啟相機。": {
+    "id": "Kamera terputus. Buka kamera lagi.",
+    "vi": "Camera đã ngắt kết nối. Hãy mở lại camera."
+  },
+  "相機使用權限未開啟。請在瀏覽器設定中允許使用相機後重試，或改用手機內建相機掃描。": {
+    "id": "Akses kamera belum diizinkan. Izinkan di pengaturan browser lalu coba lagi, atau gunakan aplikasi kamera ponsel.",
+    "vi": "Chưa cấp quyền camera. Cho phép camera trong cài đặt trình duyệt rồi thử lại, hoặc dùng ứng dụng camera của điện thoại."
+  },
+  "無法開啟相機。請確認裝置有相機，並關閉其他使用相機的程式後重試。": {
+    "id": "Kamera tidak dapat dibuka. Pastikan perangkat memiliki kamera dan tutup aplikasi kamera lain, lalu coba lagi.",
+    "vi": "Không thể mở camera. Kiểm tra thiết bị có camera, đóng ứng dụng khác đang dùng camera rồi thử lại."
+  },
+  "請對準一張巡檢點 QR Code，掃到後會開啟打卡確認頁。": {
+    "id": "Arahkan kamera ke satu QR titik inspeksi. Halaman konfirmasi akan terbuka setelah terbaca.",
+    "vi": "Hướng camera vào một mã QR của điểm kiểm tra. Trang xác nhận sẽ mở sau khi quét được."
+  },
+  "這是正在填寫的同一個點位，請返回表單繼續打卡。": {
+    "id": "Titik ini sudah terbuka. Kembali ke formulir untuk menyelesaikan check-in.",
+    "vi": "Đây là điểm đang điền. Hãy quay lại biểu mẫu để tiếp tục chấm công."
+  },
+  "已掃到巡檢點。目前頁面有尚未送出的內容，前往巡檢點會放棄這些內容。": {
+    "id": "Titik terbaca. Ada isi yang belum dikirim. Membuka titik tersebut akan membuang isi ini.",
+    "vi": "Đã quét được điểm. Trang hiện tại có nội dung chưa gửi. Mở điểm đó sẽ bỏ nội dung này."
+  },
+  "目前頁面有尚未送出的內容。請關閉掃描視窗，處理完畢後再掃描。": {
+    "id": "Ada isi yang belum dikirim. Tutup pemindai dan selesaikan formulir sebelum memindai lagi.",
+    "vi": "Trang có nội dung chưa gửi. Đóng cửa sổ quét và xử lý xong rồi quét lại."
+  },
+  "畫面中有多個巡檢點。請靠近要打卡的點位，一次只掃一張。": {
+    "id": "Ada beberapa QR titik inspeksi. Dekati titik yang diinginkan dan pindai satu per satu.",
+    "vi": "Có nhiều mã QR điểm kiểm tra trong khung hình. Đến gần điểm cần chấm công và chỉ quét một mã mỗi lần."
+  },
+  "這張 QR Code 不是本站的巡檢點，請對準現場的巡檢點 QR Code。": {
+    "id": "QR ini bukan titik inspeksi situs ini. Arahkan ke QR titik di lokasi.",
+    "vi": "Mã QR này không thuộc điểm kiểm tra của trang. Hãy hướng vào mã QR tại hiện trường."
+  },
+  "無法讀取相機畫面。請重試，或用手機內建相機掃描巡檢點 QR Code。": {
+    "id": "Gambar kamera tidak terbaca. Coba lagi atau pindai QR titik dengan aplikasi kamera ponsel.",
+    "vi": "Không đọc được hình ảnh camera. Thử lại hoặc dùng ứng dụng camera của điện thoại để quét QR tại điểm kiểm tra."
+  },
+  "確認這項操作": {
+    "id": "Konfirmasi tindakan",
+    "vi": "Xác nhận thao tác"
+  },
+  "確認繼續": {
+    "id": "Konfirmasi dan lanjut",
+    "vi": "Xác nhận tiếp tục"
+  },
+  "正在送出…": {
+    "id": "Mengirim…",
+    "vi": "Đang gửi…"
+  },
+  "正在送出，請稍候。請勿重複提交。": {
+    "id": "Sedang mengirim. Mohon tunggu dan jangan kirim ulang.",
+    "vi": "Đang gửi, vui lòng chờ. Không gửi lặp lại."
+  },
+  "收合查詢": {
+    "id": "Tutup filter",
+    "vi": "Thu gọn bộ lọc"
+  },
+  "調整查詢": {
+    "id": "Ubah filter",
+    "vi": "Điều chỉnh bộ lọc"
+  },
+  "結束日期不能早於開始日期。": {
+    "id": "Tanggal akhir tidak boleh sebelum tanggal mulai.",
+    "vi": "Ngày kết thúc không được trước ngày bắt đầu."
+  },
+  "一次最多查詢 367 天，請縮小日期範圍。": {
+    "id": "Maksimal 367 hari per pencarian. Persempit rentang tanggal.",
+    "vi": "Mỗi lần chỉ tra cứu tối đa 367 ngày. Hãy thu hẹp khoảng ngày."
+  },
+  "清冊原始編號須對應總務分類與原樓層。": {
+    "id": "Kode asli harus sesuai kategori urusan umum dan lantai semula.",
+    "vi": "Mã gốc phải khớp với nhóm tổng vụ và tầng ban đầu."
+  },
+  "請填寫說明，不能只輸入空白。": {
+    "id": "Isi keterangan, bukan hanya spasi.",
+    "vi": "Hãy nhập giải thích, không chỉ nhập khoảng trắng."
+  },
+  "移除多餘照片，或清空後重新選擇": {
+    "id": "hapus foto berlebih, atau kosongkan dan pilih lagi",
+    "vi": "xóa ảnh thừa hoặc xóa tất cả rồi chọn lại"
+  },
+  "重新選擇": {
+    "id": "pilih lagi",
+    "vi": "chọn lại"
+  },
+  "有照片是空白檔案，請移除並重新選擇。": {
+    "id": "Ada berkas foto kosong. Hapus dan pilih lagi.",
+    "vi": "Có tệp ảnh trống. Hãy xóa và chọn lại."
+  },
+  "有照片超過 8 MB，請移除或更換較小的照片。": {
+    "id": "Ada foto lebih dari 8 MB. Hapus atau ganti dengan foto yang lebih kecil.",
+    "vi": "Có ảnh vượt quá 8 MB. Hãy xóa hoặc thay bằng ảnh nhỏ hơn."
+  },
+  "請選擇 JPG、PNG、WebP 或 HEIC 照片。": {
+    "id": "Pilih foto JPG, PNG, WebP atau HEIC.",
+    "vi": "Hãy chọn ảnh JPG, PNG, WebP hoặc HEIC."
+  },
+  "已達照片張數上限": {
+    "id": "Batas jumlah foto tercapai",
+    "vi": "Đã đủ số ảnh tối đa"
+  },
+  "選擇現場照片": {
+    "id": "Pilih foto lokasi",
+    "vi": "Chọn ảnh hiện trường"
+  },
+  "繼續新增照片": {
+    "id": "Tambah foto",
+    "vi": "Thêm ảnh"
+  },
+  "重新選擇照片": {
+    "id": "Pilih ulang foto",
+    "vi": "Chọn lại ảnh"
+  },
+  "請先移除照片再新增。": {
+    "id": "Hapus foto sebelum menambah yang baru.",
+    "vi": "Hãy xóa ảnh trước khi thêm ảnh mới."
+  },
+  "可分次拍照或選取，相片會累加。": {
+    "id": "Anda dapat memotret atau memilih beberapa kali; foto akan ditambahkan.",
+    "vi": "Có thể chụp hoặc chọn nhiều lần; ảnh sẽ được thêm vào danh sách."
+  },
+  "重新選取會取代目前選擇。": {
+    "id": "Pilihan baru akan mengganti pilihan saat ini.",
+    "vi": "Chọn lại sẽ thay thế lựa chọn hiện tại."
+  },
+  "照片預覽": {
+    "id": "Pratinjau foto",
+    "vi": "Xem trước ảnh"
+  },
+  "超過 8 MB，請更換照片": {
+    "id": "Lebih dari 8 MB. Ganti foto.",
+    "vi": "Vượt 8 MB. Hãy thay ảnh."
+  },
+  "空白檔案，請重新選擇": {
+    "id": "Berkas kosong. Pilih lagi.",
+    "vi": "Tệp trống. Hãy chọn lại."
+  },
+  "此格式無法預覽，仍可上傳": {
+    "id": "Format ini tidak dapat dipratinjau, tetapi tetap dapat dikirim.",
+    "vi": "Không thể xem trước định dạng này nhưng vẫn có thể gửi."
+  },
+  "不支援的檔案格式": {
+    "id": "Format berkas tidak didukung",
+    "vi": "Định dạng tệp không được hỗ trợ"
+  },
+  "此瀏覽器不支援逐張移除，請使用檔案選擇按鈕重新選擇照片。": {
+    "id": "Browser ini tidak dapat menghapus satu per satu. Gunakan tombol pilih berkas untuk memilih foto lagi.",
+    "vi": "Trình duyệt không hỗ trợ xóa từng ảnh. Dùng nút chọn tệp để chọn lại ảnh."
+  },
+  " 此瀏覽器只能保留最後一次選取的照片，請核對清單。": {
+    "id": " Browser ini hanya menyimpan pilihan foto terakhir. Periksa daftar.",
+    "vi": " Trình duyệt chỉ giữ ảnh của lần chọn cuối. Hãy kiểm tra danh sách."
+  },
+  "已清空照片。": {
+    "id": "Semua foto telah dihapus dari pilihan.",
+    "vi": "Đã xóa tất cả ảnh đã chọn."
+  },
+  "已更新列表。": {
+    "id": "Daftar diperbarui.",
+    "vi": "Đã cập nhật danh sách."
+  },
+  "暫時無法更新，目前顯示上次查詢結果。請稍後再按「更新列表」。": {
+    "id": "Daftar belum dapat diperbarui. Hasil sebelumnya masih ditampilkan. Tekan “Perbarui daftar” lagi nanti.",
+    "vi": "Tạm thời không thể cập nhật. Đang hiển thị kết quả lần trước. Hãy nhấn “Cập nhật danh sách” sau."
+  },
+  "離線頁面尚未備妥，請連線後重試。": {
+    "id": "Halaman offline belum siap. Hubungkan internet dan coba lagi.",
+    "vi": "Trang ngoại tuyến chưa sẵn sàng. Kết nối mạng rồi thử lại."
+  },
+  "離線頁面尚未備妥。請連線後重新開啟巡檢網站。": {
+    "id": "Halaman offline belum siap. Hubungkan internet lalu buka kembali situs inspeksi.",
+    "vi": "Trang ngoại tuyến chưa sẵn sàng. Kết nối mạng rồi mở lại trang kiểm tra."
+  },
+  "已確認 {count} 筆；其餘未確認資料仍保留在此手機。": {
+    "id": "{count} catatan dikonfirmasi. Data lainnya yang belum dikonfirmasi tetap tersimpan di ponsel ini.",
+    "vi": "Đã xác nhận {count} bản ghi. Các dữ liệu chưa được xác nhận khác vẫn được giữ trên điện thoại này."
+  },
+  "返回今日待簽到": {
+    "id": "Kembali ke daftar hari ini",
+    "vi": "Về danh sách hôm nay"
+  },
+  "返回巡檢總覽": {
+    "id": "Kembali ke ringkasan",
+    "vi": "Về tổng quan kiểm tra"
+  },
+  "{phase} · 已等 {seconds} 秒": {
+    "id": "{phase} · Menunggu {seconds} detik",
+    "vi": "{phase} · Đã chờ {seconds} giây"
+  },
+  "可暫存至 {captureUntil}；補傳期限 {syncUntil}": {
+    "id": "Dapat disimpan sampai {captureUntil}; batas sinkronisasi {syncUntil}",
+    "vi": "Có thể lưu đến {captureUntil}; hạn đồng bộ {syncUntil}"
+  },
+  "正在處理 {processed}/{total} 筆 · 已確認 {saved} 筆 · {seconds} 秒": {
+    "id": "Memproses {processed}/{total} · Dikonfirmasi {saved} · {seconds} detik",
+    "vi": "Đang xử lý {processed}/{total} · Đã xác nhận {saved} · {seconds} giây"
+  },
+  "{pending} 筆待補傳，其中 {blocked} 筆需處理": {
+    "id": "{pending} menunggu kirim; {blocked} perlu ditangani",
+    "vi": "{pending} bản ghi chờ gửi, {blocked} cần xử lý"
+  },
+  "{pending} 筆待補傳": {
+    "id": "{pending} menunggu kirim",
+    "vi": "{pending} bản ghi chờ gửi"
+  },
+  "{code} · {slot} 已收到伺服器確認，可以繼續下一點。": {
+    "id": "{code} · {slot} dikonfirmasi server. Lanjutkan ke titik berikutnya.",
+    "vi": "{code} · {slot} đã được máy chủ xác nhận. Có thể tiếp tục điểm tiếp theo."
+  },
+  "{code} · {slot} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。": {
+    "id": "{code} · {slot} tersimpan di ponsel, belum dikirim. Setelah online, tekan “Sinkronkan catatan”.",
+    "vi": "{code} · {slot} đã lưu trên điện thoại, chưa gửi. Khi có mạng, nhấn “Đồng bộ bản ghi”."
+  },
+  "{count} 張照片": {
+    "id": "{count} foto",
+    "vi": "{count} ảnh"
+  },
+  "確定刪除 {code} 這筆本機資料與照片？\n若伺服器尚未收到，刪除後將無法補傳；已存在伺服器的紀錄不會被刪除。": {
+    "id": "Hapus catatan lokal dan foto {code}?\nJika belum diterima server, data yang dihapus tidak dapat dikirim lagi. Catatan yang sudah ada di server tidak dihapus.",
+    "vi": "Xóa dữ liệu và ảnh cục bộ của {code}?\nNếu máy chủ chưa nhận, dữ liệu đã xóa sẽ không thể gửi lại. Bản ghi đã có trên máy chủ không bị xóa."
+  },
+  "已選 {count} 張，按 OK 後才會暫存。{hint}": {
+    "id": "{count} foto dipilih. Tekan OK untuk menyimpan. {hint}",
+    "vi": "Đã chọn {count} ảnh. Nhấn OK mới lưu tạm. {hint}"
+  },
+  "已選照片 {number}": {
+    "id": "Foto terpilih {number}",
+    "vi": "Ảnh đã chọn {number}"
+  },
+  "移除照片 {number}：{name}": {
+    "id": "Hapus foto {number}: {name}",
+    "vi": "Xóa ảnh {number}: {name}"
+  },
+  "點位編號需與樓層一致，請使用 {prefix}- 開頭。": {
+    "id": "Kode titik harus sesuai lantai. Gunakan awalan {prefix}-.",
+    "vi": "Mã điểm phải khớp với tầng. Hãy dùng tiền tố {prefix}-."
+  },
+  "目前選了 {count} 張照片，最多只能附 3 張。請{action}。": {
+    "id": "{count} foto dipilih; maksimal 3. Silakan {action}.",
+    "vi": "Đã chọn {count} ảnh; tối đa 3 ảnh. Vui lòng {action}."
+  },
+  "已選 {count} 張，確認打卡時才會上傳。": {
+    "id": "{count} foto dipilih. Foto dikirim saat check-in dikonfirmasi.",
+    "vi": "Đã chọn {count} ảnh. Ảnh chỉ được gửi khi xác nhận chấm công."
+  }
+}

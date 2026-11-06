@@ -1,0 +1,19 @@
+<div class="checkin-wrap receipt-wrap executor-receipt">
+  <div class="checkin-card success-card{% if can_scan %} receipt-can-scan{% endif %}">
+    <span class="success-emblem">{{ icon('check') }}</span>
+    <h1>{{ t('簽到收據' if reviewing else '簽到完成') }}</h1>
+    <p class="checkin-location">{{ t('紀錄已儲存，可以繼續下一點。') }}</p>
+    {% if can_scan %}{{ scanner_button('next', '繼續掃描') }}{% endif %}
+    <a class="button button-text button-full" href="{{ url_for('ready') }}">{{ t('返回今日待簽到') }} {{ icon('arrow') }}</a>
+    <div class="success-receipt">
+      <span class="point-code">{{ point_code(record) }}</span><h2>{{ localized_point_name(record.point_name or report_point_location(record).name) }}</h2>
+      <div><span>{{ t('簽到人員') }}</span><strong>{{ reporter_name(record) }}</strong></div>
+      {% if record.frequency == 'daily2' %}<div><span>{{ t('本次打卡') }}</span><strong>{{ t('第 1 次' if record.slot == 'am' else '第 2 次') }}</strong></div>{% endif %}
+      <div><span>{{ t('手機記錄時間' if record.offline_submission else '簽到時間') }}</span><strong>{{ record.created_at|localtime }}</strong></div>
+      {% if record.offline_submission %}<div><span>{{ t('同步收件時間') }}</span><strong>{{ record.offline_submission.received_at|localtime }}</strong></div>{% endif %}
+      {% if long_period %}<div class="receipt-period"><span>{{ t('有效期間') }}</span><strong>{{ long_period.start }} – {{ long_period.end }}</strong></div>{% endif %}
+      {% if executed %}<div><span>{{ t('第二階段') }}</span><strong class="badge receipt-stage-status {{ 'badge-done' if phase_status == 'done' else 'badge-missed' if phase_status == 'expired' else 'badge-neutral' if phase_status == 'unknown' else 'badge-review' }}">{{ t('已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢') }}</strong></div>{% endif %}
+    </div>
+    {% if flexible_daily2 %}<p class="checkin-footnote">{{ t('再次掃描同一點可登記第二次；完成兩次後請前往下一點。') }}</p>{% endif %}
+  </div>
+</div>

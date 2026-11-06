@@ -1,0 +1,156 @@
+/* Account language changes copy, never point codes or form permissions. */
+html[lang="id"] [data-legacy-english],
+html[lang="vi"] [data-legacy-english] { display: none !important; }
+html[lang="id"] .button,
+html[lang="vi"] .button,
+html[lang="id"] .nav-link,
+html[lang="vi"] .nav-link {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  min-height: 44px;
+}
+html[lang="id"] .button .icon,
+html[lang="vi"] .button .icon { flex-shrink: 0; }
+html[lang="id"] .ready-filters,
+html[lang="vi"] .ready-filters { align-items: end; }
+html[lang="id"] .ready-filters label,
+html[lang="vi"] .ready-filters label { min-width: 0; }
+html[lang="id"] .ready-refresh,
+html[lang="vi"] .ready-refresh { white-space: normal; text-align: center; }
+html[lang="id"] .ready-tag,
+html[lang="vi"] .ready-tag { overflow-wrap: anywhere; text-wrap: initial; }
+html[lang="id"] .ready-heading,
+html[lang="vi"] .ready-heading { gap: .5rem; }
+html[lang="id"] .ready-heading h2,
+html[lang="vi"] .ready-heading h2 { flex: 1 1 12rem; }
+html[lang="id"] .ready-scope,
+html[lang="vi"] .ready-scope { row-gap: .3rem; }
+html[lang="id"] .scanner-instructions,
+html[lang="vi"] .scanner-instructions { min-width: 0; overflow-wrap: anywhere; }
+html[lang="id"] .scanner-draft-actions,
+html[lang="vi"] .scanner-draft-actions { flex-wrap: wrap; }
+html[lang="id"] .scanner-heading h2,
+html[lang="vi"] .scanner-heading h2 { line-height: 1.35; }
+html[lang="id"] .scanner-close,
+html[lang="vi"] .scanner-close { flex: 0 0 44px; }
+html[lang="id"] .page-heading h1,
+html[lang="vi"] .page-heading h1,
+html[lang="id"] .offline-page-heading h1,
+html[lang="vi"] .offline-page-heading h1 { overflow-wrap: anywhere; line-height: 1.2; }
+html[lang="id"] .offline-page-links,
+html[lang="vi"] .offline-page-links { flex-wrap: wrap; }
+html[lang="id"] .offline-actions,
+html[lang="vi"] .offline-actions { flex-wrap: wrap; }
+html[lang="id"] .offline-actions > *,
+html[lang="vi"] .offline-actions > * { min-width: 0; }
+html[lang="id"] .offline-section-heading,
+html[lang="vi"] .offline-section-heading { flex-wrap: wrap; gap: .6rem; }
+html[lang="id"] .offline-section-heading h2,
+html[lang="vi"] .offline-section-heading h2 { flex: 1 1 12rem; }
+html[lang="id"] .offline-account,
+html[lang="vi"] .offline-account { white-space: normal; overflow-wrap: anywhere; }
+html[lang="id"] .checkin-card h1,
+html[lang="vi"] .checkin-card h1 { overflow-wrap: anywhere; }
+html[lang="id"] .checkin-card .badge,
+html[lang="vi"] .checkin-card .badge { white-space: normal; }
+.simple-executor-ui .sidebar .nav-link { min-height: 52px; padding-block: .7rem; }
+.simple-executor-ui .sidebar .sidebar-label { margin-bottom: .6rem; }
+.simple-executor-ui .page-heading { gap: .75rem; }
+.simple-executor-ui .executor-help { color: var(--muted); margin: .6rem 0 0; line-height: 1.5; }
+.simple-executor-ui .executor-checkin .checkin-quick-action .button { gap: .55rem; }
+.simple-executor-ui .executor-checkin .checkin-quick-action .button span { min-width: 0; }
+.simple-executor-ui .executor-checkin .checkin-ok { flex: none; }
+.simple-executor-ui .executor-receipt .success-receipt { text-align: start; }
+.simple-executor-ui .executor-receipt .success-receipt h2 { margin-block: .5rem 1rem; }
+.simple-executor-ui .checkin-details > div,
+.simple-executor-ui .success-receipt > div { gap: .6rem; }
+.simple-executor-ui .checkin-details > div > *,
+.simple-executor-ui .success-receipt > div > * { min-width: 0; overflow-wrap: anywhere; }
+.simple-executor-ui .account-actions { flex-wrap: wrap; }
+.simple-executor-ui .account-actions > * { min-width: 0; }
+.simple-executor-ui .account-actions .icon-button { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.simple-executor-ui .mobile-menu nav a,
+.simple-executor-ui .mobile-menu nav button { white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 1023px) {
+  .simple-executor-ui:not(.offline-shell) .app-content { padding-bottom: 0; }
+  .simple-executor-ui:not(.offline-shell) .main-content { padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+  .simple-executor-ui .ready-page-heading h1 { font-size: clamp(1.55rem, 5.8vw, 2.15rem); }
+  html[lang="id"] .field-header-actions,
+  html[lang="vi"] .field-header-actions { min-width: 0; gap: .45rem; }
+  html[lang="id"] .offline-sync-link,
+  html[lang="vi"] .offline-sync-link { min-width: 0; padding-inline: .65rem; }
+  html[lang="id"] .offline-sync-copy > span,
+  html[lang="vi"] .offline-sync-copy > span { white-space: nowrap; }
+  html[lang="id"] .offline-sync-copy small,
+  html[lang="vi"] .offline-sync-copy small { line-height: 1.2; white-space: normal; overflow-wrap: anywhere; }
+}
+@media (max-width: 600px) {
+  html[lang="id"] .mobile-header > .brand,
+  html[lang="vi"] .mobile-header > .brand,
+  html[lang="id"] .offline-header > .brand,
+  html[lang="vi"] .offline-header > .brand { flex: 0 0 34px; width: 34px; min-width: 34px; }
+  html[lang="id"] .mobile-header > .brand > span:last-child,
+  html[lang="vi"] .mobile-header > .brand > span:last-child,
+  html[lang="id"] .offline-header > .brand > span:last-child,
+  html[lang="vi"] .offline-header > .brand > span:last-child { display: none; }
+  html[lang="id"] .mobile-header .brand-mark,
+  html[lang="vi"] .mobile-header .brand-mark,
+  html[lang="id"] .offline-header .brand-mark,
+  html[lang="vi"] .offline-header .brand-mark { display: inline-flex; width: 34px; height: 38px; }
+  html[lang="id"] .mobile-header,
+  html[lang="vi"] .mobile-header,
+  html[lang="id"] .offline-header { gap: .45rem; }
+  html[lang="vi"] .offline-header { gap: .45rem; }
+  html[lang="id"] .scan-trigger-header,
+  html[lang="vi"] .scan-trigger-header { padding-inline: .55rem; flex: none; }
+  html[lang="id"] .offline-sync-symbol,
+  html[lang="vi"] .offline-sync-symbol { display: none; }
+  html[lang="id"] .offline-sync-copy,
+  html[lang="vi"] .offline-sync-copy { font-size: .85rem; }
+  html[lang="id"] .mobile-header .mobile-menu,
+  html[lang="vi"] .mobile-header .mobile-menu { flex: 0 0 44px; }
+  html[lang="id"] .offline-header .field-header-actions,
+  html[lang="vi"] .offline-header .field-header-actions { margin-inline-start: auto; }
+  html[lang="id"] .offline-page-heading,
+  html[lang="vi"] .offline-page-heading { gap: .7rem; }
+  html[lang="id"] .offline-main,
+  html[lang="vi"] .offline-main { overflow-wrap: anywhere; }
+  .simple-executor-ui .executor-checkin .checkin-card { padding: 1rem; }
+  .simple-executor-ui .executor-checkin .checkin-point-icon { display: none; }
+  .simple-executor-ui .executor-checkin .checkin-location { margin-block: .5rem; }
+  .simple-executor-ui .executor-receipt .checkin-card h1 { font-size: 1.8rem; }
+  .simple-executor-ui .executor-receipt .success-emblem { width: 48px; height: 48px; margin-bottom: .7rem; }
+}
+@media (max-width: 400px) {
+  html[lang="id"] .signin-mobile-name,
+  html[lang="vi"] .signin-mobile-name { display: none; }
+  html[lang="id"] .signin-brand-panel .brand,
+  html[lang="vi"] .signin-brand-panel .brand { letter-spacing: .03em; }
+  html[lang="id"] .ready-table .ready-status,
+  html[lang="vi"] .ready-table .ready-status { max-width: 6rem; }
+  html[lang="id"] .offline-sync-link,
+  html[lang="vi"] .offline-sync-link { padding-inline: .45rem; }
+  html[lang="id"] .ready-filters,
+  html[lang="vi"] .ready-filters { grid-template-columns: minmax(0,1fr) auto; gap: .45rem; }
+  html[lang="id"] .ready-filters .button,
+  html[lang="vi"] .ready-filters .button { padding-inline: .7rem; }
+  html[lang="id"] .checkin-details > div,
+  html[lang="vi"] .checkin-details > div { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+}
+@media (max-height: 420px) and (max-width: 1023px) {
+  .simple-executor-ui .executor-checkin .checkin-card { padding-block: .8rem; }
+  .simple-executor-ui .executor-checkin .checkin-point-icon { display: none; }
+  .simple-executor-ui .executor-checkin .checkin-quick-action { margin-block: .5rem; }
+  .simple-executor-ui .executor-receipt .success-emblem { display: none; }
+}
+@media (max-width: 300px) {
+  html[lang="id"] .mobile-header > .brand,
+  html[lang="vi"] .mobile-header > .brand,
+  html[lang="id"] .offline-header > .brand,
+  html[lang="vi"] .offline-header > .brand { display: none; }
+  html[lang="id"] .mobile-header .field-header-actions,
+  html[lang="vi"] .mobile-header .field-header-actions { margin-inline-start: auto; }
+  html[lang="id"] .ready-filters,
+  html[lang="vi"] .ready-filters { grid-template-columns: minmax(0,1fr); grid-auto-flow: row; }
+}

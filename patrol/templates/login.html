@@ -10,12 +10,12 @@
   <div class="login-layout">
     <div class="signin-brand-panel">
       <div class="signin-brand-inner">
-      <div class="brand"><span class="brand-mark">{{ icon('qr') }}</span><span>巡點</span></div>
-      <span class="signin-mobile-name">廠區巡檢管理</span>
+      <div class="brand"><span class="brand-mark">{{ icon('qr') }}</span><span>{{ t('巡點') }}</span></div>
+      <span class="signin-mobile-name">{{ t('廠區巡檢管理') }}</span>
       <div class="signin-intro">
-        <p class="signin-caption"><span aria-hidden="true"></span>巡檢工作台</p>
-        <p class="signin-intro-title">廠區巡檢<br>管理系統</p>
-        <p class="signin-intro-copy">到點掃描 QR Code，登記現場狀況。</p>
+        <p class="signin-caption"><span aria-hidden="true"></span>{{ t('巡檢工作台') }}</p>
+        <p class="signin-intro-title">{{ t('廠區巡檢') }}<br>{{ t('管理系統') }}</p>
+        <p class="signin-intro-copy">{{ t('到點掃描 QR Code，登記現場狀況。') }}</p>
       </div>
       <svg class="signin-map" viewBox="0 0 400 170" fill="none" aria-hidden="true" focusable="false">
         <g stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">
@@ -31,22 +31,22 @@
     </div>
     <section class="login-panel" aria-labelledby="signin-heading">
       <div class="login-card">
-        <h1 id="signin-heading">登入巡檢系統</h1>
-        <p class="signin-instruction">請使用系統管理員提供的帳密。</p>
+        <h1 id="signin-heading">{{ t('登入巡檢系統') }}</h1>
+        <p class="signin-instruction">{{ t('請使用系統管理員提供的帳密。') }}</p>
         {% include '_flashes.html' %}
         <form method="post" action="{{ url_for('login') }}" class="form-stack">
           {{ csrf() }}
           <input type="hidden" name="next" value="{{ next|default('') }}">
-          <label>員工帳號
-            <input type="text" name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="請輸入帳號" value="{{ request.form.get('username','')[:80] }}" enterkeyhint="next">
+          <label>{{ t('員工帳號') }}
+            <input type="text" name="username" required autocomplete="username" maxlength="80" autocapitalize="none" spellcheck="false" placeholder="{{ t('請輸入帳號') }}" value="{{ request.form.get('username','')[:80] }}" enterkeyhint="next">
           </label>
-          <label>密碼
-            <input type="password" name="password" required autocomplete="current-password" placeholder="請輸入密碼" enterkeyhint="go">
+          <label>{{ t('密碼') }}
+            <input type="password" name="password" required autocomplete="current-password" placeholder="{{ t('請輸入密碼') }}" enterkeyhint="go">
           </label>
-          <button class="button button-primary button-full" type="submit">登入 {{ icon('arrow') }}</button>
+          <button class="button button-primary button-full" type="submit">{{ t('登入') }} {{ icon('arrow') }}</button>
         </form>
-        <div class="login-help">{{ icon('phone') }}<p><strong>首次使用手機</strong>登入後申請瀏覽器綁定，核准即可打卡。</p></div>
-        <p class="login-footnote">帳密問題請聯繫系統管理員。</p>
+        <div class="login-help">{{ icon('phone') }}<p><strong>{{ t('首次使用手機') }}</strong>{{ t('登入後申請瀏覽器綁定，核准即可打卡。') }}</p></div>
+        <p class="login-footnote">{{ t('帳密問題請聯繫系統管理員。') }}</p>
       </div>
     </section>
   </div>

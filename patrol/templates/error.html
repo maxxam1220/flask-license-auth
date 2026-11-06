@@ -24,11 +24,11 @@
 {% endblock %}
 {% block content %}
   <section class="error-state" aria-labelledby="error-heading">
-    <span class="error-number">錯誤 {{ code }}</span>
-    <h1 id="error-heading">{{ title }}</h1>
-    <p>{{ message or explanations.get(code, '請返回再試一次，或聯繫系統管理員。') }}</p>
-    <a class="button button-primary" href="{{ recovery_url or (url_for('dashboard') if current_user else url_for('login')) }}">
-      {{ icon('back') }}<span>{{ recovery_label or ('返回巡檢總覽' if current_user else '返回登入') }}</span>
+    <span class="error-number">{{ t('錯誤') }} {{ code }}</span>
+    <h1 id="error-heading">{{ t(title) }}</h1>
+    <p>{{ t(message or explanations.get(code, '請返回再試一次，或聯繫系統管理員。')) }}</p>
+    <a class="button button-primary" href="{{ recovery_url or (home_url if current_user else url_for('login')) }}">
+      {{ icon('back') }}<span>{{ t('返回今日待簽到' if simple_executor_ui else recovery_label or ('返回巡檢總覽' if current_user else '返回登入')) }}</span>
     </a>
   </section>
 {% endblock %}

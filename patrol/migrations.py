@@ -17,7 +17,7 @@ from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Lo
                     ENGINEERING_TITLE_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 13
+LATEST_VERSION = 14
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -123,6 +123,9 @@ def _upgrade_locked(connection) -> int:
             OfflineSubmission.__table__.create(connection, checkfirst=True)
         if current < 13:
             _add_missing_columns(connection, User.__tablename__, [User.__table__.c.engineering_inspector_title])
+        if current < 14:
+            _add_missing_columns(connection, User.__tablename__,
+                                 [User.__table__.c.ui_language, User.__table__.c.simple_executor_ui])
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -434,7 +437,7 @@ def _validate_current(connection):
     _validate_login_events(inspector)
     _validate_offline_submissions(inspector)
     for table_name, required in {
-        User.__tablename__: ("general_manager_title", "engineering_inspector_title"),
+        User.__tablename__: ("general_manager_title", "engineering_inspector_title", "ui_language", "simple_executor_ui"),
         "patrol_points": ("category", "workflow_mode"),
         "patrol_point_schedules": ("category", "workflow_mode", "legacy_unscheduled"),
         "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled",
@@ -449,12 +452,20 @@ def _validate_current(connection):
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
             raise SchemaMigrationError(f"Required non-null columns are missing in {table_name}.")
-        for name in ("general_manager_title", "engineering_inspector_title", "executor_visit"):
+        for name in ("general_manager_title", "engineering_inspector_title", "simple_executor_ui", "executor_visit"):
             if name in required:
                 column = columns[name]
                 if not isinstance(column["type"], db.Boolean) or _compact(str(column["default"])) not in ("false", "0"):
                     raise SchemaMigrationError(f"Expected a boolean {table_name}.{name} with a false default.")
     title_checks = {check["name"]: check["sqltext"] for check in inspector.get_check_constraints(User.__tablename__)}
+    language_column = next(column for column in inspector.get_columns(User.__tablename__) if column["name"] == "ui_language")
+    language_check = re.sub(r"::(?:character varying|text)(?:\[\])?", "",
+                            str(title_checks.get("patrol_user_ui_language", "")).lower())
+    language_check = re.sub(r"[()\s]", "", language_check)
+    if (not isinstance(language_column["type"], db.String) or getattr(language_column["type"], "length", None) != 10
+            or str(language_column["default"]).replace("::character varying", "") != "'zh-Hant'"
+            or language_check not in ("ui_languagein'zh-hant','id','vi'", "ui_language=anyarray['zh-hant','id','vi']")):
+        raise SchemaMigrationError("The account language column or allowed-language constraint is invalid.")
     normalize_title = lambda value: re.sub(r"::text|[()\s]", "", str(value).lower())
     if normalize_title(title_checks.get("patrol_engineering_inspector_title", "")) != normalize_title(ENGINEERING_TITLE_RULE):
         raise SchemaMigrationError("The engineering inspector display title constraint is missing or invalid.")

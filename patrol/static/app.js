@@ -1,5 +1,6 @@
 /* Progressive enhancements. Core navigation and forms remain server-rendered. */
 (() => {
+  const t = (source, params = {}) => window.PatrolI18n?.t(source, params) ?? String(source).replace(/\{(\w+)\}/g, (match, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : match);
   const savedButtons = new WeakMap();
   let pendingConfirmation = null;
 
@@ -75,9 +76,9 @@
         if (form.dataset.confirm && form.dataset.confirmed !== 'true' && dialog?.showModal) {
           event.preventDefault();
           pendingConfirmation = { form, submitter: event.submitter };
-          dialogTitle.textContent = form.dataset.confirmTitle || '確認這項操作';
-          dialogMessage.textContent = form.dataset.confirm;
-          dialogConfirm.textContent = form.dataset.confirmLabel || '確認繼續';
+          dialogTitle.textContent = t(form.dataset.confirmTitle || '確認這項操作');
+          dialogMessage.textContent = t(form.dataset.confirm);
+          dialogConfirm.textContent = t(form.dataset.confirmLabel || '確認繼續');
           dialogConfirm.classList.toggle('button-danger', form.dataset.confirmDanger === 'true');
           dialogConfirm.classList.toggle('button-primary', form.dataset.confirmDanger !== 'true');
           dialog.showModal();
@@ -96,9 +97,9 @@
           button.dataset.busyButton = 'true';
           // Avoid dropping a named submitter's value from native form submission.
           if (!button.name) button.disabled = true;
-          if (button === submitter || !submitter) button.textContent = button.dataset.loadingText || '正在送出…';
+          if (button === submitter || !submitter) button.textContent = t(button.dataset.loadingText || '正在送出…');
         });
-        announce('正在送出，請稍候。請勿重複提交。');
+        announce(t('正在送出，請稍候。請勿重複提交。'));
       });
     });
 
@@ -131,7 +132,7 @@
         if (!expanded && fields.contains(document.activeElement)) toggle.focus();
         fields.hidden = !expanded;
         toggle.setAttribute('aria-expanded', String(expanded));
-        action.textContent = expanded ? '收合查詢' : '調整查詢';
+        action.textContent = expanded ? t('收合查詢') : t('調整查詢');
       };
       toggle.addEventListener('click', () => {
         expandedOnMobile = !expandedOnMobile;
@@ -162,8 +163,8 @@
       const validateRange = () => {
         end.setCustomValidity('');
         if (!begin.value || !end.value) return;
-        if (begin.value > end.value) end.setCustomValidity('結束日期不能早於開始日期。');
-        else if (end.valueAsNumber - begin.valueAsNumber > 366 * 86400000) end.setCustomValidity('一次最多查詢 367 天，請縮小日期範圍。');
+        if (begin.value > end.value) end.setCustomValidity(t('結束日期不能早於開始日期。'));
+        else if (end.valueAsNumber - begin.valueAsNumber > 366 * 86400000) end.setCustomValidity(t('一次最多查詢 367 天，請縮小日期範圍。'));
       };
       begin.addEventListener('input', validateRange);
       end.addEventListener('input', validateRange);
@@ -208,13 +209,13 @@
         const registered = registeredCode(value);
         if (registered) {
           if (String(registered.floor) !== floor.value || form.elements.namedItem('category')?.value !== 'general') {
-            code.setCustomValidity('清冊原始編號須對應總務分類與原樓層。');
+            code.setCustomValidity(t('清冊原始編號須對應總務分類與原樓層。'));
           }
           return;
         }
         const prefix = floor.selectedOptions[0]?.textContent.trim().toUpperCase();
         if (!/^[A-Z0-9]+-[A-Z0-9]{2,20}$/i.test(value) || !value.toUpperCase().startsWith(`${prefix}-`)) {
-          code.setCustomValidity(`點位編號需與樓層一致，請使用 ${prefix}- 開頭。`);
+          code.setCustomValidity(t('點位編號需與樓層一致，請使用 {prefix}- 開頭。', { prefix }));
         }
       };
       code.addEventListener('input', validatePoint);
@@ -238,7 +239,7 @@
     });
 
     document.querySelectorAll('textarea[data-nonblank]').forEach(input => {
-      const validate = () => input.setCustomValidity(input.value && !input.value.trim() ? '請填寫說明，不能只輸入空白。' : '');
+      const validate = () => input.setCustomValidity(input.value && !input.value.trim() ? t('請填寫說明，不能只輸入空白。') : '');
       input.addEventListener('input', validate);
       validate();
     });
@@ -280,13 +281,13 @@
 
       function validatePhotos(files) {
         let message = '';
-        if (files.length > 3) message = `目前選了 ${files.length} 張照片，最多只能附 3 張。請${canCombine ? '移除多餘照片，或清空後重新選擇' : '重新選擇'}。`;
-        else if (files.some(file => file.size === 0)) message = '有照片是空白檔案，請移除並重新選擇。';
-        else if (files.some(file => file.size > maxSize)) message = '有照片超過 8 MB，請移除或更換較小的照片。';
-        else if (files.some(file => !supportsPhoto(file))) message = '請選擇 JPG、PNG、WebP 或 HEIC 照片。';
+        if (files.length > 3) message = t('目前選了 {count} 張照片，最多只能附 3 張。請{action}。', { count: files.length, action: canCombine ? t('移除多餘照片，或清空後重新選擇') : t('重新選擇') });
+        else if (files.some(file => file.size === 0)) message = t('有照片是空白檔案，請移除並重新選擇。');
+        else if (files.some(file => file.size > maxSize)) message = t('有照片超過 8 MB，請移除或更換較小的照片。');
+        else if (files.some(file => !supportsPhoto(file))) message = t('請選擇 JPG、PNG、WebP 或 HEIC 照片。');
         input.setCustomValidity(message);
         input.setAttribute('aria-invalid', message ? 'true' : 'false');
-        feedback.textContent = message || (files.length ? `已選 ${files.length} 張，確認打卡時才會上傳。` : '');
+        feedback.textContent = message || (files.length ? t('已選 {count} 張，確認打卡時才會上傳。', { count: files.length }) : '');
         feedback.classList.toggle('is-error', !!message);
       }
 
@@ -299,8 +300,8 @@
         if (clear) clear.parentElement.hidden = !files.length;
         const atLimit = canCombine && files.length >= 3;
         input.setAttribute('aria-disabled', String(atLimit));
-        if (caption) caption.textContent = atLimit ? '已達照片張數上限' : !files.length ? '選擇現場照片' : canCombine ? '繼續新增照片' : '重新選擇照片';
-        if (modeHint) modeHint.textContent = atLimit ? '請先移除照片再新增。' : canCombine ? '可分次拍照或選取，相片會累加。' : '重新選取會取代目前選擇。';
+        if (caption) caption.textContent = atLimit ? t('已達照片張數上限') : !files.length ? t('選擇現場照片') : canCombine ? t('繼續新增照片') : t('重新選擇照片');
+        if (modeHint) modeHint.textContent = atLimit ? t('請先移除照片再新增。') : canCombine ? t('可分次拍照或選取，相片會累加。') : t('重新選取會取代目前選擇。');
         validatePhotos(files);
         files.slice(0, 6).forEach((file, index) => {
           const figure = document.createElement('figure');
@@ -309,21 +310,21 @@
           imageContainer.className = 'photo-preview-image';
           const placeholder = document.createElement('span');
           placeholder.className = 'photo-preview-placeholder';
-          placeholder.textContent = '照片預覽';
+          placeholder.textContent = t('照片預覽');
           imageContainer.append(placeholder);
           // Preview only recognised image formats; the server validates actual file contents.
-          if (file.size > maxSize) placeholder.textContent = '超過 8 MB，請更換照片';
-          else if (file.size === 0) placeholder.textContent = '空白檔案，請重新選擇';
+          if (file.size > maxSize) placeholder.textContent = t('超過 8 MB，請更換照片');
+          else if (file.size === 0) placeholder.textContent = t('空白檔案，請重新選擇');
           else if (supportsPhoto(file)) {
             const image = document.createElement('img');
             const url = URL.createObjectURL(file);
             previewUrls.push(url);
-            image.alt = `已選照片 ${index + 1}`;
+            image.alt = t('已選照片 {number}', { number: index + 1 });
             image.onload = () => { placeholder.hidden = true; };
-            image.onerror = () => { image.remove(); placeholder.hidden = false; placeholder.textContent = '此格式無法預覽，仍可上傳'; };
+            image.onerror = () => { image.remove(); placeholder.hidden = false; placeholder.textContent = t('此格式無法預覽，仍可上傳'); };
             image.src = url;
             imageContainer.append(image);
-          } else placeholder.textContent = '不支援的檔案格式';
+          } else placeholder.textContent = t('不支援的檔案格式');
           figure.append(imageContainer);
           const caption = document.createElement('figcaption');
           const name = document.createElement('span');
@@ -337,8 +338,8 @@
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'button button-secondary button-small photo-remove';
-            remove.textContent = '移除';
-            remove.setAttribute('aria-label', `移除照片 ${index + 1}：${file.name}`);
+            remove.textContent = t('移除');
+            remove.setAttribute('aria-label', t('移除照片 {number}：{name}', { number: index + 1, name: file.name }));
             remove.addEventListener('click', () => {
               try {
                 setFiles(files.filter((_, itemIndex) => itemIndex !== index));
@@ -347,7 +348,7 @@
               } catch (_) {
                 canCombine = false;
                 renderPhotos();
-                feedback.textContent = '此瀏覽器不支援逐張移除，請使用檔案選擇按鈕重新選擇照片。';
+                feedback.textContent = t('此瀏覽器不支援逐張移除，請使用檔案選擇按鈕重新選擇照片。');
               }
             });
             figure.append(remove);
@@ -369,7 +370,7 @@
           } catch {
             canCombine = false;
             renderPhotos();
-            feedback.textContent += ' 此瀏覽器只能保留最後一次選取的照片，請核對清單。';
+            feedback.textContent += t(' 此瀏覽器只能保留最後一次選取的照片，請核對清單。');
             return;
           }
         }
@@ -378,7 +379,7 @@
       clear?.addEventListener('click', () => {
         input.value = '';
         renderPhotos();
-        feedback.textContent = '已清空照片。';
+        feedback.textContent = t('已清空照片。');
         input.focus();
       });
       window.addEventListener('pageshow', event => { if (event.persisted) renderPhotos(); });

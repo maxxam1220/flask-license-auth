@@ -95,6 +95,22 @@ def test_offline_shell_is_identical_public_content_for_every_session_state(appli
     assert_error(anytime.inspector.get("/api/offline/prepare"), "password_required", status=403)
 
 
+def test_offline_shell_never_caches_account_language_or_private_point_names(application, anytime):
+    anonymous = application.test_client().get("/offline")
+    user = db.session.scalar(db.select(User).where(User.username == "exec"))
+    for language in ("id", "vi"):
+        user.ui_language = language
+        user.simple_executor_ui = True
+        db.session.commit()
+        response = anytime.executor.get("/offline")
+        assert response.data == anonymous.data
+        assert "抽風機/冷卻水塔/桶槽區" not in response.text
+        prepared = prepare(anytime.executor)
+        assert prepared["identity"]["ui_language"] == language
+        assert prepared["identity"]["simple_executor_ui"] is True
+        assert all(set(p["name_i18n"]) == {"id", "vi"} for p in prepared["points"])
+
+
 @pytest.mark.parametrize("change", ["disabled", "role", "category", "password-version", "binding"])
 def test_prepared_grant_cannot_bypass_current_account_or_device_permissions(application, anytime, change):
     a = anytime
