@@ -1,4 +1,20 @@
 {
+  "登入帳號": {
+    "id": "Login",
+    "vi": "Đăng nhập"
+  },
+  "已登入・尚未準備": {
+    "id": "Sudah masuk · belum disiapkan",
+    "vi": "Đã đăng nhập · chưa chuẩn bị"
+  },
+  "請使用已核准的綁定瀏覽器更新離線資料。": {
+    "id": "Gunakan browser tertaut yang telah disetujui untuk memperbarui data offline.",
+    "vi": "Hãy dùng trình duyệt đã liên kết và được phê duyệt để cập nhật dữ liệu ngoại tuyến."
+  },
+  "查看綁定狀態": {
+    "id": "Lihat status perangkat tertaut",
+    "vi": "Xem trạng thái liên kết"
+  },
   "職安巡檢員": {
     "id": "Petugas inspeksi K3",
     "vi": "Nhân viên kiểm tra an toàn lao động"

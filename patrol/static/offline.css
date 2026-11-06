@@ -83,6 +83,8 @@ html[data-offline-locale-pending] .offline-shell { visibility: hidden; }
 .offline-point-tags > span:not(:empty) { padding: 5px 10px; border-radius: 6px; background: #edf4ec; color: #3c654d; font-size: 14px; font-weight: 650; }
 .offline-confirm-action { padding: 17px 0; }
 .offline-confirm-action .button { min-height: 54px; gap: 10px; font-size: 19px; }
+.offline-confirm-action .button > strong[lang="en"] { flex: none; white-space: nowrap; }
+.offline-confirm-action .button > span { min-width: 0; }
 .offline-confirm-action p { margin-top: 8px; font-size: 13px; text-align: center; color: #6a795f; line-height: 1.6; }
 .offline-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .offline-abnormal { display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 15px; margin: 0 0 20px; border: 1px solid #ecd8b7; border-radius: 10px; background: #fffaf1; cursor: pointer; }

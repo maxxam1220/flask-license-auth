@@ -1078,5 +1078,9 @@
   "Scan the QR code. Check the location, then tap OK.": {
     "id": "Pindai QR, periksa lokasinya, lalu tekan OK.",
     "vi": "Quét QR, kiểm tra địa điểm, rồi nhấn OK."
+  },
+  "到巡檢點掃描現場 QR Code，再核對點位並確認打卡。": {
+    "id": "Pindai kode QR di lokasi pemeriksaan, periksa titiknya, lalu konfirmasi check-in.",
+    "vi": "Quét mã QR tại điểm kiểm tra, kiểm tra đúng địa điểm rồi xác nhận điểm danh."
   }
 }

@@ -46,7 +46,7 @@
   "帳號或密碼不正確，或帳號已停用。": {"id":"Akun atau kata sandi salah, atau akun tidak aktif.", "vi":"Sai tài khoản hoặc mật khẩu, hoặc tài khoản đã bị khóa."},
   "帳號設定已更新，請重新登入。": {"id":"Pengaturan akun berubah. Silakan masuk kembali.", "vi":"Cài đặt tài khoản đã thay đổi. Vui lòng đăng nhập lại."},
   "目前密碼不正確。": {"id":"Kata sandi saat ini salah.", "vi":"Mật khẩu hiện tại không đúng."},
-  "新密碼請使用 {min} 至 {max} 個字元。": {"id":"Gunakan {min}–{max} karakter untuk kata sandi baru.", "vi":"Mật khẩu mới phải có {min}–{max} ký tự."},
+  "新密碼請使用 {minimum} 至 {maximum} 個字元。": {"id":"Gunakan {minimum}–{maximum} karakter untuk kata sandi baru.", "vi":"Mật khẩu mới phải có {minimum}–{maximum} ký tự."},
   "兩次輸入的新密碼不同。": {"id":"Kedua kata sandi baru tidak sama.", "vi":"Hai mật khẩu mới không khớp."},
   "新密碼不可與目前密碼相同，請設定不同的密碼。": {"id":"Kata sandi baru harus berbeda dari kata sandi saat ini.", "vi":"Mật khẩu mới phải khác mật khẩu hiện tại."},
   "密碼已更新。": {"id":"Kata sandi diperbarui.", "vi":"Đã đổi mật khẩu."},

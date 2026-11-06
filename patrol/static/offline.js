@@ -454,7 +454,7 @@
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
       pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
       navigationAllowed = false, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, updatingLocale = false;
-    let uiRequest = null, uiRequestEpoch = 0;
+    let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null;
     const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
     const uiPreferencesFromIdentity = identity => ({ ui_language: identity.ui_language,
       simple_executor_ui: identity.role === 'executor' && identity.simple_executor_ui === true });
@@ -468,10 +468,13 @@
       try {
         const response = await root.fetch('/api/ui-preferences', { credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal });
         const value = await response.json();
-        if (!response.ok || value?.ok !== true || epoch !== uiRequestEpoch || identityKey !== uiIdentityKey(latestState)) return;
+        if (epoch !== uiRequestEpoch || identityKey !== uiIdentityKey(latestState)) return;
+        if (response.status === 401) { uiSessionKnown = false; if (latestState) render(latestState); return; }
+        if (!response.ok || value?.ok !== true) return;
+        const previousLocale = root.PatrolI18n?.getLocale();
         updatingLocale = true;
-        try { root.PatrolI18n?.acceptPreferences(value); } finally { updatingLocale = false; }
-        if (latestState) { render(latestState); renderPhotos(); }
+        try { if (root.PatrolI18n?.acceptPreferences(value)) uiSessionKnown = true; } finally { updatingLocale = false; }
+        if (latestState) { render(latestState); if (root.PatrolI18n?.getLocale() !== previousLocale) renderPhotos(); }
       } catch (_) { /* A presentation lookup must never block capture, sync or local recovery. */ }
       finally { clearTimeout(timer); if (uiRequest === controller) uiRequest = null; }
     }
@@ -491,15 +494,23 @@
     const slotText = slot => slot === 'am' ? t('第 1 次') : slot === 'pm' ? t('第 2 次') : t('本次');
     const stageText = stage => ({ execute: t('執行簽到'), inspect: t('巡檢'), visit: t('直接簽到') }[stage] || t('巡檢'));
     const timeText = iso => { try { return new Date(iso).toLocaleString(({ id: 'id-ID', vi: 'vi-VN' })[root.PatrolI18n?.getLocale()] || 'zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); } catch { return iso; } };
-    const reportError = error => { text('status', t(error.message || '操作未完成，原有資料仍保留。')); if (one('status')) one('status').dataset.state = 'error'; one('status')?.focus(); };
+    function showNotice(source, tone = 'error') {
+      localNotice = { source, tone };
+      text('status', t(source));
+      if (one('status')) one('status').dataset.state = tone;
+      one('status')?.focus();
+    }
+    const reportError = error => showNotice(error.message || '操作未完成，原有資料仍保留。');
     // Home pages require a live session and are deliberately never cached.
     // Keep the current draft/queue in place when the device knows it is offline.
     for (const home of all('home')) home.addEventListener('click', event => {
       if (navigator.onLine !== false) return;
       event.preventDefault();
-      text('status', t('目前沒有網路，請連線後再返回首頁；此手機的暫存仍保留。'));
-      if (one('status')) one('status').dataset.state = 'offline';
-      one('status')?.focus();
+      showNotice('目前沒有網路，請連線後再返回首頁；此手機的暫存仍保留。', 'offline');
+    });
+    one('login')?.addEventListener('click', event => {
+      if (navigator.onLine !== false) return;
+      event.preventDefault(); showNotice('目前沒有網路，資料仍保留在此手機。', 'offline');
     });
     async function showPoint() {
       const run = ++pointGeneration, section = one('point'); if (!section) return;
@@ -531,13 +542,22 @@
     }
     function render(state) {
       const oldIdentity = latestState?.identity;
-      if (shell && state.identity && ((oldIdentity && uiIdentityKey(state) !== uiIdentityKey(latestState)) || preparing)) {
+      if (latestState && latestState.owner !== state.owner) {
+        localNotice = null;
+        if (oldIdentity) uiSessionKnown = null;
+      }
+      const manifestUIKey = state.identity ? uiIdentityKey(state) : null;
+      if (shell && state.identity && ((lastManifestUIKey && manifestUIKey !== lastManifestUIKey) || preparing)) {
         // A freshly prepared manifest supersedes older display hints. This
         // only changes labels; capture still requires the manifest's grants.
         cancelUIPreferences();
         updatingLocale = true;
         try { root.PatrolI18n?.acceptPreferences(uiPreferencesFromIdentity(state.identity)); } finally { updatingLocale = false; }
       }
+      // A cross-tab login can lock the old identity before the new manifest
+      // arrives. Retain only this comparison key through that transition so
+      // the new account's language replaces the old confirmed display hint.
+      if (manifestUIKey) lastManifestUIKey = manifestUIKey;
       latestState = state;
       if (shell) {
         // The cached document is public. Display preferences also work on an
@@ -570,17 +590,25 @@
         if (viewOwner && viewOwner !== state.owner) { selectedToken = null; selectedOwner = null; selectedSnapshot = null; form?.reset(); resetPhotos(); if (one('saved')) one('saved').hidden = true; }
         viewOwner = state.owner;
       }
-      text('account', state.identity ? `${state.identity.name} · ${state.identity.role_label ? t(state.identity.role_label) : stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : t('尚未解鎖離線資料'));
-      text('validity', state.prepared ? t('可暫存至 {captureUntil}；補傳期限 {syncUntil}', { captureUntil: timeText(state.captureUntil), syncUntil: timeText(state.syncUntil) }) : state.locked ? t('請先連線登入原帳號，並準備今日資料。') : t('今日資料已到期。待補傳紀錄仍保留，請連線補傳。'));
-      text('status', state.message ? t(state.message) : (!state.online ? t('目前離線。暫存不等於打卡完成，請連線後補傳。') : state.prepared ? t('今日離線資料已備妥。') : t('請先準備今日離線資料。')));
-      if (one('status')) one('status').dataset.state = !state.online ? 'offline' : state.blocked ? 'blocked' :
-        !state.sync?.running && (state.sync?.errorCode || state.sync?.failed > 0) ? 'error' : 'online';
+      const signedIn = state.online && uiSessionKnown === true;
+      text('account', state.identity ? `${state.identity.name} · ${state.identity.role_label ? t(state.identity.role_label) : stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : t(signedIn ? '已登入・尚未準備' : '尚未解鎖離線資料'));
+      text('validity', state.prepared ? t('可暫存至 {captureUntil}；補傳期限 {syncUntil}', { captureUntil: timeText(state.captureUntil), syncUntil: timeText(state.syncUntil) }) : state.locked ? t(signedIn ? '請使用已核准的綁定瀏覽器更新離線資料。' : '請先連線登入原帳號，並準備今日資料。') : t('今日資料已到期。待補傳紀錄仍保留，請連線補傳。'));
+      text('status', localNotice ? t(localNotice.source) : state.message ? t(state.message) : (!state.online ? t('目前離線。暫存不等於打卡完成，請連線後補傳。') : state.prepared ? t('今日離線資料已備妥。') : t('請先準備今日離線資料。')));
+      if (one('status')) one('status').dataset.state = localNotice?.tone || (!state.online ? 'offline' : state.blocked ? 'blocked' :
+        !state.sync?.running && (state.sync?.errorCode || state.sync?.failed > 0) ? 'error' : 'online');
       text('queue-summary', state.sync?.running ? t('正在處理 {processed}/{total} 筆 · 已確認 {saved} 筆 · {seconds} 秒', { processed: state.sync.processed, total: state.sync.total, saved: state.sync.saved, seconds: state.sync.elapsed }) :
         state.blocked ? t('{pending} 筆待補傳，其中 {blocked} 筆需處理', { pending: state.pending, blocked: state.blocked }) : t('{pending} 筆待補傳', { pending: state.pending }));
       if (one('sync')) one('sync').disabled = state.locked || !state.pending || state.sync?.running;
       if (one('cancel-sync')) one('cancel-sync').hidden = !state.sync?.running;
       if (one('prepare')) one('prepare').disabled = state.supported === false || preparing || !state.online || state.sync?.running;
-      if (one('login')) one('login').hidden = !state.locked;
+      if (one('login')) {
+        const action = one('login'), label = action.querySelector('[data-offline-account-action-label]');
+        const source = signedIn ? '查看綁定狀態' : '登入帳號';
+        action.hidden = !state.locked;
+        action.href = signedIn ? '/devices' : '/login?next=/offline';
+        action.setAttribute('aria-label', t(source));
+        if (label) { label.dataset.i18n = source; if (label.textContent !== t(source)) label.textContent = t(source); }
+      }
       if (one('empty')) one('empty').hidden = state.pending > 0;
       if (savedClientId && one('saved')) {
         const queued = state.queue.find(row => row.client_id === savedClientId && !row.stale_owner);
@@ -595,7 +623,9 @@
         }
       }
       const list = one('queue');
-      if (list) {
+      const nextQueueSignature = JSON.stringify([state.queue, Boolean(state.sync?.running), root.PatrolI18n?.getLocale()]);
+      if (list && queueSignature !== nextQueueSignature) {
+        queueSignature = nextQueueSignature;
         list.replaceChildren();
         for (const row of state.queue) {
           const item = document.createElement('li'); item.className = 'offline-queue-item';
@@ -606,7 +636,7 @@
           const details = document.createElement('small'); details.textContent = `${row.is_abnormal ? t('異常回報') + ' · ' : ''}${t('{count} 張照片', { count: row.photo_count })}${row.note ? ' · ' + row.note : ''}`;
           const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button button-secondary button-small'; remove.disabled = state.sync?.running;
           remove.textContent = t('刪除本機紀錄'); remove.addEventListener('click', async () => {
-            if (confirm(t('確定刪除 {code} 這筆本機資料與照片？\n若伺服器尚未收到，刪除後將無法補傳；已存在伺服器的紀錄不會被刪除。', { code: row.code }))) try { await core.remove(row.client_id, true); } catch (error) { reportError(error); }
+            if (confirm(t('確定刪除 {code} 這筆本機資料與照片？\n若伺服器尚未收到，刪除後將無法補傳；已存在伺服器的紀錄不會被刪除。', { code: row.code }))) try { localNotice = null; await core.remove(row.client_id, true); } catch (error) { reportError(error); }
           });
           item.append(heading, info, status, details, remove); list.append(item);
         }
@@ -672,6 +702,7 @@
     form?.addEventListener('reset', () => { resetPhotos(); });
     form?.addEventListener('submit', async event => {
       event.preventDefault(); if (form.dataset.submitting === 'true') return;
+      localNotice = null;
       form.dataset.submitting = 'true'; const submit = one('save'); if (submit) submit.disabled = true;
       if (one('fields')) one('fields').disabled = true;
       const captureOwner = selectedSnapshot?.point.owner || selectedOwner;
@@ -683,7 +714,7 @@
         form.reset(); resetPhotos(); text('photo-status', ''); selectedToken = null; selectedSnapshot = null; savedClientId = row.client_id;
         if (latestState?.owner !== captureOwner) {
           if (one('saved')) one('saved').hidden = true;
-          text('status', t('本筆已暫存在手機。請連線登入原帳號後，到同步查看。'));
+          showNotice('本筆已暫存在手機。請連線登入原帳號後，到同步查看。', 'offline');
           return;
         }
         if (one('saved')) one('saved').hidden = false;
@@ -694,13 +725,20 @@
     }, true);
     one('prepare')?.addEventListener('click', async () => {
       if (preparing) return;
+      localNotice = null;
       preparing = true; const button = one('prepare'); button.disabled = true; button.setAttribute('aria-busy', 'true');
       try { await core.prepare(); } catch (error) { reportError(error); }
-      finally { preparing = false; button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; }
+      finally { preparing = false; button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
     });
-    one('sync')?.addEventListener('click', () => core.sync().catch(reportError));
+    one('sync')?.addEventListener('click', () => { localNotice = null; core.sync().catch(reportError); });
     one('cancel-sync')?.addEventListener('click', () => core.cancelSync());
-    one('close-point')?.addEventListener('click', () => { if (form?.dataset.submitting === 'true') return; if (draftPresent(form) && !confirm(t('離開點位會放棄尚未暫存的內容，確定離開？'))) return; selectedToken = null; selectedSnapshot = null; form?.reset(); resetPhotos(); showPoint().catch(reportError); });
+    one('close-point')?.addEventListener('click', () => {
+      if (form?.dataset.submitting === 'true') return;
+      if (draftPresent(form) && !confirm(t('離開點位會放棄尚未暫存的內容，確定離開？'))) return;
+      localNotice = null; selectedToken = null; selectedSnapshot = null;
+      form?.reset(); resetPhotos();
+      if (latestState) render(latestState); else showPoint().catch(reportError);
+    });
     document.addEventListener('submit', async event => {
       const logout = event.target; if (!(logout instanceof HTMLFormElement) || new URL(logout.action, location.origin).pathname !== '/logout') return;
       event.preventDefault(); event.stopImmediatePropagation();
@@ -774,13 +812,13 @@
         for (const item of originalControls) item.control.disabled = item.disabled;
       }
     }, true);
-    window.addEventListener('online', () => { core.getState().then(refreshUIPreferences).catch(reportError); });
-    window.addEventListener('offline', () => { cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
+    window.addEventListener('online', () => { if (localNotice?.tone === 'offline') localNotice = null; core.getState().then(refreshUIPreferences).catch(reportError); });
+    window.addEventListener('offline', () => { uiSessionKnown = null; cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
     window.addEventListener('pageshow', event => {
       navigationAllowed = false; renderPhotos();
       core.getState().then(() => { if (event.persisted) refreshUIPreferences(); }).catch(() => {});
     });
-    window.addEventListener('pagehide', () => { cancelUIPreferences(); releasePreviews(); });
+    window.addEventListener('pagehide', () => { uiSessionKnown = null; cancelUIPreferences(); releasePreviews(); });
     document.addEventListener('patrol:locale-changed', () => { if (!updatingLocale && latestState) { render(latestState); renderPhotos(); } });
     (async () => {
       try {

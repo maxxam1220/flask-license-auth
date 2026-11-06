@@ -61,7 +61,7 @@
   <section class="offline-panel offline-readiness" id="offline-readiness" aria-labelledby="offline-readiness-title">
     <div class="offline-section-heading"><h2 id="offline-readiness-title"><span data-i18n="離線準備">{{ t('離線準備') }}</span></h2><span class="offline-account" data-offline-account><span data-i18n="尚未讀取帳號">{{ t('尚未讀取帳號') }}</span></span></div>
     <p class="offline-validity" data-offline-validity><span data-i18n="請先在有網路時登入，使用已核准的手機完成準備。">{{ t('請先在有網路時登入，使用已核准的手機完成準備。') }}</span></p>
-    <div class="offline-actions"><button class="button button-secondary" type="button" data-offline-prepare>{{ icon('download') }}<span data-i18n="更新離線資料">{{ t('更新離線資料') }}</span></button><a class="button button-secondary" href="/login?next=/offline" data-offline-login>{{ icon('login') }}<span data-i18n="登入帳號">{{ t('登入帳號') }}</span></a></div>
+    <div class="offline-actions"><button class="button button-secondary" type="button" data-offline-prepare>{{ icon('download') }}<span data-i18n="更新離線資料">{{ t('更新離線資料') }}</span></button><a class="button button-secondary" href="/login?next=/offline" data-offline-login>{{ icon('login') }}<span data-offline-account-action-label data-i18n="登入帳號">{{ t('登入帳號') }}</span></a></div>
     <p class="offline-help"><span data-i18n="暫存紀錄只保存在目前瀏覽器。同步完成前，請保留瀏覽器資料。">{{ t('暫存紀錄只保存在目前瀏覽器。同步完成前，請保留瀏覽器資料。') }}</span></p>
   </section>
   <footer class="offline-footer"><span><span data-i18n="巡點 · 廠區巡檢系統">{{ t('巡點 · 廠區巡檢系統') }}</span></span><span><span data-i18n="時間以台灣時間顯示">{{ t('時間以台灣時間顯示') }}</span></span></footer>
