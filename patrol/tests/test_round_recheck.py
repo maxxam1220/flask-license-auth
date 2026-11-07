@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from receipt_urls import without_voice_feedback
 import app as patrol
 from models import DeviceBinding, Inspection, PatrolExecution, db
 from test_app import FIXED_NOW, application
@@ -129,7 +130,7 @@ def test_recheck_warns_before_carrying_draft_to_changed_point(application, monke
 def test_rescanned_receipt_separates_patrol_actions_from_record_search(application):
     executor, inspector, _, _, qr, _, _ = team(application)
     for actor, stage in ((executor, "執行簽到收據"), (inspector, "巡檢收據")):
-        receipt = actor.post(qr + "/confirm", data=payload(actor, qr)).location
+        receipt = without_voice_feedback(actor.post(qr + "/confirm", data=payload(actor, qr)).location)
         link = re.search(r'href="(' + re.escape(receipt) + r'\?[^"]*)"', actor.get(qr).text)
         rescan_page = actor.get(unescape(link[1]))
         assert stage in rescan_page.text and 'data-qr-entry="next"' in rescan_page.text

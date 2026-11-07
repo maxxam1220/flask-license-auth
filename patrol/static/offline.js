@@ -59,7 +59,8 @@
     const requireSupport = () => { if (capabilityError) throw capabilityError; };
     let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false,
       supported: !capabilityError, supportMessage: capabilityError?.message || '' };
-    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', privacyHold = false;
+    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', messageSource = null, privacyHold = false;
+    const setMessage = (value, source = null) => { message = value; messageSource = source; };
     const requests = new Set();
     const abortRequests = () => { for (const controller of requests) controller.abort(); };
     let channel;
@@ -137,7 +138,7 @@
       day: row.day, observed_at: row.observed_at, status: row.status, error: row.error || '', retryable: row.retryable,
       note: row.note, is_abnormal: row.is_abnormal, photo_count: row.photos?.length || 0, attempts: row.attempts || 0 });
     async function refresh() {
-      if (capabilityError) { message = capabilityError.message; state.online = navigator.onLine !== false; hidePrivateState(); return state; }
+      if (capabilityError) { setMessage(capabilityError.message); state.online = navigator.onLine !== false; hidePrivateState(); return state; }
       let snapshot;
       try { snapshot = await transaction(STORES, 'readonly', (tx, done) => readAll(tx, done)); }
       catch (error) { hidePrivateState(true); throw error; }
@@ -146,10 +147,14 @@
         .sort((a, b) => a.created_ms - b.created_ms || (a.sequence || 0) - (b.sequence || 0) || a.client_id.localeCompare(b.client_id)) : [];
       const queue = owned.map(row => row.owner === manifest.owner ? summary(row) : { ...summary(row), stale_owner: true, status: 'blocked', retryable: false,
         error: '原登入版本或手機綁定已變更。此筆保留供處理，不會使用新授權補傳；請聯絡管理員。' });
+      const receipts = manifest ? snapshot.receipts.filter(row => row.owner === manifest.owner).map(row => ({ ...row, photos: undefined })) : [];
+      // Only the pending notice created for this local UUID may advance when
+      // another tab confirms it. Auth, preparation and error notices win.
+      if (messageSource?.kind === 'local-save' && receipts.some(row => row.client_id === messageSource.client_id)) setMessage('已同步完成');
       state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), supported: true, supportMessage: '', storageUnavailable: false, identity: manifest?.identity || null,
         owner: manifest?.owner || null, revision: active?.revision || 0, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
         online: navigator.onLine !== false, pending: queue.length, blocked: queue.filter(row => row.status === 'blocked').length,
-        queue, receipts: manifest ? snapshot.receipts.filter(row => row.owner === manifest.owner).map(row => ({ ...row, photos: undefined })) : [],
+        queue, receipts,
         sync: { ...syncState, current: manifest ? syncState.current : '', running: syncing }, message };
       announce(); return state;
     }
@@ -167,7 +172,7 @@
           store.put({ key: 'active', locked: true, owner: null, revision: (request.result?.revision || 0) + 1 });
           tx.objectStore('manifests').clear(); done(true); } catch (error) { fail(error); } };
       }); } catch (error) { if (expected) hideAndStop(); throw error; }
-      if (applied) { message = reason; if (expected) hideAndStop(); else hidePrivateState(); broadcast('lock'); }
+      if (applied) { setMessage(reason); if (expected) hideAndStop(); else hidePrivateState(); broadcast('lock'); }
       return refresh();
     }
     async function network(url, init = {}, timeout = connectTimeout) {
@@ -229,7 +234,7 @@
       // privacy hold must survive even if the following lock write fails.
       if (startEpoch !== epoch) throw fault('owner', '帳號狀態已變更，請重新登入後準備離線資料。');
       privacyHold = false;
-      message = '今日離線資料已備妥。未上傳的紀錄只保留在這支手機。';
+      setMessage('今日離線資料已備妥。未上傳的紀錄只保留在這支手機。');
       if (!syncing) syncState = {};
       broadcast(); return refresh();
     }
@@ -281,7 +286,7 @@
           stage: point.stage, frequency: point.frequency, period_key: point.period_key, status: 'pending', retryable: true, attempts: 0 };
         tx.objectStore('meta').put({ key: 'sequence', value: sequence }); tx.objectStore('queue').add(row); done(summary(row));
       }));
-      message = '已暫存此手機，尚未上傳。請保持頁面開啟，連線後按「同步待傳紀錄」。';
+      setMessage('已暫存此手機，尚未收到伺服器確認。', { kind: 'local-save', client_id: saved.client_id });
       if (!syncing) syncState = {};
       broadcast();
       // The transaction has committed. A later display read must not turn a
@@ -299,7 +304,7 @@
         if (!manifest || !row || (row.owner !== manifest.owner && row.user_id !== manifest.identity.id)) return fail(fault('owner', '無法操作其他帳號的本機資料。'));
         tx.objectStore('queue').delete(client_id); done(true);
       }));
-      message = '已刪除這筆尚未確認的本機資料。'; syncState = {}; broadcast(); return refresh();
+      setMessage('已刪除這筆尚未確認的本機資料。'); syncState = {}; broadcast(); return refresh();
     }
     async function lease(owner, release = false) {
       return transaction(['meta'], 'readwrite', (tx, done, fail) => {
@@ -325,7 +330,7 @@
     async function synchronize(selection = {}) {
       requireSupport();
       if (syncing) return state;
-      if (navigator.onLine === false) { message = '目前沒有網路，資料仍保留在此手機。'; return refresh(); }
+      if (navigator.onLine === false) { setMessage('目前沒有網路，資料仍保留在此手機。'); return refresh(); }
       // Claim synchronously: two clicks can otherwise both pass the guard
       // while their first IndexedDB reads are still in flight.
       syncing = true; cancelled = false; const started = now();
@@ -397,15 +402,15 @@
           }
           syncState.processed++; broadcast(); await refresh();
         }
-        message = cancelled ? '已停止補傳，尚未確認的資料仍保留。' : `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`;
+        setMessage(cancelled ? '已停止補傳，尚未確認的資料仍保留。' : `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`);
       } catch (error) {
-        message = error.message || '無法連線，待補傳資料仍保留。';
+        setMessage(error.message || '無法連線，待補傳資料仍保留。');
         if (!cancelled && !['cancelled', 'busy'].includes(error.code)) syncState.errorCode = error.code || 'network';
       }
       finally {
         syncing = false; syncState.cancelled = cancelled; syncState.phase = 'idle'; timers.clearInterval(ticker);
         try { if (leaseHeld) await lease(owner, true); }
-        catch (_) { message = '補傳已停止，但手機儲存狀態暫時無法讀取；請重試。未收到確認的資料仍保留。'; syncState.errorCode = 'storage'; }
+        catch (_) { setMessage('補傳已停止，但手機儲存狀態暫時無法讀取；請重試。未收到確認的資料仍保留。'); syncState.errorCode = 'storage'; }
         broadcast();
         try { await refresh(); }
         catch (_) { syncState.errorCode = 'storage'; hidePrivateState(true); }
@@ -669,12 +674,18 @@
         const receipt = state.receipts.find(row => row.client_id === savedClientId);
         one('saved').hidden = !queued && !receipt;
         if (queued || receipt) {
-          if (!root.PatrolVoice?.state().lastResult) voice(receipt ? 'sync_confirmed' : 'offline_stored', `${receipt ? 'ack' : 'local'}:${savedClientId}`, false);
+          const previousVoice = root.PatrolVoice?.state().lastResult;
+          // Another tab can acknowledge this UUID without a local sync click.
+          // Keep replay consistent with its receipt, without auto-speaking or
+          // replacing a newer result belonging to another point/action.
+          if (!previousVoice || previousVoice.id === `local:${savedClientId}` || previousVoice.id === `ack:${savedClientId}`) {
+            voice(receipt ? 'sync_confirmed' : 'offline_stored', `${receipt ? 'ack' : 'local'}:${savedClientId}`, false);
+          }
           const record = queued || receipt;
           const title = document.getElementById('offline-saved-title');
           if (title) title.textContent = receipt ? t('已同步完成') : t('已暫存在這支手機');
           text('saved-message', receipt ? t('{code} · {slot} 已收到伺服器確認，可以繼續下一點。', { code: record.code, slot: slotText(record.slot) }) :
-            t('{code} · {slot} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。', { code: record.code, slot: slotText(record.slot) }));
+            t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: record.code, slot: slotText(record.slot) }));
         }
       }
       const list = one('queue');
@@ -774,7 +785,7 @@
         }
         if (one('saved')) one('saved').hidden = false;
         voice('offline_stored', `local:${row.client_id}`);
-        text('saved-message', t('{code} · {slot} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) }));
+        text('saved-message', t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) }));
         await showPoint(); one('saved')?.scrollIntoView({ block: 'nearest' });
       } catch (error) { reportError(error); voiceFailure(); }
       finally { delete form.dataset.submitting; await showPoint().catch(reportError); }

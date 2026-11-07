@@ -12,7 +12,7 @@ const audioPaths = ['zh-Hant', 'id', 'vi'].flatMap(locale => kinds.map(kind => a
 const audioBytes = new Uint8Array([73, 68, 51, 3, 0, 0, 0, 0, 0, 0, 255, 251, 144, 0, 17, 32, 48, 64, 80, 96]);
 const manifest = { version: 'patrol-v1', revision: 'natural-female-1', files: audioPaths.map(path => ({ path, locale: path.split('/').at(-2), kind: path.split('/').at(-1).slice(0, -4),
   bytes: audioBytes.byteLength, sha256: createHash('sha256').update(audioBytes).digest('hex') })) };
-const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
+const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
 function defaultResponse(path) {
   return path === audioRoot + 'manifest.json' ? new Response(JSON.stringify(manifest), { headers: { 'Content-Type': 'application/json' } }) :
     audioPaths.includes(path) ? new Response(audioBytes, { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(audioBytes.length), ETag: '"qa-audio-v1"' } }) :

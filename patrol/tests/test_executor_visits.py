@@ -184,7 +184,14 @@ def test_postgres_simultaneous_distinct_executor_and_same_account_tickets(postgr
     with ThreadPoolExecutor(max_workers=3) as pool:
         results = list(pool.map(submit, requests))
     assert [code for code, _ in results] == [302, 302, 302]
-    assert results[0][1] == results[1][1] != results[2][1]
+    targets = [without_voice_feedback(location) for _, location in results]
+    assert targets[0] == targets[1] != targets[2]
+    # Both concurrent requests reach the same persisted receipt, while only
+    # the request that created it may announce a newly saved visit.
+    from test_voice_results import marker
+    outcomes = [marker(client.get(location))["kind"] for client, (_, location) in zip(clients, results)]
+    assert sorted(outcomes[:2]) == ["already_recorded", "saved_visit"]
+    assert outcomes[2] == "saved_visit"
     with postgres_app.app_context():
         rows = db.session.scalars(db.select(Inspection)).all()
         assert len(rows) == 2 and len({r.user_id for r in rows}) == 2

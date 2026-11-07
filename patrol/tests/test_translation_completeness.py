@@ -2,7 +2,7 @@
 import pytest
 
 from i18n import translate
-from models import User, db
+from models import DeviceBinding, User, db
 from test_app import PASSWORD, application
 from test_daily2_anytime import anytime
 from test_executor_localized_workflows import visible_text
@@ -43,3 +43,22 @@ def test_bound_inspector_device_guidance_uses_selected_language(application, any
     source = "到巡檢點掃描現場 QR Code，再核對點位並確認打卡。"
     expected = translate(source, locale)
     assert expected != source and expected in text and source not in text
+
+
+@pytest.mark.parametrize("locale, expected, misleading", [
+    ("id", "Buka pendaftaran browser", "Buka pengaturan ponsel"),
+    ("vi", "Mở trang liên kết trình duyệt", "Mở cài đặt điện thoại"),
+])
+def test_pending_executor_binding_action_names_the_website_destination(application, anytime, locale, expected, misleading):
+    """Recovery goes to this site's browser binding, not OS phone settings."""
+    actor = db.session.scalar(db.select(User).where(User.username == "exec"))
+    actor.ui_language, actor.simple_executor_ui = locale, True
+    binding = db.session.scalar(db.select(DeviceBinding).where(DeviceBinding.user_id == actor.id))
+    binding.status = "pending"
+    db.session.commit()
+    response = anytime.executor.get(anytime.paired)
+    assert response.status_code == 200
+    text = visible_text(response)
+    assert expected in text and misleading not in text
+    assert f'href="/devices?next={anytime.paired}"' in response.text
+    assert binding.status == "pending"

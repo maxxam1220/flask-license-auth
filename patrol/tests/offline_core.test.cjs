@@ -35,6 +35,40 @@ async function prepared(t, options) { const h = harness(options); t.after(() => 
 const input = { token: 'test-point', note: '現場備註', is_abnormal: true };
 const waitAbort = init => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
 
+test('another tab ACK advances only the notice for the last locally saved UUID', async t => {
+  const h = await prepared(t), peer = harness({ databaseName: h.dbName }); t.after(() => peer.core.close());
+  const first = await h.core.enqueue(input), second = await h.core.enqueue(input);
+  assert.equal((await h.core.getState()).message, '已暫存此手機，尚未收到伺服器確認。');
+  await peer.core.sync({ client_id: first.client_id });
+  assert.equal((await h.core.getState()).message, '已暫存此手機，尚未收到伺服器確認。');
+  await peer.core.sync({ client_id: second.client_id });
+  assert.equal((await h.core.getState()).message, '已同步完成');
+});
+
+test('cross-tab ACK cannot replace a more recent preparation or connection error notice', async t => {
+  for (const action of ['prepare', 'error']) {
+    const h = await prepared(t), peer = harness({ databaseName: h.dbName }); t.after(() => peer.core.close());
+    await h.core.enqueue(input);
+    if (action === 'prepare') await h.core.prepare();
+    else { h.state.status = () => response({ ok: false }, 503); await h.core.sync(); }
+    const before = (await h.core.getState()).message;
+    await peer.core.sync(); const after = await h.core.getState();
+    assert.equal(after.pending, 0); assert.equal(after.message, before, action);
+  }
+});
+
+for (const status of [401, 403]) test('late ACK never replaces a ' + status + ' lock message or reveals receipts', async t => {
+  const h = await prepared(t), peer = harness({ databaseName: h.dbName }); t.after(() => peer.core.close());
+  await h.core.enqueue(input);
+  let resolveUpload, started; const uploading = new Promise(resolve => { started = resolve; });
+  peer.state.sync = entry => new Promise(resolve => { resolveUpload = () => resolve(response({ ok:true,status:'saved',client_id:entry.client_id })); started(); });
+  const sync = peer.core.sync(); await uploading;
+  h.state.prepare = () => response({ ok:false,code:'auth',message:'登入或核准狀態已變更' },status);
+  await assert.rejects(h.core.prepare()); const locked = await h.core.getState(); assert(locked.locked);
+  resolveUpload(); await sync; const final = await h.core.getState();
+  assert.equal(final.message,locked.message); assert.equal(final.locked,true); assert.deepEqual(final.receipts,[]);
+});
+
 test('offline enqueue persists immutable metadata and photo Blob atomically', async t => {
   const h = await prepared(t); h.state.navigator.onLine = false;
   const photo = new File(['photo bytes'], 'test.png', { type: 'image/png' });

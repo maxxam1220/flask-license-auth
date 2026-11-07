@@ -54,6 +54,11 @@ html[lang="id"] .checkin-card h1,
 html[lang="vi"] .checkin-card h1 { overflow-wrap: anywhere; }
 html[lang="id"] .checkin-card .badge,
 html[lang="vi"] .checkin-card .badge { white-space: normal; }
+/* A translated status must fit the value column of narrow binding-history cards. */
+html[lang="id"] .binding-list-panel .badge,
+html[lang="vi"] .binding-list-panel .badge {
+  max-width: 100%; min-width: 0; white-space: normal; overflow-wrap: anywhere;
+}
 /* The offline brand is a home link, so keep a full touch target. */
 .offline-header > .brand { min-height: 44px; }
 html[lang="id"] .mobile-header > .brand,
@@ -163,6 +168,10 @@ html[lang="vi"] .mobile-header > .brand { min-height: 44px; }
   }
 }
 @media (max-width: 300px) {
+  html[lang="id"] .binding-list-panel .table-scroll td,
+  html[lang="vi"] .binding-list-panel .table-scroll td {
+    grid-template-columns: minmax(0, 1fr); gap: .2rem;
+  }
   html[lang="id"] .mobile-header > .brand,
   html[lang="vi"] .mobile-header > .brand { display: none; }
   html[lang="id"] .offline-header .scan-trigger-header .icon,

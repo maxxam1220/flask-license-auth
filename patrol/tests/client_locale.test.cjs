@@ -60,6 +60,10 @@ for (const locale of ['id', 'vi']) {
     assert.equal(i18n.t(source, { number: 2, name }), catalog[source][locale].replace('{number}', '2').replace('{name}', name));
     const summary = '已確認 {count} 筆；其餘未確認資料仍保留在此手機。';
     assert.equal(i18n.t('已確認 2 筆；其餘未確認資料仍保留在此手機。'), catalog[summary][locale].replace('{count}', '2'));
+    const queued = '{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。';
+    const code = 'AB1m-W01', slot = i18n.t('第 2 次');
+    assert.equal(i18n.t(queued, { code, slot }), catalog[queued][locale].replace('{code}', code).replace('{slot}', slot));
+    assert.equal(i18n.t(queued.replace('{code}', code).replace('{slot}', '第 2 次'), { slot }), catalog[queued][locale].replace('{code}', code).replace('{slot}', slot));
     assert.equal(i18n.t('Unknown custom point / 原始姓名'), 'Unknown custom point / 原始姓名');
     i18n.setLocale('zh-Hant'); assert.equal(i18n.t('移除'), '移除');
     assert.equal(i18n.t(source, { number: 2, name }), '移除照片 2：' + name);

@@ -964,6 +964,13 @@ body.scanner-fallback-open { overflow: hidden; }
 input[type=date] { white-space: nowrap; }
 input[type=date]::-webkit-date-and-time-value { min-height: 1.5em; line-height: 1.5; white-space: nowrap; text-align: start; }
 input[type=date]::-webkit-datetime-edit { white-space: nowrap; }
+/* Keep these compact management actions as easy to reach as the mobile ones. */
+@media screen {
+  .management-list .button-small,
+  .create-disclosure > summary,
+  .binding-list-panel .text-button,
+  .checkin-quick-action > a.button { min-height: 44px; }
+}
 @media (max-width: 480px) {
   .dashboard-period .date-filter { display: grid; flex: 1 0 100%; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; }
   .dashboard-period .date-filter input[type=date] { grid-column: 1 / -1; grid-row: 1; width: 100%; }

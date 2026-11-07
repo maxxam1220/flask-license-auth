@@ -340,7 +340,7 @@
     "vi": "Đang đồng bộ"
   },
   "待補傳": {
-    "id": "Belum dikirim",
+    "id": "Perlu sinkron",
     "vi": "Chờ gửi"
   },
   "已備妥": {
@@ -687,9 +687,9 @@
     "id": "{code} · {slot} dikonfirmasi server. Lanjutkan ke titik berikutnya.",
     "vi": "{code} · {slot} đã được máy chủ xác nhận. Có thể tiếp tục điểm tiếp theo."
   },
-  "{code} · {slot} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。": {
-    "id": "{code} · {slot} tersimpan di ponsel, belum dikirim. Setelah online, tekan “Sinkronkan catatan”.",
-    "vi": "{code} · {slot} đã lưu trên điện thoại, chưa gửi. Khi có mạng, nhấn “Đồng bộ bản ghi”."
+  "{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。": {
+    "id": "{code} · {slot} tersimpan di ponsel, belum dikonfirmasi server. Setelah online, tekan “Sinkronkan catatan”.",
+    "vi": "{code} · {slot} đã lưu trên điện thoại, chưa được máy chủ xác nhận. Khi có mạng, nhấn “Đồng bộ bản ghi”."
   },
   "{count} 張照片": {
     "id": "{count} foto",
