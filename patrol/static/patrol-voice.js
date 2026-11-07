@@ -19,73 +19,69 @@
   });
   const PREF = 'patrol-voice-enabled-v1', SEEN = 'patrol-voice-seen-v1', SCAN = 'patrol-voice-scan-v1';
   function createFeedback(options) {
-    const o = options || {}, synth = o.synth, Utterance = o.Utterance;
+    const o = options || {};
     const later = o.setTimeout || setTimeout, clearTimer = o.clearTimeout || clearTimeout;
-    const supported = Boolean(synth && Utterance && typeof synth.speak === 'function' && typeof synth.cancel === 'function');
+    const supported = typeof o.createAudio === 'function';
     const read = (store, key) => { try { return store?.getItem(key); } catch (_) { return null; } };
     const write = (store, key, value) => { try { store?.setItem(key, value); } catch (_) { /* Cosmetic preference only. */ } };
     let enabled = read(o.localStorage, PREF) !== 'off', status = supported ? 'ready' : 'unavailable';
-    let lastResult = null, speaking = false, epoch = 0, timer = null, voiceWait = null, active = null, disposed = false;
+    let lastResult = null, speaking = false, epoch = 0, timer = null, active = null, disposed = false;
     let seen = [];
     try { const value = JSON.parse(read(o.sessionStorage, SEEN) || '[]'); if (Array.isArray(value)) seen = value.filter(x => typeof x === 'string' && x.length <= 180).slice(-50); } catch (_) { /* Storage may be blocked. */ }
     const state = () => ({ enabled, supported, status, lastResult: lastResult && { ...lastResult }, speaking });
     const emit = () => { try { o.onState?.(state()); } catch (_) { /* Feedback cannot break a save. */ } };
-    const locale = () => ({ id: 'id-ID', vi: 'vi-VN' })[o.getLocale?.()] || 'zh-TW';
+    const locale = () => { const value = o.getLocale?.(); return value === 'id' || value === 'vi' ? value : 'zh-Hant'; };
     const visible = () => o.isVisible?.() !== false;
     function stop() {
-      epoch++; if (timer !== null) clearTimer(timer); timer = null; voiceWait = null; active = null; speaking = false;
-      try { if (supported) synth.cancel(); } catch (_) { /* Browser may have shut down speech. */ }
+      epoch++; if (timer !== null) clearTimer(timer); timer = null;
+      const previous = active; active = null; speaking = false;
+      if (previous) {
+        previous.onplaying = previous.onended = previous.onerror = null;
+        try { previous.pause(); previous.removeAttribute?.('src'); previous.load?.(); } catch (_) { /* Cosmetic only. */ }
+      }
     }
     function cancel(clear = false) { stop(); if (clear) lastResult = null; status = !enabled ? 'off' : supported ? 'ready' : 'unavailable'; emit(); }
-    function available() { try { return Array.from(synth.getVoices?.() || []); } catch (_) { return []; } }
-    function start(voices, run) {
+    function start(run) {
       if (disposed || run !== epoch || !enabled || !visible() || !lastResult) return;
-      const lang = locale(), base = lang.split('-')[0];
-      const matches = voices.filter(v => typeof v.lang === 'string' && v.lang.toLowerCase().replace('_', '-').split('-')[0] === base);
-      const online = o.isOnline?.() !== false;
-      const candidates = matches.filter(v => online || v.localService === true).sort((a, b) =>
-        (Number(b.localService === true) * 2 + Number(b.lang.toLowerCase() === lang.toLowerCase())) -
-        (Number(a.localService === true) * 2 + Number(a.lang.toLowerCase() === lang.toLowerCase())));
-      if (!candidates.length) { status = !online && matches.length ? 'offline_voice' : 'no_voice'; emit(); return; }
-      let utterance;
+      // Fixed public assets only: no device TTS, remote synthesis or private text.
+      let audio;
       try {
-        utterance = new Utterance(o.t ? o.t(MESSAGES[lastResult.kind]) : MESSAGES[lastResult.kind]);
-        utterance.lang = lang; utterance.voice = candidates[0]; utterance.rate = 1; utterance.volume = 1;
+        audio = o.createAudio('/static/audio/patrol-v1/' + locale() + '/' + lastResult.kind + '.mp3');
+        if (!audio || typeof audio.play !== 'function' || typeof audio.pause !== 'function') throw new Error('Audio unavailable');
+        audio.preload = 'auto'; audio.playsInline = true; audio.volume = 1; audio.muted = false;
       } catch (_) { status = 'unavailable'; emit(); return; }
-      active = utterance; let started = false;
-      const current = () => !disposed && run === epoch && enabled && active === utterance;
-      utterance.onstart = () => {
+      active = audio; let started = false;
+      const current = () => !disposed && run === epoch && enabled && active === audio;
+      const failed = error => {
         if (!current()) return;
+        stop(); status = error?.name === 'NotAllowedError' ? 'blocked' : o.isOnline?.() === false ? 'offline_audio' : 'audio_missing'; emit();
+      };
+      const playing = () => {
+        if (!current() || started) return;
         started = true; speaking = true; status = 'playing';
         if (timer !== null) clearTimer(timer);
-        timer = later(() => { if (!current()) return; stop(); status = 'blocked'; emit(); }, 15000);
+        timer = later(() => failed(), 20000);
         emit();
       };
-      utterance.onend = () => { if (!current()) return; if (timer !== null) clearTimer(timer); timer = null; active = null; speaking = false; status = 'played'; emit(); };
-      utterance.onerror = event => {
+      audio.onplaying = playing;
+      audio.onended = () => {
         if (!current()) return;
-        stop(); status = event?.error === 'language-unavailable' || event?.error === 'voice-unavailable' ? 'no_voice' : 'blocked'; emit();
+        if (!started) { failed(); return; }
+        stop(); status = 'played'; emit();
       };
+      audio.onerror = () => failed();
       status = 'waiting'; emit();
-      try { synth.speak(utterance); } catch (_) { if (current()) { stop(); status = 'blocked'; emit(); } return; }
-      // Some mobile browsers silently refuse non-gesture speech without onerror.
-      if (current() && !started) timer = later(() => { if (!current()) return; stop(); status = 'blocked'; emit(); }, 1200);
+      // Preserve the manual replay gesture; never await fetch before play().
+      try {
+        const promise = audio.play();
+        if (promise && typeof promise.then === 'function') promise.then(playing, failed);
+      } catch (error) { failed(error); return; }
+      if (current() && !started) timer = later(() => failed(), 5000);
     }
     function replay() {
       if (disposed || !lastResult || !enabled || !supported || !visible()) { emit(); return false; }
-      stop(); const run = epoch, voices = available();
-      if (voices.length) start(voices, run);
-      else {
-        status = 'waiting'; voiceWait = run; emit();
-        timer = later(() => { if (voiceWait !== run || run !== epoch) return; voiceWait = null; timer = null; start(available(), run); }, 600);
-      }
-      return true;
+      stop(); start(epoch); return true;
     }
-    function voicesChanged() {
-      if (voiceWait === null || voiceWait !== epoch || !available().length) return;
-      const run = voiceWait; voiceWait = null; if (timer !== null) clearTimer(timer); timer = null; start(available(), run);
-    }
-    synth?.addEventListener?.('voiceschanged', voicesChanged);
     function report(kind, details = {}) {
       if (disposed || !Object.prototype.hasOwnProperty.call(MESSAGES, kind) || typeof details.id !== 'string' || !details.id || details.id.length > 180) return false;
       if (lastResult?.id === details.id && lastResult?.kind === kind) return true;
@@ -97,7 +93,7 @@
     }
     function setEnabled(value) { enabled = Boolean(value); write(o.localStorage, PREF, enabled ? 'on' : 'off'); cancel(); }
     function refresh() { cancel(); }
-    function dispose() { stop(); disposed = true; synth?.removeEventListener?.('voiceschanged', voicesChanged); }
+    function dispose() { stop(); disposed = true; }
     if (!enabled) status = 'off';
     return { report, replay, setEnabled, cancel, refresh, state, dispose };
   }
@@ -106,12 +102,16 @@
     const storage = name => { try { return root[name]; } catch (_) { return null; } };
     const session = storage('sessionStorage');
     const statusText = {
-      off: '語音已關閉。', unavailable: '此瀏覽器不支援語音，請以畫面結果為準。',
-      no_voice: '此裝置未提供此語言的語音，請以畫面結果為準。',
-      offline_voice: '目前離線，沒有可離線播放的此語言語音。', waiting: '正在準備語音…',
+      off: '語音已關閉。', unavailable: '此瀏覽器無法播放提示音，請以畫面結果為準。',
+      audio_missing: '提示音未能載入，請重播或重新整理；打卡結果不受影響。',
+      offline_audio: '離線提示音尚未備妥，連線後請重新準備離線資料。', waiting: '正在載入提示音…',
       playing: '正在播報…', played: '播報結束，可按重播再聽一次。', blocked: '未能自動播報，請按「重播結果」。'
     };
-    const core = createFeedback({ synth: root.speechSynthesis, Utterance: root.SpeechSynthesisUtterance,
+    const core = createFeedback({ createAudio: typeof root.Audio === 'function' ? src => {
+      // Media must opt into CORS before src, even on the same origin, so
+      // Safari routes its range requests through the offline service worker.
+      const audio = new root.Audio(); audio.crossOrigin = 'anonymous'; audio.src = src; return audio;
+    } : null,
       localStorage: storage('localStorage'), sessionStorage: session,
       getLocale: () => root.PatrolI18n?.getLocale() || doc.documentElement.lang, t,
       isVisible: () => doc.visibilityState !== 'hidden', isOnline: () => root.navigator.onLine !== false,
@@ -124,7 +124,7 @@
           const replay = panel.querySelector('[data-voice-replay]');
           if (replay) { replay.hidden = !state.lastResult; replay.disabled = !state.enabled || !state.supported || !state.lastResult; }
           const status = panel.querySelector('[data-voice-status]');
-          if (status) status.textContent = t(statusText[state.status] || (state.lastResult ? '未聽到提示時可重播；請以畫面結果為準。' : '確認後依帳號語言播報；請以畫面結果為準。'));
+          if (status) status.textContent = t(statusText[state.status] || (state.lastResult ? '未聽到提示時可重播；請以畫面結果為準。' : '依帳號語言播放內建提示音；請以畫面結果為準。'));
         }
       }
     });

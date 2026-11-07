@@ -423,27 +423,61 @@
       async close() { try { channel?.close(); } catch (_) {} const db = await dbPromise; db?.close(); },
       async matchIdentity(id, version) { await refresh(); if (state.identity && (String(state.identity.id) !== String(id) || String(state.identity.auth_version) !== String(version))) await lock('帳號已變更，請重新準備離線資料。'); return state; } };
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, safePath, requestPersistence };
-  if (!root.document) return;
-
-  let shellPromise;
-  async function ensureShell() {
-    if (!root.isSecureContext || !navigator.serviceWorker) throw fault('support', '此瀏覽器無法啟用離線頁面，請使用 HTTPS 網址與支援的瀏覽器。');
-    if (!shellPromise) shellPromise = (async () => {
-      const registration = await navigator.serviceWorker.register('/offline-sw.js', { scope: '/', updateViaCache: 'none' });
-      let readyTimer;
-      try { await Promise.race([navigator.serviceWorker.ready, new Promise((_, reject) => { readyTimer = setTimeout(() => reject(fault('shell', '離線頁面準備逾時，請連線後再試。')), 15000); })]); }
-      finally { clearTimeout(readyTimer); }
-      const worker = registration.active || (await navigator.serviceWorker.ready).active;
-      await new Promise((resolve, reject) => {
-        const channel = new MessageChannel(), timer = setTimeout(() => reject(fault('shell', '離線頁面尚未備妥，請重試。')), 5000);
-        channel.port1.onmessage = event => { clearTimeout(timer); channel.port1.close(); event.data?.ready ? resolve() : reject(fault('shell', '離線頁面檔案不完整，請重試。')); };
-        worker.postMessage({ type: 'PATROL_OFFLINE_READY' }, [channel.port2]);
+  function createShellReadiness(env) {
+    const e = env || root, nav = e.navigator, schedule = e.setTimeout || setTimeout, unschedule = e.clearTimeout || clearTimeout;
+    let pending;
+    return function ensureShell() {
+      if (!e.isSecureContext || !nav?.serviceWorker || !e.MessageChannel) return Promise.reject(fault('support', '此瀏覽器無法啟用離線頁面，請使用 HTTPS 網址與支援的瀏覽器。'));
+      if (pending) return pending;
+      let cancelled = false, deadline;
+      const probes = new Set();
+      const ready = value => value?.ready === true && value.audioReady === true && value.audioVersion === 'patrol-v1';
+      const probe = (worker, type, timeout) => new Promise((resolve, reject) => {
+        const channel = new e.MessageChannel(); let finished = false;
+        const finish = (error, value) => {
+          if (finished) return; finished = true; unschedule(timer);
+          probes.delete(cancelProbe); channel.port1.close(); channel.port2.close(); error ? reject(error) : resolve(value);
+        };
+        const cancelProbe = () => finish(fault('shell', '離線頁面準備逾時，請連線後再試。'));
+        const timer = schedule(() => finish(fault('shell', '離線頁面尚未備妥，請重試。')), timeout);
+        probes.add(cancelProbe);
+        channel.port1.onmessage = event => finish(null, event.data);
+        try { worker.postMessage({ type }, [channel.port2]); } catch (error) { finish(error); }
       });
-      requestPersistence(navigator);
-    })().catch(error => { shellPromise = null; throw error; });
-    return shellPromise;
+      const install = async () => {
+        const registration = await nav.serviceWorker.register('/offline-sw.js', { scope: '/', updateViaCache: 'none' });
+        let checked, updated = false;
+        while (!cancelled) {
+          const worker = registration.active;
+          if (worker && worker !== checked) {
+            checked = worker;
+            let reply = await probe(worker, 'PATROL_OFFLINE_READY', e.probeTimeout || 3000);
+            if (cancelled) break;
+            if (reply?.audioVersion === 'patrol-v1') {
+              if (!ready(reply) && nav.onLine !== false) reply = await probe(worker, 'PATROL_OFFLINE_PREPARE', e.repairTimeout || 28000);
+              if (cancelled) break;
+              if (!ready(reply)) throw fault('shell', '離線頁面與提示音尚未備妥，請連線後重試。');
+              requestPersistence(nav); return;
+            }
+          }
+          // An older worker may be controlling this page while the new public
+          // assets install. Its old ready:true response is not audio readiness.
+          if (!updated && !registration.installing && !registration.waiting && nav.onLine !== false) {
+            updated = true; await registration.update();
+          }
+          if (nav.onLine === false && !registration.installing && !registration.waiting) throw fault('shell', '離線頁面與提示音尚未備妥，請連線後重試。');
+          await new Promise(resolve => schedule(resolve, e.pollInterval || 100));
+        }
+      };
+      pending = Promise.race([install(), new Promise((_, reject) => {
+        deadline = schedule(() => reject(fault('shell', '離線頁面準備逾時，請連線後再試。')), e.deadline || 35000);
+      })]).finally(() => { cancelled = true; unschedule(deadline); for (const cancel of probes) cancel(); pending = null; });
+      return pending;
+    };
   }
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, safePath, requestPersistence, createShellReadiness };
+  if (!root.document) return;
+  const ensureShell = createShellReadiness(root);
   const core = createCore({ ensureShell }); root.PatrolOffline = core;
   function ready() {
     const body = document.body, shell = body.hasAttribute('data-offline-shell');
@@ -604,7 +638,7 @@
       const signedIn = state.online && uiSessionKnown === true;
       text('account', state.identity ? `${state.identity.name} · ${state.identity.role_label ? t(state.identity.role_label) : stageText(state.identity.role === 'executor' ? 'execute' : 'inspect')}` : t(signedIn ? '已登入・尚未準備' : '尚未解鎖離線資料'));
       text('validity', state.prepared ? t('可暫存至 {captureUntil}；補傳期限 {syncUntil}', { captureUntil: timeText(state.captureUntil), syncUntil: timeText(state.syncUntil) }) : state.locked ? t(signedIn ? '請使用已核准的綁定瀏覽器更新離線資料。' : '請先連線登入原帳號，並準備今日資料。') : t('今日資料已到期。待補傳紀錄仍保留，請連線補傳。'));
-      text('status', localNotice ? t(localNotice.source) : state.message ? t(state.message) : (!state.online ? t('目前離線。暫存不等於打卡完成，請連線後補傳。') : state.prepared ? t('今日離線資料已備妥。') : t('請先準備今日離線資料。')));
+      text('status', preparing ? t('正在準備離線資料與三語提示音，請稍候…') : localNotice ? t(localNotice.source) : state.message ? t(state.message) : (!state.online ? t('目前離線。暫存不等於打卡完成，請連線後補傳。') : state.prepared ? t('今日離線資料已備妥。') : t('請先準備今日離線資料。')));
       if (one('status')) one('status').dataset.state = localNotice?.tone || (!state.online ? 'offline' : state.blocked ? 'blocked' :
         !state.sync?.running && (state.sync?.errorCode || state.sync?.failed > 0) ? 'error' : 'online');
       text('queue-summary', state.sync?.running ? t('正在處理 {processed}/{total} 筆 · 已確認 {saved} 筆 · {seconds} 秒', { processed: state.sync.processed, total: state.sync.total, saved: state.sync.saved, seconds: state.sync.elapsed }) :
@@ -748,8 +782,8 @@
       if (preparing) return;
       localNotice = null;
       preparing = true; const button = one('prepare'); button.disabled = true; button.setAttribute('aria-busy', 'true');
-      try { await core.prepare(); } catch (error) { reportError(error); }
-      finally { preparing = false; button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
+      try { if (latestState) render(latestState); await core.prepare(); } catch (error) { reportError(error); }
+      finally { preparing = false; if (latestState) render(latestState); button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
     });
     one('sync')?.addEventListener('click', async () => {
       localNotice = null; const owner = latestState?.owner, before = new Set((latestState?.receipts || []).map(row => row.client_id));

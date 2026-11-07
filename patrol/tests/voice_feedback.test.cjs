@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createFeedback, install } = require('../static/patrol-voice.js');
+const { createFeedback, install, MESSAGES } = require('../static/patrol-voice.js');
 
 class MemoryStorage {
   constructor() { this.values = new Map(); }
@@ -23,129 +23,183 @@ class Clock {
     throw Error('Unexpected timer loop');
   }
 }
-class Utterance extends EventTarget { constructor(text) { super(); this.text = text; } }
-function event(utterance, type, error) {
-  const value = new Event(type); if (error) Object.defineProperty(value, 'error', { value: error });
-  utterance.dispatchEvent(value); utterance['on' + type]?.(value);
+function event(audio, type) { audio['on' + type]?.({ target: audio }); }
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
 }
-const voice = (lang, localService = true) => ({ lang, localService, name: 'QA ' + lang, voiceURI: 'qa:' + lang });
 function setup(options = {}) {
-  const clock = new Clock(), spoken = [], states = [];
-  let voices = options.voices ?? [voice('vi-VN')], locale = options.locale || 'vi', online = true, visible = true;
-  const synth = new EventTarget();
-  synth.getVoices = () => voices;
-  synth.speak = utterance => { spoken.push(utterance); options.onSpeak?.(utterance); };
-  synth.cancel = () => { options.onCancel?.(spoken.at(-1)); };
+  const clock = new Clock(), audios = [], states = [];
+  let locale = options.locale || 'vi', online = true, visible = true;
+  function createAudio(src) {
+    if (options.factoryThrows) throw Error('Audio constructor unavailable');
+    const audio = { src, originalSrc: src, playCalls: 0, pauseCalls: 0, loadCalls: 0, removed: [],
+      play() { this.playCalls++; return options.play?.(this); },
+      pause() { this.pauseCalls++; options.pause?.(this); },
+      removeAttribute(name) { this.removed.push(name); if (name === 'src') this.src = ''; },
+      load() { this.loadCalls++; } };
+    let currentSrc = src;
+    Object.defineProperty(audio, 'src', { configurable: true, get: () => currentSrc, set(value) { currentSrc = value; if (!audio.originalSrc && value) audio.originalSrc = value; } });
+    audios.push(audio); return audio;
+  }
   const localStorage = options.localStorage || new MemoryStorage(), sessionStorage = options.sessionStorage || new MemoryStorage();
-  const api = createFeedback({ synth: options.unsupported ? undefined : synth, Utterance: options.unsupported ? undefined : Utterance,
-    localStorage, sessionStorage, getLocale: () => locale, t: text => text,
+  const api = createFeedback({ createAudio: options.unsupported ? undefined : createAudio,
+    localStorage, sessionStorage, getLocale: () => locale,
     isVisible: () => visible, isOnline: () => online, onState: state => states.push(state),
-    now: () => clock.time, setTimeout: (fn, ms) => clock.setTimeout(fn, ms), clearTimeout: id => clock.clearTimeout(id) });
-  return { api, synth, spoken, states, clock, localStorage, sessionStorage,
-    setLocale: value => { locale = value; }, setOnline: value => { online = value; }, setVisible: value => { visible = value; },
-    setVoices: value => { voices = value; synth.dispatchEvent(new Event('voiceschanged')); } };
+    setTimeout: (fn, ms) => clock.setTimeout(fn, ms), clearTimeout: id => clock.clearTimeout(id) });
+  return { api, createAudio, audios, states, clock, localStorage, sessionStorage,
+    setLocale: value => { locale = value; }, setOnline: value => { online = value; }, setVisible: value => { visible = value; } };
 }
 
-test('confirmed fixed result has start/end lifecycle and a fresh utterance for manual replay', () => {
-  const { api, spoken } = setup(); api.setEnabled(true);
+test('confirmed audio starts synchronously and reaches end, with a fresh Audio for replay', () => {
+  const { api, audios } = setup(); api.setEnabled(true);
   api.report('saved_execute', { id: 'execute-1' });
-  assert.equal(spoken.length, 1); assert.match(spoken[0].lang, /^vi(?:-|$)/i);
-  event(spoken[0], 'start'); assert.equal(api.state().status, 'playing');
-  event(spoken[0], 'end'); assert.equal(api.state().status, 'played');
-  api.replay(); assert.equal(spoken.length, 2); assert.notEqual(spoken[0], spoken[1]);
+  assert.equal(audios.length, 1); assert.equal(audios[0].playCalls, 1);
+  assert.equal(audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3');
+  assert.equal(audios[0].preload, 'auto'); assert.equal(audios[0].volume, 1); assert.equal(audios[0].muted, false);
+  event(audios[0], 'playing'); assert.equal(api.state().status, 'playing');
+  event(audios[0], 'ended'); assert.equal(api.state().status, 'played');
+  assert.equal(audios[0].pauseCalls, 1); assert.deepEqual(audios[0].removed, ['src']); assert.equal(audios[0].loadCalls, 1);
+  api.replay(); assert.equal(audios.length, 2); assert.notEqual(audios[0], audios[1]); api.dispose();
 });
 
-test('unknown kinds cannot fabricate a spoken success result', () => {
-  const { api, spoken } = setup(); api.setEnabled(true);
-  api.report('arbitrary success text', { id: 'untrusted-1' });
-  assert.equal(spoken.length, 0);
+for (const locale of ['zh-Hant', 'id', 'vi']) {
+  test(locale + ' uses only the 13 public fixed audio assets, without installed speech voices', () => {
+    const { api, audios } = setup({ locale }); assert.equal(Object.keys(MESSAGES).length, 13);
+    for (const kind of Object.keys(MESSAGES)) {
+      api.report(kind, { id: locale + ':' + kind });
+      assert.equal(audios.at(-1).originalSrc, '/static/audio/patrol-v1/' + locale + '/' + kind + '.mp3');
+      assert(!/[?&#]/.test(audios.at(-1).originalSrc));
+    }
+    assert.equal(audios.length, 13); api.dispose();
+  });
+}
+
+test('unknown kinds and invalid ids cannot create success audio or request arbitrary paths', () => {
+  const { api, audios } = setup();
+  for (const kind of ['arbitrary success text', '../secret', '__proto__', 'constructor', 'saved_execute?user=1'])
+    assert.equal(api.report(kind, { id: 'untrusted' }), false);
+  for (const id of ['', 'x'.repeat(181), null, 7]) assert.equal(api.report('saved_execute', { id }), false);
+  assert.equal(audios.length, 0); api.dispose();
+});
+
+test('unrecognized locale cannot escape the public locale allowlist', () => {
+  const f = setup();
+  for (const value of ['../private', '__proto__', 'constructor', 'toString', 'en', 'zh-TW', null]) {
+    f.setLocale(value); f.api.report('saved_execute', { id: 'locale:' + String(value) });
+    assert.equal(f.audios.at(-1).originalSrc, '/static/audio/patrol-v1/zh-Hant/saved_execute.mp3');
+  }
+  f.api.dispose();
 });
 
 test('muted reports and enabling sound do not replay old results automatically', () => {
-  const { api, spoken, localStorage } = setup();
+  const { api, audios, localStorage } = setup();
   api.setEnabled(false); api.report('offline_stored', { id: 'local-1' });
-  assert.equal(spoken.length, 0); assert.equal(api.state().status, 'off');
+  assert.equal(audios.length, 0); assert.equal(api.state().status, 'off');
   assert.equal(localStorage.getItem('patrol-voice-enabled-v1'), 'off');
-  api.setEnabled(true); assert.equal(spoken.length, 0);
-  api.replay(); assert.equal(spoken.length, 1);
+  api.setEnabled(true); assert.equal(audios.length, 0);
+  api.replay(); assert.equal(audios.length, 1); api.dispose();
 });
 
 test('a result id is auto-consumed once per tab, including a newly loaded module', () => {
   const first = setup(); first.api.setEnabled(true);
-  first.api.report('saved_inspect', { id: 'receipt-1' });
-  first.api.report('saved_inspect', { id: 'receipt-1' });
-  assert.equal(first.spoken.length, 1); first.api.dispose();
+  first.api.report('saved_inspect', { id: 'receipt-1' }); first.api.report('saved_inspect', { id: 'receipt-1' });
+  assert.equal(first.audios.length, 1); first.api.dispose();
   const next = setup({ localStorage: first.localStorage, sessionStorage: first.sessionStorage });
-  next.api.report('saved_inspect', { id: 'receipt-1' });
-  assert.equal(next.spoken.length, 0);
-  next.api.replay(); assert.equal(next.spoken.length, 1);
+  next.api.report('saved_inspect', { id: 'receipt-1' }); assert.equal(next.audios.length, 0);
+  next.api.replay(); assert.equal(next.audios.length, 1); next.api.dispose();
 });
 
 test('history receipt auto=false needs explicit replay', () => {
-  const { api, spoken } = setup(); api.setEnabled(true);
+  const { api, audios } = setup(); api.setEnabled(true);
   api.report('receipt_confirmed', { id: 'old-receipt-1', auto: false });
-  assert.equal(spoken.length, 0); api.replay(); assert.equal(spoken.length, 1);
+  assert.equal(audios.length, 0); api.replay(); assert.equal(audios.length, 1); api.dispose();
 });
 
-for (const locale of ['id', 'vi']) {
-  test(locale + ' without an installed matching voice never falls back to Chinese speech', () => {
-    const { api, spoken, clock } = setup({ locale, voices: [voice('zh-TW')] }); api.setEnabled(true);
-    api.report('saved_visit', { id: 'missing-' + locale }); clock.advance(2000);
-    assert.equal(spoken.length, 0); assert.equal(api.state().status, 'no_voice');
-    assert(api.state().lastResult);
+test('play promise resolution and playing event share one playback watchdog', async () => {
+  const play = deferred(), f = setup({ play: () => play.promise });
+  f.api.report('saved_execute', { id: 'promise' }); assert.equal(f.api.state().status, 'waiting');
+  play.resolve(); await Promise.resolve(); assert.equal(f.api.state().status, 'playing');
+  assert.equal(f.clock.jobs.size, 1); event(f.audios[0], 'playing'); assert.equal(f.clock.jobs.size, 1);
+  event(f.audios[0], 'ended'); assert.equal(f.api.state().status, 'played'); assert.equal(f.clock.jobs.size, 0); f.api.dispose();
+});
+
+for (const online of [true, false]) {
+  test((online ? 'online' : 'offline') + ' media error and bounded loading timeout retain the result for replay', () => {
+    const f = setup(); f.setOnline(online);
+    f.api.report('offline_stored', { id: 'media-error' }); event(f.audios[0], 'error');
+    assert.equal(f.api.state().status, online ? 'audio_missing' : 'offline_audio');
+    assert.equal(f.api.state().lastResult.kind, 'offline_stored');
+    f.api.replay(); f.clock.advance(4999); assert.equal(f.api.state().status, 'waiting');
+    f.clock.advance(1); assert.equal(f.api.state().status, online ? 'audio_missing' : 'offline_audio');
+    assert.equal(f.audios[1].pauseCalls, 1); f.api.dispose();
   });
 }
 
-test('asynchronous voice availability can speak once before the bounded wait expires', () => {
-  const fixture = setup({ voices: [] }); fixture.api.setEnabled(true);
-  fixture.api.report('saved_execute', { id: 'loading-1' });
-  assert.equal(fixture.spoken.length, 0);
-  fixture.clock.advance(300); fixture.setVoices([voice('vi-VN')]);
-  assert.equal(fixture.spoken.length, 1);
-  fixture.setVoices([voice('vi-VN')]); assert.equal(fixture.spoken.length, 1);
+test('offline playback still attempts the same local asset without requiring a device speech voice', () => {
+  const f = setup(); f.setOnline(false); f.api.report('offline_stored', { id: 'cached-local' });
+  assert.equal(f.audios.length, 1); event(f.audios[0], 'playing'); event(f.audios[0], 'ended');
+  assert.equal(f.api.state().status, 'played'); f.api.dispose();
 });
 
-test('a late voiceschanged after cancel or mute cannot speak a stale result', () => {
-  for (const cancel of [fixture => fixture.api.cancel(true), fixture => fixture.api.setEnabled(false)]) {
-    const fixture = setup({ voices: [] }); fixture.api.setEnabled(true);
-    fixture.api.report('saved_execute', { id: 'pending-1' }); cancel(fixture);
-    fixture.setVoices([voice('vi-VN')]); fixture.clock.advance(3000);
-    assert.equal(fixture.spoken.length, 0);
+test('a media ended event without confirmed playback never claims played', () => {
+  const f = setup(); f.api.report('saved_execute', { id: 'ended-early' }); event(f.audios[0], 'ended');
+  assert.equal(f.api.state().status, 'audio_missing'); assert.equal(f.api.state().speaking, false); f.api.dispose();
+});
+
+test('a stalled started audio stops at the bounded playback watchdog', () => {
+  const f = setup(); f.api.report('saved_execute', { id: 'stalled' }); event(f.audios[0], 'playing');
+  f.clock.advance(19999); assert.equal(f.api.state().status, 'playing');
+  f.clock.advance(1); assert.equal(f.api.state().status, 'audio_missing'); assert.equal(f.audios[0].pauseCalls, 1); f.api.dispose();
+});
+
+test('autoplay rejection offers manual retry without losing or relabeling the confirmed result', async () => {
+  const play = deferred(), f = setup({ play: () => play.promise });
+  f.api.report('saved_inspect', { id: 'blocked' }); play.reject(Object.assign(new Error('gesture required'), { name: 'NotAllowedError' }));
+  await Promise.resolve(); assert.equal(f.api.state().status, 'blocked');
+  assert.equal(f.api.state().lastResult.kind, 'saved_inspect'); f.api.replay(); assert.equal(f.audios.length, 2); f.api.dispose();
+});
+
+test('synchronous play failure and broken Audio constructors cannot throw into save callers', () => {
+  for (const options of [{ play: () => { throw Object.assign(new Error('blocked'), { name: 'NotAllowedError' }); } }, { factoryThrows: true }]) {
+    const f = setup(options); assert.doesNotThrow(() => f.api.report('saved_execute', { id: 'throw' }));
+    assert.equal(f.api.state().status, options.factoryThrows ? 'unavailable' : 'blocked'); f.api.dispose();
   }
 });
 
-test('offline speech requires an available local voice', () => {
-  const fixture = setup({ voices: [voice('vi-VN', false)] }); fixture.api.setEnabled(true); fixture.setOnline(false);
-  fixture.api.report('offline_stored', { id: 'offline-remote' });
-  assert.equal(fixture.spoken.length, 0); assert.equal(fixture.api.state().status, 'offline_voice');
-  fixture.setVoices([voice('vi-VN', false), voice('vi-VN', true)]); fixture.api.replay();
-  assert.equal(fixture.spoken.length, 1); assert.equal(fixture.spoken[0].voice.localService, true);
+test('cancel and mute ignore captured late handlers and settled play promises', async () => {
+  for (const cancel of [f => f.api.cancel(true), f => f.api.setEnabled(false), f => f.api.dispose()]) {
+    const play = deferred(), f = setup({ play: () => play.promise });
+    f.api.report('saved_inspect', { id: 'cancel-1' });
+    const audio = f.audios[0], callbacks = [audio.onplaying, audio.onended, audio.onerror];
+    cancel(f); const after = f.api.state();
+    callbacks.forEach(fn => fn()); play.resolve(); await Promise.resolve(); f.clock.advance(25000);
+    assert.deepEqual(f.api.state(), after); assert.equal(audio.pauseCalls, 1); assert.equal(audio.src, '');
+    assert.equal(audio.onplaying, null); assert.equal(audio.onended, null); assert.equal(audio.onerror, null); f.api.dispose();
+  }
 });
 
-test('silent browser refusal reaches a bounded blocked state and allows manual retry', () => {
-  const { api, spoken, clock } = setup(); api.setEnabled(true);
-  api.report('saved_inspect', { id: 'silent-1' }); clock.advance(1201);
-  assert.equal(api.state().status, 'blocked');
-  api.replay(); assert.equal(spoken.length, 2);
+test('a superseded result cannot be overwritten by the old audio rejection', async () => {
+  const old = deferred(), f = setup({ play: audio => audio.originalSrc.endsWith('/saved_execute.mp3') ? old.promise : undefined });
+  f.api.report('saved_execute', { id: 'old' }); f.api.report('offline_stored', { id: 'new' });
+  event(f.audios[1], 'playing'); old.reject(new Error('late network failure')); await Promise.resolve();
+  assert.equal(f.api.state().lastResult.kind, 'offline_stored'); assert.equal(f.api.state().status, 'playing'); f.api.dispose();
 });
 
-test('intentional cancellation ignores stale speech callbacks', () => {
-  const fixture = setup({ onCancel: utterance => { if (utterance) event(utterance, 'error', 'canceled'); } });
-  fixture.api.setEnabled(true); fixture.api.report('saved_inspect', { id: 'cancel-1' });
-  const stale = fixture.spoken[0]; fixture.api.cancel(true);
-  const after = fixture.api.state(); event(stale, 'start'); event(stale, 'end'); event(stale, 'error', 'not-allowed');
-  fixture.clock.advance(3000);
-  assert.equal(fixture.api.state().status, after.status); assert.equal(fixture.api.state().lastResult, null);
+test('hidden result and disposed module cannot start audio', () => {
+  const f = setup(); f.setVisible(false); f.api.report('saved_execute', { id: 'hidden' });
+  assert.equal(f.audios.length, 0); f.api.dispose(); f.setVisible(true); f.api.replay(); f.api.report('saved_execute', { id: 'disposed' });
+  assert.equal(f.audios.length, 0);
 });
 
-test('hidden result and disposed module cannot speak after delayed browser events', () => {
-  const fixture = setup(); fixture.api.setEnabled(true); fixture.setVisible(false);
-  fixture.api.report('saved_execute', { id: 'hidden-1' }); assert.equal(fixture.spoken.length, 0);
-  fixture.api.dispose(); fixture.setVoices([voice('vi-VN')]); fixture.clock.advance(3000);
-  assert.equal(fixture.spoken.length, 0);
+test('locale refresh cancels old playback and manual replay selects the new language', () => {
+  const f = setup(); f.api.report('saved_visit', { id: 'language' });
+  f.setLocale('id'); f.api.refresh(); assert.equal(f.audios[0].pauseCalls, 1); assert.equal(f.audios.length, 1);
+  f.api.replay(); assert.equal(f.audios[1].originalSrc, '/static/audio/patrol-v1/id/saved_visit.mp3'); f.api.dispose();
 });
 
-test('missing speech API and denied storage remain nonfatal to check-in callers', () => {
+test('missing Audio API and denied storage remain nonfatal to check-in callers', () => {
   const storage = { getItem() { throw Error('denied'); }, setItem() { throw Error('denied'); }, removeItem() { throw Error('denied'); } };
   const { api } = setup({ unsupported: true, localStorage: storage, sessionStorage: storage });
   assert.doesNotThrow(() => { api.setEnabled(true); api.report('offline_stored', { id: 'without-api' }); api.replay(); api.cancel(true); api.dispose(); });
@@ -156,9 +210,8 @@ test('older browsers without Object.hasOwn can report optional feedback', () => 
   const original = Object.hasOwn;
   try {
     Object.hasOwn = undefined;
-    const { api, spoken } = setup();
-    assert.doesNotThrow(() => api.report('saved_visit', { id: 'old-browser' }));
-    assert.equal(spoken.length, 1);
+    const { api, audios } = setup(); assert.doesNotThrow(() => api.report('saved_visit', { id: 'old-browser' }));
+    assert.equal(audios.length, 1); api.dispose();
   } finally { Object.hasOwn = original; }
 });
 
@@ -171,7 +224,19 @@ function installed(options = {}) {
   doc.querySelector = selector => selector === '[data-voice-result]' && options.result ? { dataset: options.result } : null;
   root.document = doc; root.localStorage = fixture.localStorage; root.sessionStorage = fixture.sessionStorage;
   root.location = new URL(options.path || '/c/point-a?round=2', 'https://patrol.test');
-  root.navigator = { onLine: true }; root.speechSynthesis = fixture.synth; root.SpeechSynthesisUtterance = Utterance;
+  root.navigator = { onLine: true }; root.audioConstruction = [];
+  root.Audio = function (...args) {
+    root.audioConstruction.push(args);
+    const audio = fixture.createAudio(args[0]);
+    if (options.strictCORS) {
+      const descriptor = Object.getOwnPropertyDescriptor(audio, 'src');
+      Object.defineProperty(audio, 'src', { configurable: true, get: descriptor.get, set(value) {
+        assert.equal(audio.crossOrigin, 'anonymous', 'CORS must be set before the MP3 URL enters the media loader'); descriptor.set(value);
+      } });
+    }
+    return audio;
+  };
+  for (const name of ['speechSynthesis', 'SpeechSynthesisUtterance']) Object.defineProperty(root, name, { get() { throw Error('Device speech API must not be read'); } });
   root.PatrolI18n = { getLocale: () => 'vi', t: text => text };
   const api = install(root);
   return { ...fixture, root, doc, api };
@@ -199,7 +264,7 @@ test('stale and future scanner intent do not trigger automatic playback', () => 
     const storage = new MemoryStorage();
     storage.setItem('patrol-voice-scan-v1', JSON.stringify({ path: '/c/point-a?round=2', at }));
     const fixture = installed({ sessionStorage: storage, result: { voiceResult: 'waiting_execution', voiceResultId: 'scan-blocked', voiceAuto: 'scan' } });
-    assert.equal(fixture.spoken.length, 0); fixture.api.dispose();
+    assert.equal(fixture.audios.length, 0); fixture.api.dispose();
   }
 });
 
@@ -207,16 +272,16 @@ test('a scan outcome speaks only when it consumes the exact scanner intent', () 
   const storage = new MemoryStorage();
   storage.setItem('patrol-voice-scan-v1', JSON.stringify({ path: '/c/point-a?round=2', at: Date.now() }));
   const fixture = installed({ sessionStorage: storage, result: { voiceResult: 'waiting_execution', voiceResultId: 'scan-wait', voiceAuto: 'scan' } });
-  assert.equal(fixture.spoken.length, 1); assert.equal(fixture.api.takeScan(), false); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 1); assert.equal(fixture.api.takeScan(), false); fixture.api.dispose();
 });
 
 test('pagehide and account-change cancel active feedback and ignore stale callbacks', () => {
   const fixture = installed(); fixture.api.report('saved_execute', { id: 'leaving-1' });
-  const stale = fixture.spoken[0]; dispatch(fixture.root, 'pagehide'); event(stale, 'start');
+  const stale = fixture.audios[0]; dispatch(fixture.root, 'pagehide'); event(stale, 'playing');
   assert.equal(fixture.api.state().speaking, false);
   dispatch(fixture.doc, 'patrol:voice-owner-changed');
   assert.equal(fixture.api.state().lastResult, null);
-  event(stale, 'end'); assert.equal(fixture.api.state().lastResult, null); fixture.api.dispose();
+  event(stale, 'ended'); assert.equal(fixture.api.state().lastResult, null); fixture.api.dispose();
 });
 
 test('logout clears result and pending scan or cross-page arrival before response', () => {
@@ -246,7 +311,7 @@ test('cross-tab mute applies without replaying prior speech when enabled again',
   dispatch(fixture.root, 'storage', { key: 'patrol-voice-enabled-v1', newValue: 'off' });
   assert.equal(fixture.api.state().enabled, false); assert.equal(fixture.api.state().speaking, false);
   dispatch(fixture.root, 'storage', { key: 'patrol-voice-enabled-v1', newValue: 'on' });
-  assert.equal(fixture.spoken.length, 1); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 1); fixture.api.dispose();
 });
 
 test('partial sync, local storage and confirmed sync retain distinct result meanings', () => {
@@ -254,8 +319,8 @@ test('partial sync, local storage and confirmed sync retain distinct result mean
   for (const [kind, id] of [['offline_stored', 'local:one'], ['sync_partial', 'partial:one'], ['sync_confirmed', 'ack:one']]) {
     fixture.api.report(kind, { id }); assert.equal(fixture.api.state().lastResult.kind, kind);
   }
-  assert.equal(fixture.spoken.length, 3);
-  assert.equal(new Set(fixture.spoken.map(value => value.text)).size, 3); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 3);
+  assert.equal(new Set(fixture.audios.map(value => value.originalSrc)).size, 3); fixture.api.dispose();
 });
 
 test('confirm intent can cover its own validation page but not another point', () => {
@@ -263,11 +328,11 @@ test('confirm intent can cover its own validation page but not another point', (
   let fixture = installed({ sessionStorage: storage, path: '/c/point-a' });
   fixture.api.armScan('/c/point-a/confirm', 'confirm'); fixture.api.dispose();
   fixture = installed({ sessionStorage: storage, path: '/c/point-a', result: { voiceResult: 'not_saved', voiceResultId: 'validation-a', voiceAuto: 'scan' } });
-  assert.equal(fixture.spoken.length, 1); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 1); fixture.api.dispose();
   fixture = installed({ sessionStorage: storage, path: '/c/point-a' });
   fixture.api.armScan('/c/point-a/confirm', 'confirm'); fixture.api.dispose();
   fixture = installed({ sessionStorage: storage, path: '/c/point-b', result: { voiceResult: 'not_saved', voiceResultId: 'validation-b', voiceAuto: 'scan' } });
-  assert.equal(fixture.spoken.length, 0); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 0); fixture.api.dispose();
 });
 
 test('consumed result storage is bounded and contains no spoken/private text', () => {
@@ -276,4 +341,13 @@ test('consumed result storage is bounded and contains no spoken/private text', (
   const values = JSON.parse(fixture.sessionStorage.getItem('patrol-voice-seen-v1'));
   assert.equal(values.length, 50); assert.equal(values[0], 'receipt-5');
   assert(values.every(value => /^receipt-\d+$/.test(value))); fixture.api.dispose();
+});
+
+
+test('installed native Audio sets anonymous CORS before src and never passes src to constructor', () => {
+  const f = installed({ strictCORS: true }); f.api.report('saved_execute', { id: 'cors-media' });
+  assert.deepEqual(f.root.audioConstruction, [[]]);
+  assert.equal(f.audios[0].crossOrigin, 'anonymous');
+  assert.equal(f.audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3');
+  assert.equal(f.audios[0].playCalls, 1); f.api.dispose();
 });

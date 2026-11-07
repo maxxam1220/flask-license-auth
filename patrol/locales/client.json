@@ -834,5 +834,33 @@
   "這是已確認的打卡紀錄。": {
     "id": "Ini adalah catatan check-in yang sudah dikonfirmasi.",
     "vi": "Đây là bản ghi điểm danh đã được xác nhận."
+  },
+  "此瀏覽器無法播放提示音，請以畫面結果為準。": {
+    "id": "Browser ini tidak dapat memutar suara. Ikuti hasil yang tertera di layar.",
+    "vi": "Trình duyệt này không phát được âm thanh. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "提示音未能載入，請重播或重新整理；打卡結果不受影響。": {
+    "id": "Suara gagal dimuat. Putar ulang atau muat ulang halaman. Hasil check-in tidak terpengaruh.",
+    "vi": "Không tải được âm thanh. Hãy phát lại hoặc tải lại trang. Kết quả điểm danh không bị ảnh hưởng."
+  },
+  "離線提示音尚未備妥，連線後請重新準備離線資料。": {
+    "id": "Suara offline belum siap. Sambungkan internet lalu siapkan ulang data offline.",
+    "vi": "Âm thanh ngoại tuyến chưa sẵn sàng. Hãy kết nối mạng rồi chuẩn bị lại dữ liệu ngoại tuyến."
+  },
+  "正在載入提示音…": {
+    "id": "Memuat suara…",
+    "vi": "Đang tải âm thanh…"
+  },
+  "依帳號語言播放內建提示音；請以畫面結果為準。": {
+    "id": "Suara bawaan mengikuti bahasa akun. Ikuti hasil yang tertera di layar.",
+    "vi": "Âm thanh tích hợp theo ngôn ngữ tài khoản. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "離線頁面與提示音尚未備妥，請連線後重試。": {
+    "id": "Halaman offline dan suara belum siap. Sambungkan internet lalu coba lagi.",
+    "vi": "Trang ngoại tuyến và âm thanh chưa sẵn sàng. Hãy kết nối mạng rồi thử lại."
+  },
+  "正在準備離線資料與三語提示音，請稍候…": {
+    "id": "Menyiapkan data offline dan suara tiga bahasa. Mohon tunggu…",
+    "vi": "Đang chuẩn bị dữ liệu ngoại tuyến và âm thanh ba ngôn ngữ. Vui lòng chờ…"
   }
 }
