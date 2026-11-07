@@ -56,7 +56,7 @@ test('confirmed audio starts synchronously and reaches end, with a fresh Audio f
   const { api, audios } = setup(); api.setEnabled(true);
   api.report('saved_execute', { id: 'execute-1' });
   assert.equal(audios.length, 1); assert.equal(audios[0].playCalls, 1);
-  assert.equal(audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3');
+  assert.equal(audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3?rev=natural-female-1');
   assert.equal(audios[0].preload, 'auto'); assert.equal(audios[0].volume, 1); assert.equal(audios[0].muted, false);
   event(audios[0], 'playing'); assert.equal(api.state().status, 'playing');
   event(audios[0], 'ended'); assert.equal(api.state().status, 'played');
@@ -69,8 +69,8 @@ for (const locale of ['zh-Hant', 'id', 'vi']) {
     const { api, audios } = setup({ locale }); assert.equal(Object.keys(MESSAGES).length, 13);
     for (const kind of Object.keys(MESSAGES)) {
       api.report(kind, { id: locale + ':' + kind });
-      assert.equal(audios.at(-1).originalSrc, '/static/audio/patrol-v1/' + locale + '/' + kind + '.mp3');
-      assert(!/[?&#]/.test(audios.at(-1).originalSrc));
+      assert.equal(audios.at(-1).originalSrc, '/static/audio/patrol-v1/' + locale + '/' + kind + '.mp3?rev=natural-female-1');
+      assert.equal(new URL(audios.at(-1).originalSrc, 'https://patrol.test').search, '?rev=natural-female-1');
     }
     assert.equal(audios.length, 13); api.dispose();
   });
@@ -88,7 +88,7 @@ test('unrecognized locale cannot escape the public locale allowlist', () => {
   const f = setup();
   for (const value of ['../private', '__proto__', 'constructor', 'toString', 'en', 'zh-TW', null]) {
     f.setLocale(value); f.api.report('saved_execute', { id: 'locale:' + String(value) });
-    assert.equal(f.audios.at(-1).originalSrc, '/static/audio/patrol-v1/zh-Hant/saved_execute.mp3');
+    assert.equal(f.audios.at(-1).originalSrc, '/static/audio/patrol-v1/zh-Hant/saved_execute.mp3?rev=natural-female-1');
   }
   f.api.dispose();
 });
@@ -181,7 +181,7 @@ test('cancel and mute ignore captured late handlers and settled play promises', 
 });
 
 test('a superseded result cannot be overwritten by the old audio rejection', async () => {
-  const old = deferred(), f = setup({ play: audio => audio.originalSrc.endsWith('/saved_execute.mp3') ? old.promise : undefined });
+  const old = deferred(), f = setup({ play: audio => new URL(audio.originalSrc, 'https://patrol.test').pathname.endsWith('/saved_execute.mp3') ? old.promise : undefined });
   f.api.report('saved_execute', { id: 'old' }); f.api.report('offline_stored', { id: 'new' });
   event(f.audios[1], 'playing'); old.reject(new Error('late network failure')); await Promise.resolve();
   assert.equal(f.api.state().lastResult.kind, 'offline_stored'); assert.equal(f.api.state().status, 'playing'); f.api.dispose();
@@ -196,7 +196,7 @@ test('hidden result and disposed module cannot start audio', () => {
 test('locale refresh cancels old playback and manual replay selects the new language', () => {
   const f = setup(); f.api.report('saved_visit', { id: 'language' });
   f.setLocale('id'); f.api.refresh(); assert.equal(f.audios[0].pauseCalls, 1); assert.equal(f.audios.length, 1);
-  f.api.replay(); assert.equal(f.audios[1].originalSrc, '/static/audio/patrol-v1/id/saved_visit.mp3'); f.api.dispose();
+  f.api.replay(); assert.equal(f.audios[1].originalSrc, '/static/audio/patrol-v1/id/saved_visit.mp3?rev=natural-female-1'); f.api.dispose();
 });
 
 test('missing Audio API and denied storage remain nonfatal to check-in callers', () => {
@@ -348,6 +348,6 @@ test('installed native Audio sets anonymous CORS before src and never passes src
   const f = installed({ strictCORS: true }); f.api.report('saved_execute', { id: 'cors-media' });
   assert.deepEqual(f.root.audioConstruction, [[]]);
   assert.equal(f.audios[0].crossOrigin, 'anonymous');
-  assert.equal(f.audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3');
+  assert.equal(f.audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3?rev=natural-female-1');
   assert.equal(f.audios[0].playCalls, 1); f.api.dispose();
 });

@@ -431,7 +431,8 @@
       if (pending) return pending;
       let cancelled = false, deadline;
       const probes = new Set();
-      const ready = value => value?.ready === true && value.audioReady === true && value.audioVersion === 'patrol-v1';
+      const currentAudio = value => value?.audioVersion === 'patrol-v1' && value.audioRevision === 'natural-female-1';
+      const ready = value => value?.ready === true && value.audioReady === true && currentAudio(value);
       const probe = (worker, type, timeout) => new Promise((resolve, reject) => {
         const channel = new e.MessageChannel(); let finished = false;
         const finish = (error, value) => {
@@ -453,7 +454,7 @@
             checked = worker;
             let reply = await probe(worker, 'PATROL_OFFLINE_READY', e.probeTimeout || 3000);
             if (cancelled) break;
-            if (reply?.audioVersion === 'patrol-v1') {
+            if (currentAudio(reply)) {
               if (!ready(reply) && nav.onLine !== false) reply = await probe(worker, 'PATROL_OFFLINE_PREPARE', e.repairTimeout || 28000);
               if (cancelled) break;
               if (!ready(reply)) throw fault('shell', '離線頁面與提示音尚未備妥，請連線後重試。');

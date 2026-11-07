@@ -1,4 +1,4 @@
-"""Build fixed public patrol messages locally; never reads accounts or credentials.
+"""Legacy eSpeak builder. New natural voices use import_voice_assets.py instead.
 
 One-time build tools (not application/runtime dependencies):
   .venv/Scripts/python.exe -m pip install --target output/voice-asset-tools \
@@ -154,6 +154,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify-only", action="store_true", help="Decode/hash existing assets without synthesis")
     args = parser.parse_args()
+    existing_manifest = ASSETS / "manifest.json"
+    if existing_manifest.exists() and json.loads(existing_manifest.read_text(encoding="utf-8")).get("revision"):
+        raise SystemExit("This pack contains reviewed natural voices. Use scripts/import_voice_assets.py; refusing to overwrite it with legacy eSpeak.")
     wanted = source_messages()
     builder = None if args.verify_only else EspeakBuilder()
     previous = json.loads((ASSETS / "manifest.json").read_text(encoding="utf-8")) if args.verify_only else None

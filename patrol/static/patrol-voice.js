@@ -18,6 +18,7 @@
     receipt_confirmed: '這是已確認的打卡紀錄。'
   });
   const PREF = 'patrol-voice-enabled-v1', SEEN = 'patrol-voice-seen-v1', SCAN = 'patrol-voice-scan-v1';
+  const AUDIO_REVISION = 'natural-female-1';
   function createFeedback(options) {
     const o = options || {};
     const later = o.setTimeout || setTimeout, clearTimer = o.clearTimeout || clearTimeout;
@@ -46,7 +47,9 @@
       // Fixed public assets only: no device TTS, remote synthesis or private text.
       let audio;
       try {
-        audio = o.createAudio('/static/audio/patrol-v1/' + locale() + '/' + lastResult.kind + '.mp3');
+        // A fixed public revision avoids the browser's decoded-media cache
+        // reusing an older voice after the service-worker cache has updated.
+        audio = o.createAudio('/static/audio/patrol-v1/' + locale() + '/' + lastResult.kind + '.mp3?rev=' + AUDIO_REVISION);
         if (!audio || typeof audio.play !== 'function' || typeof audio.pause !== 'function') throw new Error('Audio unavailable');
         audio.preload = 'auto'; audio.playsInline = true; audio.volume = 1; audio.muted = false;
       } catch (_) { status = 'unavailable'; emit(); return; }

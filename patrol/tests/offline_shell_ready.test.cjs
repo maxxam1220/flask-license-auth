@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createShellReadiness } = require('../static/offline.js');
-const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1' };
+const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1' };
 function fixture(options = {}) {
   const calls = [], channels = [];
   class Channel {
@@ -29,6 +29,20 @@ test('offline readiness requires all audio assets and exact version', async () =
 test('older ready:true worker cannot claim built-in audio ready', async () => {
   const x = fixture(); x.registration.active = x.worker({ ready: true }); await x.ensure();
   assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
+});
+
+test('previous voice revision cannot satisfy the new audio preparation', async () => {
+  const x = fixture(); const old = { ...complete }; delete old.audioRevision;
+  x.registration.active = x.worker(old); await x.ensure();
+  assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
+  assert(!x.calls.includes('PATROL_OFFLINE_PREPARE'));
+});
+
+test('offline old audio revision fails promptly without network repair', async () => {
+  const x = fixture(); x.env.navigator.onLine = false;
+  x.registration.active = x.worker({ ...complete, audioRevision: 'old-voice' });
+  await assert.rejects(x.ensure(), /離線頁面與提示音尚未備妥/);
+  assert(!x.calls.includes('PATROL_OFFLINE_PREPARE')); assert(!x.calls.includes('update'));
 });
 test('waits for already-installing new worker before accepting readiness', async () => {
   const x = fixture(); x.registration.active = x.worker({ ready: true }); x.registration.installing = {};

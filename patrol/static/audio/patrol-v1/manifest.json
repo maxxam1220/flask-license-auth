@@ -1,27 +1,82 @@
 {
   "version": "patrol-v1",
+  "revision": "natural-female-1",
   "generator": {
-    "engine": "eSpeak NG",
-    "version": "1.52.0",
-    "engine_library_sha256": "646d387acbc7ac2aa45e3625aa00a6835ae5d446ff8b0748298c3900b4dde258",
-    "voice_style": "Formant synthesis; noticeably mechanical, not a recorded human voice.",
-    "rate_words_per_minute": 155,
-    "encoding": "MP3, mono, 64 kbps",
-    "normalization": "Target RMS -20 dBFS, peak limited to 0.85 before MP3 encoding.",
-    "reproduce": ".venv/Scripts/python.exe scripts/generate_voice_assets.py",
+    "engine": "Pre-generated neural female voices",
+    "encoding": "MP3, mono, 96 kbps",
+    "normalization": "Target RMS -20 dBFS; peak <=0.85 before encoding; no pitch/time changes.",
+    "packaging": "scripts/import_voice_assets.py",
     "dependencies": {
-      "espeakng-loader": "0.2.4",
       "lameenc": "1.9.0",
       "soundfile": "0.14.0",
       "numpy": "2.5.4"
     }
   },
   "sources": {
-    "engine": "https://github.com/espeak-ng/espeak-ng",
-    "engine_license": "https://github.com/espeak-ng/espeak-ng/blob/master/COPYING",
-    "audio_output_usage": "https://sourceforge.net/p/espeak/discussion/538921/thread/7be4e8b2/",
-    "loader": "https://github.com/thewh1teagle/espeakng-loader",
-    "encoder": "https://github.com/chrisstaite/lameenc"
+    "zh-Hant": {
+      "engine": "Kokoro-82M-v1.1-zh / ONNX fp32 CPU",
+      "voice": "zf_001",
+      "model": "hexgrad/Kokoro-82M-v1.1-zh",
+      "license": "Apache-2.0",
+      "source_url": "https://huggingface.co/hexgrad/Kokoro-82M-v1.1-zh",
+      "model_revision": "01e7505bd6a7a2ac4975463114c3a7650a9f7218",
+      "onnx_source": "https://huggingface.co/onnx-community/Kokoro-82M-v1.1-zh-ONNX",
+      "onnx_revision": "6cc0f0d2ebe369a68b0df87c2b65c1af8c0ac3e3",
+      "model_sha256": "94b973941b1852754f979be5d5e20be666d5c81d9bb886b88ae1dc85c9b895ca",
+      "voice_sha256": "0a89ec12bb93fb9c74077924daf02568baad64e1f869389f5aaee01a386035f8",
+      "voice_source_information": "Original zh model card states Chinese professional speaker data freely/permissively granted by LongMaoData.",
+      "frontend": "OpenCC t2s for pronunciation; source messages unchanged. Segment 暂存 as a verb.",
+      "speed": 1.0,
+      "pitch_shift": false
+    },
+    "id": {
+      "engine": "OpenBMB VoxCPM",
+      "voice": "indonesian-female-v2",
+      "model": "openbmb/VoxCPM1.5",
+      "license": "Apache-2.0 (base and adapter model cards)",
+      "source_url": "https://huggingface.co/aisyahsyihab/voxcpm-lora-indonesian-female-v2#license",
+      "model_revision": "8cdc403854cda0e3af12252d27da038fda5982ac",
+      "adapter": "aisyahsyihab/voxcpm-lora-indonesian-female-v2",
+      "adapter_revision": "e837657ff86bece9cb2fb6c4192ef4a9827ac11a",
+      "voice_source_information": "Not explicitly documented in the adapter model card; no claim of independently verified performer consent.",
+      "generated_audio_rights_information": "The public model cards state Apache-2.0. They do not provide a separate generated-output ownership assurance.",
+      "parameters": {
+        "dtype": "float32",
+        "cfg_value": 2.5,
+        "inference_timesteps": 10,
+        "seed": 20261107
+      },
+      "pitch_shift": false
+    },
+    "vi": {
+      "engine": "VieNeu-TTS v3 Turbo ONNX fp32",
+      "voice": "Trúc Ly",
+      "model": "pnnbao-ump/VieNeu-TTS-v3-Turbo",
+      "license": "Apache-2.0",
+      "source_url": "https://huggingface.co/pnnbao-ump/VieNeu-TTS-v3-Turbo#-usage-rights--licensing-faq",
+      "model_revision": "61b85e3d937fbbacb387714180e8182823512523",
+      "voice_metadata": {
+        "gender": "female",
+        "description": "Nữ · Bắc · Phong cách tự nhiên",
+        "style": "tu_nhien",
+        "featured": 2
+      },
+      "voice_sha256": "e1f13cd2c2e0d29fdab5e15bfd7a30f3d7b768e6132bb43dd2b853f8efefdce9",
+      "voice_source_information": "Original author confirms bundled presets and generated audio commercial usage and speaker/rightsholder consent in model-card FAQ.",
+      "codec": "OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano-ONNX",
+      "codec_revision": "ceff0d0749bfb3fa2d61149794ec6feef0d1e1ae",
+      "codec_license": "Apache-2.0",
+      "parameters": {
+        "temperature": 0.8,
+        "top_k": 25,
+        "top_p": 0.95,
+        "repetition_penalty": 1.2,
+        "max_new_frames": 300,
+        "apply_watermark": false
+      },
+      "seed_base": 20261107,
+      "pitch_shift": false
+    }
   },
   "files": [
     {
@@ -29,429 +84,429 @@
       "kind": "saved_execute",
       "source": "執行簽到完成。",
       "text": "執行簽到完成。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/saved_execute.mp3",
-      "bytes": 18390,
-      "sha256": "e41d942a240a507bbb569192af952c4c242211a077413fc7ec9f0696e521c98f",
-      "duration_seconds": 2.298776
+      "bytes": 22176,
+      "sha256": "7586cc742568410bb6f474192f6f0fdb974b2d28fbf8f908bdce886d1a8fa687",
+      "duration_seconds": 1.848
     },
     {
       "locale": "zh-Hant",
       "kind": "saved_inspect",
       "source": "巡檢完成。",
       "text": "巡檢完成。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/saved_inspect.mp3",
-      "bytes": 13792,
-      "sha256": "abbd4c4361c3b51eb663c206eee431c7330593cbd8950696c5ecde1a9a9bac3a",
-      "duration_seconds": 1.724082
+      "bytes": 18144,
+      "sha256": "0b62f00e50a4b0b68ce0e77e369309c6e1f9144444bdc802a84cc9d403c6525f",
+      "duration_seconds": 1.512
     },
     {
       "locale": "zh-Hant",
       "kind": "saved_visit",
       "source": "簽到完成。",
       "text": "簽到完成。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/saved_visit.mp3",
-      "bytes": 12956,
-      "sha256": "51f3f0f59161cdd8b6396196bacfadbb6a6f9d055ae488515e67554cf6bd833e",
-      "duration_seconds": 1.619592
+      "bytes": 17280,
+      "sha256": "19b96f9c7d291bb3d37fabb763fb0d39ccf30b8d06e5e3b9d58c07f04d393583",
+      "duration_seconds": 1.44
     },
     {
       "locale": "zh-Hant",
       "kind": "already_recorded",
       "source": "本次已有紀錄，沒有新增打卡。",
       "text": "本次已有紀錄，沒有新增打卡。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/already_recorded.mp3",
-      "bytes": 30720,
-      "sha256": "76cd7da8a8db5754b10e6bdf62f6b24afce5cea8a19ba7a31d0f00791e455c84",
-      "duration_seconds": 3.84
+      "bytes": 37728,
+      "sha256": "0cbea22dfee48754782166cc8942559d3137899d7808170d7ac58896f74af26a",
+      "duration_seconds": 3.144
     },
     {
       "locale": "zh-Hant",
       "kind": "waiting_execution",
       "source": "尚未執行，請先由執行人員簽到。",
       "text": "尚未執行，請先由執行人員簽到。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/waiting_execution.mp3",
-      "bytes": 38452,
-      "sha256": "59471de6faed8f1c6bf0ae99e6654fc326d22ea3c5d1e1fef2effa5075f87d95",
-      "duration_seconds": 4.806531
+      "bytes": 41184,
+      "sha256": "54682aef1254f9224fd5564b2707fdd94f61d7b0ef8b9b93cb26e4c6a1360b00",
+      "duration_seconds": 3.432
     },
     {
       "locale": "zh-Hant",
       "kind": "device_required",
       "source": "請先完成手機綁定核准。",
       "text": "請先完成手機綁定核准。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/device_required.mp3",
-      "bytes": 29257,
-      "sha256": "5bcbaa403929f3b05bace8815e9b69eb9be579fed7893211a62f0031da387350",
-      "duration_seconds": 3.657143
+      "bytes": 34560,
+      "sha256": "391cca32b180c829cd2f4892331f413db1abcf1f5b2fd909d66778149496bcb8",
+      "duration_seconds": 2.88
     },
     {
       "locale": "zh-Hant",
       "kind": "point_unavailable",
       "source": "此點無法簽到，請確認點位。",
       "text": "此點無法簽到，請確認點位。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/point_unavailable.mp3",
-      "bytes": 30093,
-      "sha256": "1e4e635af8326793d7ec2ebb169898b5d8a2c113ca49143f3a4da4dcc4a4181c",
-      "duration_seconds": 3.761633
+      "bytes": 36000,
+      "sha256": "717f20c39f5aed6e52ccfb5ff3416c53a6ff790e09338aeef1d49da030573bf6",
+      "duration_seconds": 3.0
     },
     {
       "locale": "zh-Hant",
       "kind": "offline_stored",
       "source": "已暫存在手機，尚未同步。",
       "text": "已暫存在手機，尚未同步。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/offline_stored.mp3",
-      "bytes": 28839,
-      "sha256": "4ff0e3f00a133013eb81d7a6c35ae83577396c03d7530c9bfdb69f00fd63e73d",
-      "duration_seconds": 3.604898
+      "bytes": 36288,
+      "sha256": "7a2c7fab0a01a1479c42b845732308ec1ccc81aba33260dc82d3e8786b399970",
+      "duration_seconds": 3.024
     },
     {
       "locale": "zh-Hant",
       "kind": "sync_confirmed",
       "source": "同步完成。",
       "text": "同步完成。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/sync_confirmed.mp3",
-      "bytes": 12956,
-      "sha256": "b2f4db07340b691eff38733d01e14b9f85a7ff9ddca030ff1f8bc753d4564983",
-      "duration_seconds": 1.619592
+      "bytes": 17280,
+      "sha256": "9211ee4dfefaabaf1bfd779f837ce529d2fd29e225492bec6e123579ed5f4546",
+      "duration_seconds": 1.44
     },
     {
       "locale": "zh-Hant",
       "kind": "sync_partial",
       "source": "部分已同步，仍有紀錄待處理。",
       "text": "部分已同步，仍有紀錄待處理。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/sync_partial.mp3",
-      "bytes": 29466,
-      "sha256": "99afe17d6cb46ed59ec180a84c3f1fc3a0ca4ab94e90ae0a2855ee452bcbd8c6",
-      "duration_seconds": 3.683265
+      "bytes": 36576,
+      "sha256": "f255962fa603004e68900013835a0a1c8da9b9c45e0ee41d62df90b31fb1057c",
+      "duration_seconds": 3.048
     },
     {
       "locale": "zh-Hant",
       "kind": "not_saved",
       "source": "尚未完成，請查看畫面提示。",
       "text": "尚未完成，請查看畫面提示。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/not_saved.mp3",
-      "bytes": 33018,
-      "sha256": "2fac0ea22d32c93ebccef316886cd482146a7e5deaf2add38146cb1611fd488a",
-      "duration_seconds": 4.127347
+      "bytes": 36576,
+      "sha256": "b53501672fadf4a22a61890455346eb0b6a87e514cf0bb7d371998b82bb92ee2",
+      "duration_seconds": 3.048
     },
     {
       "locale": "zh-Hant",
       "kind": "login_required",
       "source": "請先登入帳號。",
       "text": "請先登入帳號。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/login_required.mp3",
-      "bytes": 18181,
-      "sha256": "15fb2579e6d7425e0a70516f6282845eaf0b4f6537d7030775e7ac6615579be8",
-      "duration_seconds": 2.272653
+      "bytes": 22176,
+      "sha256": "67bffe3280ba398c255942cc87056474acce89004f07a0240293f663ed229a3b",
+      "duration_seconds": 1.848
     },
     {
       "locale": "zh-Hant",
       "kind": "receipt_confirmed",
       "source": "這是已確認的打卡紀錄。",
       "text": "這是已確認的打卡紀錄。",
-      "voice": "cmn",
+      "voice": "zf_001",
       "path": "/static/audio/patrol-v1/zh-Hant/receipt_confirmed.mp3",
-      "bytes": 22987,
-      "sha256": "85f46b976e2cb8998e97dbf2284e4f368b793f036135054b206be80d40295c71",
-      "duration_seconds": 2.873469
+      "bytes": 29376,
+      "sha256": "8223e28cab4f6f46803a1dac8eb217f60ac3e1b5f3827d8d32408563b9dc1ac1",
+      "duration_seconds": 2.448
     },
     {
       "locale": "id",
       "kind": "saved_execute",
       "source": "執行簽到完成。",
       "text": "Check-in pelaksana berhasil.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/saved_execute.mp3",
-      "bytes": 17972,
-      "sha256": "194a04a87c3f3ade3317d596b818477ff9f73967ea49ad1dbc906a71ff16ccd8",
-      "duration_seconds": 2.246531
+      "bytes": 19749,
+      "sha256": "639c1530645c82bd33965707bfb613c1cb03999255057b2a3fb9a6aad11da2b5",
+      "duration_seconds": 1.645714
     },
     {
       "locale": "id",
       "kind": "saved_inspect",
       "source": "巡檢完成。",
       "text": "Pemeriksaan selesai.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/saved_inspect.mp3",
-      "bytes": 13583,
-      "sha256": "1ab95d42a7f0c23f777b141162c9662c3b6c086e38bc6cca7c4ec3685159dbb4",
-      "duration_seconds": 1.697959
+      "bytes": 18181,
+      "sha256": "c3ed0bbaed9e4e45cc8ce36b35522f8c09c7afd81660313a52c1ce76f9136146",
+      "duration_seconds": 1.515102
     },
     {
       "locale": "id",
       "kind": "saved_visit",
       "source": "簽到完成。",
       "text": "Check-in berhasil.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/saved_visit.mp3",
-      "bytes": 12747,
-      "sha256": "66a5474199bc54a7b77eaf113e17996c178cd86a88b078aaaecf7164916532d9",
-      "duration_seconds": 1.593469
+      "bytes": 11912,
+      "sha256": "e2bc149b126976bdc60e22e7ffdc89b46192c1c26cf351cfe11b870470a89d45",
+      "duration_seconds": 0.992653
     },
     {
       "locale": "id",
       "kind": "already_recorded",
       "source": "本次已有紀錄，沒有新增打卡。",
       "text": "Check-in kali ini sudah tercatat. Tidak ada catatan check-in baru.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/already_recorded.mp3",
-      "bytes": 43676,
-      "sha256": "731393b99399fdfab6caf502aec07cb252fee61c39968436f92d457677a3f862",
-      "duration_seconds": 5.459592
+      "bytes": 40751,
+      "sha256": "118253d4c622f8fdd1ac4427f5c18d8961afe72f44c3ec87a8f5c2de1a37ceae",
+      "duration_seconds": 3.395918
     },
     {
       "locale": "id",
       "kind": "waiting_execution",
       "source": "尚未執行，請先由執行人員簽到。",
       "text": "Pelaksana belum check-in. Minta pelaksana untuk check-in terlebih dahulu.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/waiting_execution.mp3",
-      "bytes": 45348,
-      "sha256": "1c887ea2e6bcde44f649df4acf16969e27616913d70f912e0c2aae992549529b",
-      "duration_seconds": 5.668571
+      "bytes": 46080,
+      "sha256": "6b559f112029ad7c1d04e40506dd93cc092a642e71db24fd8bf25deb65dc5f9b",
+      "duration_seconds": 3.84
     },
     {
       "locale": "id",
       "kind": "device_required",
       "source": "請先完成手機綁定核准。",
       "text": "Selesaikan pendaftaran browser ponsel dan tunggu persetujuan terlebih dahulu.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/device_required.mp3",
-      "bytes": 43885,
-      "sha256": "97e2228b132b8934291f96b4780e324bfaca681695a295361932bac40d15a69c",
-      "duration_seconds": 5.485714
+      "bytes": 54230,
+      "sha256": "72557a78c387a9370a5d7e77d75d194cb4be16663dd9aba7b1bb3c537e05a9b1",
+      "duration_seconds": 4.519184
     },
     {
       "locale": "id",
       "kind": "point_unavailable",
       "source": "此點無法簽到，請確認點位。",
       "text": "Tidak dapat check-in di titik ini. Periksa kembali titiknya.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/point_unavailable.mp3",
-      "bytes": 39288,
-      "sha256": "a799e29c94529e6bbbfd260379d7adf7936779291924ba54e3af4c6ea78a7d26",
-      "duration_seconds": 4.91102
+      "bytes": 40751,
+      "sha256": "84ec3d5d0d98392e684c55418b06fb315bdcb695333cd7bfe3a6dab4007472c8",
+      "duration_seconds": 3.395918
     },
     {
       "locale": "id",
       "kind": "offline_stored",
       "source": "已暫存在手機，尚未同步。",
       "text": "Sudah disimpan sementara di ponsel, belum disinkronkan.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/offline_stored.mp3",
-      "bytes": 34063,
-      "sha256": "ed4505f081701db458849e541ba702af4c8b66f111bb0c78a987a947f1e484dd",
-      "duration_seconds": 4.257959
+      "bytes": 33228,
+      "sha256": "a48235e71e600d292bf72f0fcd56b782e7d5ee9aed6f23c0d36816a2dc172766",
+      "duration_seconds": 2.76898
     },
     {
       "locale": "id",
       "kind": "sync_confirmed",
       "source": "同步完成。",
       "text": "Sinkronisasi selesai.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/sync_confirmed.mp3",
-      "bytes": 14210,
-      "sha256": "1505b81017836ce67f840f88ff3230ec144bd4ae302f4c0d905fee43cf2dc67f",
-      "duration_seconds": 1.776327
+      "bytes": 19749,
+      "sha256": "a15a5a44550f35ddbfea8025568454ee4572f4b638d92de093e2afe1239aeb2c",
+      "duration_seconds": 1.645714
     },
     {
       "locale": "id",
       "kind": "sync_partial",
       "source": "部分已同步，仍有紀錄待處理。",
       "text": "Sebagian sudah disinkronkan. Masih ada catatan yang perlu ditangani.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/sync_partial.mp3",
-      "bytes": 43049,
-      "sha256": "46e442bd0fa7637f7384e365cfd24d97689153e3a8a1faa328243a6e03df6e4b",
-      "duration_seconds": 5.381224
+      "bytes": 50469,
+      "sha256": "5b307bf4ff6d8e8c08db32be19f9ee0a171ad15039b8d98b05df1227a42f3fce",
+      "duration_seconds": 4.205714
     },
     {
       "locale": "id",
       "kind": "not_saved",
       "source": "尚未完成，請查看畫面提示。",
       "text": "Belum selesai. Periksa petunjuk di layar.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/not_saved.mp3",
-      "bytes": 26958,
-      "sha256": "7e7edf305a1c90c2830805a5980bb1ba5a5ed7565cc7079008fef9b739c9f20f",
-      "duration_seconds": 3.369796
+      "bytes": 33228,
+      "sha256": "6236b2a5d40d92cb240cb1e8b2dab28123c72ca40806326a4a6eb95d966b5648",
+      "duration_seconds": 2.76898
     },
     {
       "locale": "id",
       "kind": "login_required",
       "source": "請先登入帳號。",
       "text": "Silakan masuk ke akun terlebih dahulu.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/login_required.mp3",
-      "bytes": 23405,
-      "sha256": "77706937c36808f2459a7b439840c2cd14a97381b56315fbac1f6f20abe457c8",
-      "duration_seconds": 2.925714
+      "bytes": 25391,
+      "sha256": "a8319b58d29b48470954a45bae5876ed355df447a57aeb65623f5d0d17242840",
+      "duration_seconds": 2.115918
     },
     {
       "locale": "id",
       "kind": "receipt_confirmed",
       "source": "這是已確認的打卡紀錄。",
       "text": "Ini adalah catatan check-in yang sudah dikonfirmasi.",
-      "voice": "id",
+      "voice": "indonesian-female-v2",
       "path": "/static/audio/patrol-v1/id/receipt_confirmed.mp3",
-      "bytes": 30928,
-      "sha256": "34f38df64bda46e0348281077ee80aaf1c7f36c1d7fc134587c579baef1bc24c",
-      "duration_seconds": 3.866122
+      "bytes": 31033,
+      "sha256": "663faa7585d9ab5b991a155d1fefdc89b7c99a0cb460fbf59ea4e28425cfb40f",
+      "duration_seconds": 2.586122
     },
     {
       "locale": "vi",
       "kind": "saved_execute",
       "source": "執行簽到完成。",
       "text": "Đã hoàn tất điểm danh của nhân viên thực hiện.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/saved_execute.mp3",
-      "bytes": 20480,
-      "sha256": "cc287ae2252fa9d6dc0069123aa9aa5101639cb08944e455f91a9065cd77eec2",
-      "duration_seconds": 2.56
+      "bytes": 24192,
+      "sha256": "934d33f46dee9280b663d3a32ece45c424df6a19ac485ae572b4ce9aeddc62d2",
+      "duration_seconds": 2.016
     },
     {
       "locale": "vi",
       "kind": "saved_inspect",
       "source": "巡檢完成。",
       "text": "Đã hoàn thành kiểm tra.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/saved_inspect.mp3",
-      "bytes": 12329,
-      "sha256": "f4a0cab09a43002ca8e2ca3e51b55d8c3a6b73473d61eb9729cd5c83e3219262",
-      "duration_seconds": 1.541224
+      "bytes": 16416,
+      "sha256": "2a9001776f42c1b4d392f2cf484fd4801809ddf1b1e60a62ca901314a5db6284",
+      "duration_seconds": 1.368
     },
     {
       "locale": "vi",
       "kind": "saved_visit",
       "source": "簽到完成。",
       "text": "Điểm danh thành công.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/saved_visit.mp3",
-      "bytes": 9613,
-      "sha256": "357cfe7950c7386d9c947f20624905a0b6d5787dacd1ef0ebf1aeb86302d41a2",
-      "duration_seconds": 1.201633
+      "bytes": 13824,
+      "sha256": "8b6e499921e87ad5a082782c5e7030e66d7e058f9be2f6b77e30ddf8bef8be09",
+      "duration_seconds": 1.152
     },
     {
       "locale": "vi",
       "kind": "already_recorded",
       "source": "本次已有紀錄，沒有新增打卡。",
       "text": "Lượt này đã có bản ghi. Không tạo thêm lượt điểm danh mới.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/already_recorded.mp3",
-      "bytes": 30093,
-      "sha256": "ed4032cea2a6e82e10054a53f62e8288df86f1c527a9d1daefcf69c4ca269eea",
-      "duration_seconds": 3.761633
+      "bytes": 36000,
+      "sha256": "723e476eb12037b664816b4c2d7b14133759d1ef36f59f56332778cf2cff2303",
+      "duration_seconds": 3.0
     },
     {
       "locale": "vi",
       "kind": "waiting_execution",
       "source": "尚未執行，請先由執行人員簽到。",
       "text": "Nhân viên thực hiện chưa điểm danh. Vui lòng yêu cầu nhân viên thực hiện điểm danh trước.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/waiting_execution.mp3",
-      "bytes": 39497,
-      "sha256": "303d01656fe7310348506067dcc50d57686c5c8aeaad128cb651d44e29cb6bf1",
-      "duration_seconds": 4.937143
+      "bytes": 48384,
+      "sha256": "69160451563669d6bdda4e2bf966ef79375e392c5f4237aeb98e3e36b3994924",
+      "duration_seconds": 4.032
     },
     {
       "locale": "vi",
       "kind": "device_required",
       "source": "請先完成手機綁定核准。",
       "text": "Vui lòng đăng ký trình duyệt trên điện thoại và chờ phê duyệt trước.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/device_required.mp3",
-      "bytes": 31346,
-      "sha256": "ed5f3aac14dd95fb88a798adc6a2a87ac4b94a7792a92f5137ef1d47547e4aeb",
-      "duration_seconds": 3.918367
+      "bytes": 34848,
+      "sha256": "72cc370305b5c9ea6f7e137ecda6d8abbc8a9b643c0ecea40345c72c901d1fd7",
+      "duration_seconds": 2.904
     },
     {
       "locale": "vi",
       "kind": "point_unavailable",
       "source": "此點無法簽到，請確認點位。",
       "text": "Không thể điểm danh tại điểm này. Vui lòng kiểm tra lại điểm.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/point_unavailable.mp3",
-      "bytes": 29675,
-      "sha256": "11726d34761c3cafd68540666c0be07941ed9b8f462cc9592ce9dd0365dd7b70",
-      "duration_seconds": 3.709388
+      "bytes": 33984,
+      "sha256": "1a4c413791f7128aa6adf6cfdd85ea0e4689605c21eb237e7f08c8f057db6db2",
+      "duration_seconds": 2.832
     },
     {
       "locale": "vi",
       "kind": "offline_stored",
       "source": "已暫存在手機，尚未同步。",
       "text": "Đã lưu tạm trên điện thoại, chưa đồng bộ.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/offline_stored.mp3",
-      "bytes": 21315,
-      "sha256": "303f8311eb3435fd4645d4648188a41cc9572ec563edcc7a7a60ff41da25cb0c",
-      "duration_seconds": 2.66449
+      "bytes": 24480,
+      "sha256": "05818289da3bfc2350d7278693cca3c655e173e1ef058e16c1493cea471afceb",
+      "duration_seconds": 2.04
     },
     {
       "locale": "vi",
       "kind": "sync_confirmed",
       "source": "同步完成。",
       "text": "Đồng bộ hoàn tất.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/sync_confirmed.mp3",
-      "bytes": 9195,
-      "sha256": "22d0b51cb013f28159a1cc94f4513edf479ae13952e94c6981f65b3941cb45b9",
-      "duration_seconds": 1.149388
+      "bytes": 11808,
+      "sha256": "34d5b6adefad0e07fffe5976a9ebdcdc5e51e979242601ab14cef072be317343",
+      "duration_seconds": 0.984
     },
     {
       "locale": "vi",
       "kind": "sync_partial",
       "source": "部分已同步，仍有紀錄待處理。",
       "text": "Đã đồng bộ một phần. Vẫn còn bản ghi cần xử lý.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/sync_partial.mp3",
-      "bytes": 28630,
-      "sha256": "713c207c45c02ae73760cf47dbeba9980a9b235bb9f6fd057afdd02ae39d01eb",
-      "duration_seconds": 3.578776
+      "bytes": 31968,
+      "sha256": "aade5c31e7b082a610ecd76c0589494cfba0c21141008461b80c9fdaf571b169",
+      "duration_seconds": 2.664
     },
     {
       "locale": "vi",
       "kind": "not_saved",
       "source": "尚未完成，請查看畫面提示。",
       "text": "Chưa hoàn tất. Vui lòng xem thông báo trên màn hình.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/not_saved.mp3",
-      "bytes": 26331,
-      "sha256": "8b67da5cd813a393b7f38544f8d4529764c73ec1c0f26c2be3112842324f9eb7",
-      "duration_seconds": 3.291429
+      "bytes": 31104,
+      "sha256": "34e1cb4e5012fcf36dc04db38e642a9c1dc3475d237b02909d4d61f0ce28ec1e",
+      "duration_seconds": 2.592
     },
     {
       "locale": "vi",
       "kind": "login_required",
       "source": "請先登入帳號。",
       "text": "Vui lòng đăng nhập tài khoản trước.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/login_required.mp3",
-      "bytes": 16300,
-      "sha256": "7e8c968610874ed9c371e0a57de02621b97df12af069a03c53e7278870c23bcc",
-      "duration_seconds": 2.037551
+      "bytes": 18720,
+      "sha256": "3fa7b83e7cda08b2f374ec5e386302d369636042090e90216ce5bd477689247b",
+      "duration_seconds": 1.56
     },
     {
       "locale": "vi",
       "kind": "receipt_confirmed",
       "source": "這是已確認的打卡紀錄。",
       "text": "Đây là bản ghi điểm danh đã được xác nhận.",
-      "voice": "vi",
+      "voice": "Trúc Ly",
       "path": "/static/audio/patrol-v1/vi/receipt_confirmed.mp3",
-      "bytes": 19853,
-      "sha256": "dabcc5e745f9095afa89c12b6a7e764cfd0da5938e271a1621cc082916f3073c",
-      "duration_seconds": 2.481633
+      "bytes": 25056,
+      "sha256": "ef0633cc837256d707422c011b82e1cf3276b03a6b007bb80c1e0e9f1a2b3bca",
+      "duration_seconds": 2.088
     }
   ]
 }

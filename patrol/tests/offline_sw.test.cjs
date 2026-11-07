@@ -10,7 +10,7 @@ const kinds = ['saved_execute', 'saved_inspect', 'saved_visit', 'already_recorde
   'offline_stored', 'sync_confirmed', 'sync_partial', 'not_saved', 'login_required', 'receipt_confirmed'];
 const audioPaths = ['zh-Hant', 'id', 'vi'].flatMap(locale => kinds.map(kind => audioRoot + locale + '/' + kind + '.mp3'));
 const audioBytes = new Uint8Array([73, 68, 51, 3, 0, 0, 0, 0, 0, 0, 255, 251, 144, 0, 17, 32, 48, 64, 80, 96]);
-const manifest = { version: 'patrol-v1', files: audioPaths.map(path => ({ path, locale: path.split('/').at(-2), kind: path.split('/').at(-1).slice(0, -4),
+const manifest = { version: 'patrol-v1', revision: 'natural-female-1', files: audioPaths.map(path => ({ path, locale: path.split('/').at(-2), kind: path.split('/').at(-1).slice(0, -4),
   bytes: audioBytes.byteLength, sha256: createHash('sha256').update(audioBytes).digest('hex') })) };
 const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
 function defaultResponse(path) {
@@ -70,12 +70,33 @@ test('readiness requires every cached asset; activation deletes only old patrol 
   const w = worker(); await w.lifecycle('install'); let answer;
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, true);
   assert.equal(answer.audioReady, true); assert.equal(answer.audioVersion, 'patrol-v1');
+  assert.equal(answer.audioRevision, 'natural-female-1');
   const current = [...w.stores.keys()][0]; w.stores.get(current).delete('/static/offline.js');
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, false);
   w.stores.set('patrol-offline-shell-old', new Map()); w.stores.set('unrelated-app-cache', new Map()); await w.lifecycle('activate');
   assert.equal(w.stores.has('patrol-offline-shell-old'), true); assert.equal(w.actions.includes('claim'), false);
   w.stores.get(current).set('/static/offline.js', defaultResponse('/static/offline.js')); await w.lifecycle('activate');
   assert.equal(w.stores.has('patrol-offline-shell-old'), false); assert.equal(w.stores.has('unrelated-app-cache'), true);
+});
+
+test('stale audio manifest fails update without replacing an older usable cache', async () => {
+  const w = worker(); const old = new Map([['/offline', new Response('previous usable shell')]]);
+  w.stores.set('patrol-offline-shell-old', old);
+  w.respond(request => Promise.resolve(new URL(request.url).pathname === audioRoot + 'manifest.json'
+    ? new Response(JSON.stringify({ ...manifest, revision: 'old-voice' }), { headers: { 'Content-Type': 'application/json' } })
+    : defaultResponse(new URL(request.url).pathname)));
+  await assert.rejects(w.lifecycle('install'), /Incomplete audio manifest/);
+  assert.equal(w.writes.length, 0); assert.equal(w.actions.includes('skipWaiting'), false);
+  assert.equal(await w.stores.get('patrol-offline-shell-old').get('/offline').text(), 'previous usable shell');
+});
+
+test('already-open pages keep their fixed audio paths after voice upgrade', async () => {
+  const w = worker(); await w.lifecycle('install'); await w.lifecycle('activate'); w.self.navigator.onLine = false;
+  w.respond(() => { throw new Error('offline; no network'); });
+  for (const path of audioPaths) {
+    const response = await w.fetchPage(path, { mode: 'cors', headers: { Range: 'bytes=0-9' } });
+    assert.equal(response.status, 206); assert.deepEqual(new Uint8Array(await response.arrayBuffer()), audioBytes.slice(0, 10));
+  }
 });
 
 test('failed updated shell installation preserves the existing usable offline cache', async () => {
@@ -125,7 +146,7 @@ async function readiness(w, type = 'PATROL_OFFLINE_READY') {
   await w.lifecycle('message', { data: { type }, ports: [{ postMessage(value) { answer = value; } }] });
   return answer;
 }
-const currentStore = w => w.stores.get([...w.stores.keys()].find(key => key.endsWith('-v11')));
+const currentStore = w => w.stores.get(source.match(/const CACHE = '([^']+)'/)[1]);
 
 test('audio pack is a fixed complete 39-file whitelist independent of manifest paths', async () => {
   assert.equal(audioPaths.length, 39);
@@ -240,16 +261,31 @@ test('unsupported or multiple ranges safely return full cached audio without a n
   assert.equal(conditional.status, 200); assert.equal(w.requests.length, before);
 });
 
-test('range interception cannot expand the public asset whitelist or include query/private URLs', async () => {
+test('range interception cannot expand the whitelist or accept arbitrary query/private URLs', async () => {
   const w = worker(); await w.lifecycle('install'); const before = w.writes.length;
   for (const path of [audioRoot + 'vi/user-note.mp3', audioRoot + 'en/saved_inspect.mp3', '/photos/secret.mp3',
-    audioPaths[0] + '?user=1', 'https://external.test' + audioPaths[0], '/api/offline/status', '/records']) {
+    audioPaths[0] + '?user=1', audioPaths[0] + '?rev=old', audioPaths[0] + '?rev=natural-female-1&user=1',
+    '/static/app.css?rev=natural-female-1', audioRoot + 'manifest.json?rev=natural-female-1',
+    'https://external.test' + audioPaths[0], '/api/offline/status', '/records']) {
     assert.equal(await w.fetchPage(path, { mode: 'no-cors', headers: { Range: 'bytes=0-1' } }), null, path);
   }
   assert.equal(await w.fetchPage(audioPaths[0], { method: 'POST', headers: { Range: 'bytes=0-1' } }), null);
   assert.equal(await w.fetchPage(audioPaths[0], { method: 'HEAD', headers: { Range: 'bytes=0-1' } }), null);
   const css = await w.fetchPage('/static/app.css', { headers: { Range: 'bytes=0-1' } }); assert.equal(css.status, 200);
   assert.equal(w.writes.length, before);
+});
+
+test('exact public audio revision plays cached bytes and ranges without a network request', async () => {
+  const w = worker(); await w.lifecycle('install'); w.self.navigator.onLine = false;
+  const requests = w.requests.length, writes = w.writes.length;
+  w.respond(() => { throw new Error('network unavailable'); });
+  for (const path of audioPaths) {
+    const full = await w.fetchPage(path + '?rev=natural-female-1', { mode: 'cors' });
+    assert.equal(full.status, 200); assert.deepEqual(new Uint8Array(await full.arrayBuffer()), audioBytes);
+    const partial = await w.fetchPage(path + '?rev=natural-female-1', { mode: 'cors', headers: { Range: 'bytes=0-9' } });
+    assert.equal(partial.status, 206); assert.deepEqual(new Uint8Array(await partial.arrayBuffer()), audioBytes.slice(0, 10));
+  }
+  assert.equal(w.requests.length, requests); assert.equal(w.writes.length, writes);
 });
 
 test('uncached audio Range passes through without caching a network 206', async () => {
