@@ -1,4 +1,5 @@
 {% from '_ui.html' import icon %}
+{% from '_voice_controls.html' import voice_controls %}
 {% macro scanner_button(entry, label) %}
 <button type="button" class="button button-primary scan-trigger scan-trigger-{{ entry }}" data-qr-start data-qr-entry="{{ entry }}" aria-haspopup="dialog" aria-controls="patrol-scanner" hidden>
   {{ icon('qr') }}<span lang="en">{{ 'SCAN NEXT' if entry == 'next' else 'SCAN' }}</span>
@@ -25,6 +26,7 @@
         <button class="button button-primary" type="button" data-qr-keep>{% if executor %}<span lang="en" data-legacy-english>Keep editing</span>{% endif %}<span data-i18n="保留內容並返回">{{ t('保留內容並返回') }}</span></button>
         <button class="button button-danger" type="button" data-qr-discard>{% if executor %}<span lang="en" data-legacy-english>Discard and go</span>{% endif %}<span data-i18n="放棄內容並前往巡檢點">{{ t('放棄內容並前往巡檢點') }}</span></button>
       </div>
+      {{ voice_controls() }}
       <p class="scanner-fallback"><span data-i18n="也可關閉此視窗，改用手機內建相機掃描標籤。">{{ t('也可關閉此視窗，改用手機內建相機掃描標籤。') }}</span></p>
     </div>
   </div>

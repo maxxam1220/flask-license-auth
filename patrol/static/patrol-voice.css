@@ -1,0 +1,71 @@
+/* Result feedback belongs beside the confirmation/result, never in the crowded header. */
+.patrol-voice-controls {
+  margin-block: 1rem;
+  padding: .75rem;
+  border: 1px solid var(--line, #dce5df);
+  border-radius: 12px;
+  background: #f6f9f7;
+  text-align: start;
+  min-width: 0;
+}
+.patrol-voice-controls[hidden],
+.patrol-voice-controls [hidden] { display: none !important; }
+.patrol-voice-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.patrol-voice-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  min-width: 0;
+  min-height: 44px;
+  padding: .6rem .7rem;
+  border: 1px solid #cbdcd4;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink, #233b43);
+  font: inherit;
+  font-size: .95rem;
+  font-weight: 650;
+  line-height: 1.4;
+  text-align: start;
+  white-space: normal;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.patrol-voice-toggle { flex: 1 1 12rem; justify-content: flex-start; }
+.patrol-voice-replay { flex: 1 1 8.5rem; }
+.patrol-voice-icon { flex: 0 0 20px; }
+.patrol-voice-label { min-width: 0; overflow-wrap: anywhere; }
+.patrol-voice-state {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  padding: .1rem .4rem;
+  border-radius: 5px;
+  color: #52665b;
+  background: #edf1ee;
+  font-size: .82em;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.patrol-voice-toggle[aria-checked="true"] { border-color: #80b1a0; }
+.patrol-voice-toggle[aria-checked="true"] .patrol-voice-state {
+  color: #0b5e50;
+  background: #e0f0e9;
+}
+.patrol-voice-button:focus-visible { outline: 3px solid #247e6f; outline-offset: 3px; }
+.patrol-voice-button:disabled { cursor: not-allowed; color: #63736b; background: #edf1ee; }
+.patrol-voice-status {
+  margin: .55rem 0 0;
+  color: #52675b;
+  font-size: .88rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.patrol-voice-status:empty { display: none; }
+@media (hover: hover) {
+  .patrol-voice-button:not(:disabled):hover { border-color: #4d8f7d; background: #edf5f1; }
+}
+@media (max-height: 420px) {
+  .scanner-dialog .patrol-voice-controls { margin-block: .65rem; padding: .6rem; }
+}
+@media print { .patrol-voice-controls { display: none !important; } }

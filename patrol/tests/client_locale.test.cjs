@@ -31,7 +31,7 @@ test('all client translations are complete and preserve every named parameter', 
 });
 
 test('every static Chinese client source has a translation catalog entry', () => {
-  for (const filename of ['offline.js', 'patrol-scanner.js', 'app.js', 'ready-refresh.js', 'offline-sw.js']) {
+  for (const filename of ['offline.js', 'patrol-scanner.js', 'patrol-voice.js', 'app.js', 'ready-refresh.js', 'offline-sw.js']) {
     const source = fs.readFileSync(path.join(root, 'static', filename), 'utf8');
     for (const match of source.matchAll(/'((?:\\.|[^'\\\r\n])*)'|"((?:\\.|[^"\\\r\n])*)"/g)) {
       const text = match[1] ?? match[2];

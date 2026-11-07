@@ -726,5 +726,113 @@
   "準備離線": {
     "id": "Siapkan offline",
     "vi": "Chuẩn bị"
+  },
+  "語音提示": {
+    "id": "Panduan suara",
+    "vi": "Thông báo bằng giọng nói"
+  },
+  "開啟": {
+    "id": "Aktif",
+    "vi": "Bật"
+  },
+  "關閉": {
+    "id": "Nonaktif",
+    "vi": "Tắt"
+  },
+  "重播結果": {
+    "id": "Putar ulang hasil",
+    "vi": "Phát lại kết quả"
+  },
+  "未聽到提示時可重播；請以畫面結果為準。": {
+    "id": "Jika suara tidak terdengar, putar ulang. Ikuti hasil yang tertera di layar.",
+    "vi": "Nếu không nghe thấy, hãy phát lại. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "確認後依帳號語言播報；請以畫面結果為準。": {
+    "id": "Setelah konfirmasi, hasil akan dibacakan dalam bahasa akun ini. Ikuti hasil yang tertera di layar.",
+    "vi": "Sau khi xác nhận, kết quả sẽ được đọc theo ngôn ngữ của tài khoản. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "語音已關閉。": {
+    "id": "Panduan suara dinonaktifkan.",
+    "vi": "Đã tắt thông báo bằng giọng nói."
+  },
+  "此瀏覽器不支援語音，請以畫面結果為準。": {
+    "id": "Browser ini tidak mendukung suara. Ikuti hasil yang tertera di layar.",
+    "vi": "Trình duyệt này không hỗ trợ giọng nói. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "此裝置未提供此語言的語音，請以畫面結果為準。": {
+    "id": "Perangkat ini tidak menyediakan suara untuk bahasa ini. Ikuti hasil yang tertera di layar.",
+    "vi": "Thiết bị này không có giọng đọc cho ngôn ngữ này. Hãy căn cứ vào kết quả trên màn hình."
+  },
+  "目前離線，沒有可離線播放的此語言語音。": {
+    "id": "Saat ini offline. Tidak ada suara untuk bahasa ini yang dapat diputar tanpa internet.",
+    "vi": "Hiện đang ngoại tuyến. Không có giọng đọc cho ngôn ngữ này dùng được khi không có mạng."
+  },
+  "正在準備語音…": {
+    "id": "Menyiapkan suara…",
+    "vi": "Đang chuẩn bị giọng đọc…"
+  },
+  "正在播報…": {
+    "id": "Membacakan hasil…",
+    "vi": "Đang đọc kết quả…"
+  },
+  "播報結束，可按重播再聽一次。": {
+    "id": "Pembacaan selesai. Tekan Putar ulang hasil untuk mendengarkan lagi.",
+    "vi": "Đã đọc xong. Nhấn Phát lại kết quả để nghe lại."
+  },
+  "未能自動播報，請按「重播結果」。": {
+    "id": "Suara tidak dapat diputar otomatis. Tekan Putar ulang hasil.",
+    "vi": "Không thể tự động đọc kết quả. Hãy nhấn Phát lại kết quả."
+  },
+  "執行簽到完成。": {
+    "id": "Check-in pelaksana berhasil.",
+    "vi": "Đã hoàn tất điểm danh của nhân viên thực hiện."
+  },
+  "巡檢完成。": {
+    "id": "Pemeriksaan selesai.",
+    "vi": "Đã hoàn thành kiểm tra."
+  },
+  "簽到完成。": {
+    "id": "Check-in berhasil.",
+    "vi": "Điểm danh thành công."
+  },
+  "本次已有紀錄，沒有新增打卡。": {
+    "id": "Check-in kali ini sudah tercatat. Tidak ada catatan check-in baru.",
+    "vi": "Lượt này đã có bản ghi. Không tạo thêm lượt điểm danh mới."
+  },
+  "尚未執行，請先由執行人員簽到。": {
+    "id": "Pelaksana belum check-in. Minta pelaksana untuk check-in terlebih dahulu.",
+    "vi": "Nhân viên thực hiện chưa điểm danh. Vui lòng yêu cầu nhân viên thực hiện điểm danh trước."
+  },
+  "請先完成手機綁定核准。": {
+    "id": "Selesaikan pendaftaran browser ponsel dan tunggu persetujuan terlebih dahulu.",
+    "vi": "Vui lòng đăng ký trình duyệt trên điện thoại và chờ phê duyệt trước."
+  },
+  "此點無法簽到，請確認點位。": {
+    "id": "Tidak dapat check-in di titik ini. Periksa kembali titiknya.",
+    "vi": "Không thể điểm danh tại điểm này. Vui lòng kiểm tra lại điểm."
+  },
+  "已暫存在手機，尚未同步。": {
+    "id": "Sudah disimpan sementara di ponsel, belum disinkronkan.",
+    "vi": "Đã lưu tạm trên điện thoại, chưa đồng bộ."
+  },
+  "同步完成。": {
+    "id": "Sinkronisasi selesai.",
+    "vi": "Đồng bộ hoàn tất."
+  },
+  "部分已同步，仍有紀錄待處理。": {
+    "id": "Sebagian sudah disinkronkan. Masih ada catatan yang perlu ditangani.",
+    "vi": "Đã đồng bộ một phần. Vẫn còn bản ghi cần xử lý."
+  },
+  "尚未完成，請查看畫面提示。": {
+    "id": "Belum selesai. Periksa petunjuk di layar.",
+    "vi": "Chưa hoàn tất. Vui lòng xem thông báo trên màn hình."
+  },
+  "請先登入帳號。": {
+    "id": "Silakan masuk ke akun terlebih dahulu.",
+    "vi": "Vui lòng đăng nhập tài khoản trước."
+  },
+  "這是已確認的打卡紀錄。": {
+    "id": "Ini adalah catatan check-in yang sudah dikonfirmasi.",
+    "vi": "Đây là bản ghi điểm danh đã được xác nhận."
   }
 }

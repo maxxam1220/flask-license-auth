@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 import app as patrol
 from missed import TAIPEI, calculate_missed
 from models import Inspection, InspectionPhoto, PatrolExecution, Point, User, db
@@ -100,7 +102,7 @@ def test_two_executions_can_precede_both_reviews_and_each_inspector_keeps_two_re
         result = a.executor.post(a.paired + "/confirm", data=fields)
         assert result.status_code == 302 and result.location.startswith("/executions/")
         execution_receipts.append(result.location)
-        assert a.executor.post(a.paired + "/confirm", data=second_tab).location == result.location
+        assert without_voice_feedback(a.executor.post(a.paired + "/confirm", data=second_tab).location) == without_voice_feedback(result.location)
         assert not rows(a.pair_point)
     executions = rows(a.pair_point, PatrolExecution)
     assert len(executions) == 2 and not context(application, a.executor, a.paired)[1]["can_confirm"]
@@ -115,17 +117,17 @@ def test_two_executions_can_precede_both_reviews_and_each_inspector_keeps_two_re
             result = actor.post(a.paired + "/confirm", data=fields)
             assert result.status_code == 302 and result.location.startswith("/checkins/")
             receipts.append(result.location)
-            assert actor.post(a.paired + "/confirm", data=fields).location == result.location
+            assert without_voice_feedback(actor.post(a.paired + "/confirm", data=fields).location) == without_voice_feedback(result.location)
             if actor is a.inspector and slot == "am":
                 original_first = fields
                 assert a.pair_point.code in ready(application, actor)
-        assert receipts[0] != receipts[1]
+        assert without_voice_feedback(receipts[0]) != without_voice_feedback(receipts[1])
         assert not context(application, actor, a.paired)[1]["can_confirm"]
         assert a.pair_point.code not in ready(application, a.peer)
     saved = rows(a.pair_point)
     assert len(saved) == 4 and len({(item.user_id, item.slot) for item in saved}) == 4
     assert all(item.execution_id == next(first.id for first in executions if first.slot == item.slot) for item in saved)
-    assert a.inspector.post(a.paired + "/confirm", data=original_first).location == f"/checkins/{saved[0].id}"
+    assert without_voice_feedback(a.inspector.post(a.paired + "/confirm", data=original_first).location) == f"/checkins/{saved[0].id}"
     assert len(rows(a.pair_point)) == 4 and len(rows(a.pair_point, PatrolExecution)) == 2
 
 
@@ -179,7 +181,7 @@ def test_direct_general_rounds_are_personal_and_two_first_rounds_do_not_finish_t
         assert fields["slot"] == "am"
         result = actor.post(a.direct + "/confirm", data=fields)
         assert result.status_code == 302
-        assert actor.post(a.direct + "/confirm", data=fields).location == result.location
+        assert without_voice_feedback(actor.post(a.direct + "/confirm", data=fields).location) == without_voice_feedback(result.location)
         assert form(actor, a.direct)["slot"] == "pm"
     _, dashboard = context(application, a.admin, "/dashboard?view=daily&category=general")
     card = next(card for card in dashboard["cards"] if card["point"].id == a.direct_point.id)

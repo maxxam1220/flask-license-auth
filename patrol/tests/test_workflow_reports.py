@@ -4,6 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 import io
 
 import pytest
+
+from receipt_urls import without_voice_feedback
 from general_workflow import execution_deadline, execution_review_status
 from missed import TAIPEI
 from models import DeviceBinding, Inspection, InspectionPhoto, PatrolExecution, Point, PointSchedule, User, db
@@ -286,7 +288,7 @@ def test_executor_direct_receipts_are_scoped_to_submission_role_in_every_read_pa
     application.config["EXECUTOR_VISIT_CODES"] = frozenset()
     assert context(application, client, f"/checkins/{visit.id}")["stage"] == "visit"
     response = client.get(f"/records/{visit.id}")
-    assert response.status_code == 302 and response.location.endswith(f"/checkins/{visit.id}")
+    assert response.status_code == 302 and without_voice_feedback(response.location).endswith(f"/checkins/{visit.id}")
     assert [r.id for r in context(application, client, direct_url)["records"]] == [visit.id]
     assert not context(application, client, "/dashboard")["irregular_points"]
 

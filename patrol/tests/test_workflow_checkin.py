@@ -6,6 +6,8 @@ from threading import Barrier
 
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 import app as patrol
 from models import DeviceBinding, Inspection, PatrolExecution, Point, PointSchedule, User, db
 from test_app import application, FIXED_NOW, rendered_contexts
@@ -59,18 +61,18 @@ def test_rescan_can_reopen_own_receipts_without_exposing_another_executors_recei
     execution = executor.post(url + "/confirm", data=payload(executor, url))
     now += timedelta(days=1)
     scan = executor.get(url)
-    assert execution.location + "?" in scan.text
-    assert execution.location not in other_executor.get(url).text
-    assert execution.location not in inspector.get(url).text
-    href = re.search(r'href="(' + re.escape(execution.location) + r'\?[^"]+)"', scan.text).group(1)
+    assert without_voice_feedback(execution.location) + "?" in scan.text
+    assert without_voice_feedback(execution.location) not in other_executor.get(url).text
+    assert without_voice_feedback(execution.location) not in inspector.get(url).text
+    href = re.search(r'href="(' + re.escape(without_voice_feedback(execution.location)) + r'\?[^"]+)"', scan.text).group(1)
     receipt = executor.get(href)
     assert receipt.status_code == 200 and "執行簽到收據" in receipt.text and "Checked in" not in receipt.text
     review = inspector.post(url + "/confirm", data=payload(inspector, url))
-    assert review.location + "?" in inspector.get(url).text
-    assert review.location not in colleague.get(url).text
+    assert without_voice_feedback(review.location) + "?" in inspector.get(url).text
+    assert without_voice_feedback(review.location) not in colleague.get(url).text
     assert "inspection-form" in colleague.get(url).text
     now += timedelta(days=7)
-    assert execution.location not in executor.get(url).text
+    assert without_voice_feedback(execution.location) not in executor.get(url).text
     assert db.session.query(PatrolExecution).count() == db.session.query(Inspection).count() == 1
 
 
@@ -110,7 +112,7 @@ def test_transferred_shared_slot_recognises_scheduled_spot_but_not_optional_hist
         assert db.session.query(Inspection).count() == 1
     now += timedelta(days=1)
     new_receipt = safety.post(post, data=payload(safety, url))
-    assert new_receipt.status_code == 302 and new_receipt.location != receipt.location
+    assert new_receipt.status_code == 302 and without_voice_feedback(new_receipt.location) != without_voice_feedback(receipt.location)
     saved = db.session.scalar(db.select(Inspection).order_by(Inspection.id.desc()))
     assert saved.period_key == now.date().isoformat() and saved.category == "safety"
 
@@ -161,7 +163,7 @@ def test_roles_order_receipt_and_time_slot(application, monkeypatch):
     assert executor.post(post, data=first_form | {"note":"not a stage one field"}).status_code == 400
     first = executor.post(post, data=first_form)
     assert first.status_code == 302 and "/executions/" in first.location
-    assert executor.post(post, data=first_form).location == first.location
+    assert without_voice_feedback(executor.post(post, data=first_form).location) == without_voice_feedback(first.location)
     assert executor.get(first.location).status_code == 200 and inspector.get(first.location).status_code == 200
     assert db.session.query(Inspection).count() == 0 and db.session.query(PatrolExecution).count() == 1
     final = payload(inspector, url)
@@ -177,7 +179,7 @@ def test_roles_order_receipt_and_time_slot(application, monkeypatch):
     assert log.execution.user_id != log.user_id and log.is_abnormal and log.issue is not None
     assert peer.get(r.location).status_code == 200 and executor.get(r.location).status_code == 200
     peer_receipt = peer.post(post, data=payload(peer, url))
-    assert peer_receipt.status_code == 302 and peer_receipt.location != r.location
+    assert peer_receipt.status_code == 302 and without_voice_feedback(peer_receipt.location) != without_voice_feedback(r.location)
     assert db.session.query(Inspection).count() == 2 and db.session.query(PatrolExecution).count() == 1
     assert {row.execution_id for row in db.session.scalars(db.select(Inspection))} == {log.execution_id}
     now += timedelta(minutes=1)
@@ -193,7 +195,7 @@ def test_direct_checkins_are_personal_and_reset_at_taipei_midnight(application, 
     assert b.post(url + "/confirm", data=a_form).status_code == 409  # cannot recycle another account's ticket
     saved = a.post(url + "/confirm", data=a_form)
     assert saved.status_code == 302
-    assert a.post(url + "/confirm", data=a_form).location == saved.location
+    assert without_voice_feedback(a.post(url + "/confirm", data=a_form).location) == without_voice_feedback(saved.location)
     changed = a.post(url + "/confirm", data=a_form | {"note":"duplicate edit","is_abnormal":"1"}, follow_redirects=True)
     assert "重送時更改的備註、異常或照片不會追加" in changed.text
     assert not db.session.scalar(db.select(Inspection)).is_abnormal

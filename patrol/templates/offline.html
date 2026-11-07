@@ -1,4 +1,5 @@
 {% from '_ui.html' import icon %}
+{% from '_voice_controls.html' import voice_controls %}
 {% from '_scanner.html' import scanner_button, scanner_dialog %}
 <!doctype html>
 <html lang="{{ ui_locale }}" data-offline-page>
@@ -14,6 +15,8 @@
   <link rel="stylesheet" href="/static/executor-locale.css">
   <script id="patrol-i18n" type="application/json">{{ client_i18n|tojson }}</script>
   <script src="/static/i18n.js"></script>
+  <link rel="stylesheet" href="/static/patrol-voice.css">
+  <script defer src="/static/patrol-voice.js"></script>
   <script defer src="/static/offline.js"></script>
   <script defer src="/static/patrol-scanner.js"></script>
 </head>
@@ -51,6 +54,7 @@
   <section class="offline-panel offline-saved" data-offline-saved hidden aria-labelledby="offline-saved-title" tabindex="-1">
     <div class="offline-saved-heading"><span class="offline-saved-icon">{{ icon('circle-check') }}</span><h2 id="offline-saved-title"><span data-i18n="已暫存在這支手機">{{ t('已暫存在這支手機') }}</span></h2></div><p data-offline-saved-message><span data-i18n="尚未同步。回到有網路的地方後，請按同步完成上傳。">{{ t('尚未同步。回到有網路的地方後，請按同步完成上傳。') }}</span></p>{{ scanner_button('next', '繼續下一點') }}
   </section>
+  {{ voice_controls() }}
   <section class="offline-panel offline-queue-panel" id="offline-queue" aria-labelledby="offline-queue-title">
     <div class="offline-section-heading"><h2 id="offline-queue-title"><span data-i18n="待傳紀錄">{{ t('待傳紀錄') }}</span></h2><span class="offline-queue-summary" data-offline-queue-summary><span data-i18n="尚無待傳紀錄">{{ t('尚無待傳紀錄') }}</span></span></div>
     <div class="offline-actions offline-sync-actions"><button class="button button-primary" type="button" data-offline-sync disabled>{{ icon('download') }}<span data-i18n="同步待傳紀錄">{{ t('同步待傳紀錄') }}</span></button><button class="button button-secondary" type="button" data-offline-cancel-sync hidden><span data-i18n="取消本輪同步">{{ t('取消本輪同步') }}</span></button></div>

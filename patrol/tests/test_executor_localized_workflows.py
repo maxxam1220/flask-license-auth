@@ -7,6 +7,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 import app as patrol
 from i18n import translate
 from models import DeviceBinding, OfflineSubmission, PatrolExecution, User, db
@@ -145,12 +147,12 @@ def test_daily_two_allows_two_executions_before_review_and_never_three(applicati
     second_fields = payload(a.executor, a.paired)
     assert first_fields["slot"] == "am" and second_fields["slot"] == "pm"
     second = a.executor.post(a.paired + "/confirm", data=second_fields)
-    assert second.status_code == 302 and second.location != first.location
+    assert second.status_code == 302 and without_voice_feedback(second.location) != without_voice_feedback(first.location)
     closed = a.executor.get(a.paired)
     assert 'id="inspection-form"' not in closed.text
     assert translate("本次已登記執行，不需重複簽到。", locale) in visible_text(closed)
-    assert a.executor.post(a.paired + "/confirm", data=first_fields).location == first.location
-    assert a.executor.post(a.paired + "/confirm", data=second_fields).location == second.location
+    assert without_voice_feedback(a.executor.post(a.paired + "/confirm", data=first_fields).location) == without_voice_feedback(first.location)
+    assert without_voice_feedback(a.executor.post(a.paired + "/confirm", data=second_fields).location) == without_voice_feedback(second.location)
     assert db.session.query(PatrolExecution).count() == 2
 
 
@@ -167,7 +169,7 @@ def test_long_period_repeat_stays_closed_and_translated_on_next_day(application,
     closed = a.executor.get(a.paired)
     assert 'id="inspection-form"' not in closed.text
     assert translate("本週期已登記執行，不需重複簽到。", locale) in visible_text(closed)
-    assert a.executor.post(a.paired + "/confirm", data=fields).location == first.location
+    assert without_voice_feedback(a.executor.post(a.paired + "/confirm", data=fields).location) == without_voice_feedback(first.location)
     assert db.session.query(PatrolExecution).count() == 1
 
 

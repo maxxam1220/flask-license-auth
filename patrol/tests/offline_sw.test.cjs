@@ -26,7 +26,7 @@ function worker(options = {}) {
 }
 test('install caches every required asset and only a generic offline shell', async () => {
   const w = worker(); await w.lifecycle('install');
-  assert.deepEqual(w.writes.sort(), ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'].sort());
+  assert.deepEqual(w.writes.sort(), ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'].sort());
   assert(w.requests.every(request => request.credentials === 'omit' && request.redirect === 'error'));
 });
 test('one missing required asset fails install before any cache write', async () => {

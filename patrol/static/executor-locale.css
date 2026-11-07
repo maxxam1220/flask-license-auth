@@ -149,6 +149,19 @@ html[lang="vi"] .mobile-header > .brand { min-height: 44px; }
   .simple-executor-ui .executor-checkin .checkin-quick-action { margin-block: .5rem; }
   .simple-executor-ui .executor-receipt .success-emblem { display: none; }
 }
+/* Long translated receipt labels must not squeeze timestamps into tiny columns. */
+@media (max-width: 480px) {
+  html[lang="id"] .simple-executor-ui .executor-receipt .success-receipt > div,
+  html[lang="vi"] .simple-executor-ui .executor-receipt .success-receipt > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: .2rem;
+  }
+  html[lang="id"] .simple-executor-ui .executor-receipt .success-receipt > div > :last-child,
+  html[lang="vi"] .simple-executor-ui .executor-receipt .success-receipt > div > :last-child {
+    justify-self: start;
+    text-align: start;
+  }
+}
 @media (max-width: 300px) {
   html[lang="id"] .mobile-header > .brand,
   html[lang="vi"] .mobile-header > .brand { display: none; }

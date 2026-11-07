@@ -20,7 +20,7 @@ import click
 from flask import Flask, abort, before_render_template, flash as flask_flash, g, make_response, redirect, render_template, request, send_file, session, url_for
 import qrcode
 import qrcode.image.svg
-from itsdangerous import BadData, URLSafeSerializer
+from itsdangerous import BadData, URLSafeSerializer, URLSafeTimedSerializer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, selectinload
@@ -350,6 +350,7 @@ def create_app(config=None):
     @app.before_request
     def load_user_and_protect():
         g.user = None
+        g.patrol_voice_result = None
         # PostgreSQL Integer primary keys cannot represent arbitrary URL integers.
         for name, value in (request.view_args or {}).items():
             if name.endswith("_id") and not 1 <= value <= 2147483647:
@@ -1089,6 +1090,40 @@ def create_app(config=None):
             return "inspect", False, "執行與巡檢必須由不同帳號完成。"
         return "inspect", True, ""
 
+    def voice_marker(kind, *, result_id=None, auto="scan"):
+        """Presentation only: a voice result never grants access or writes attendance."""
+        return {"kind": kind, "id": result_id or secrets.token_hex(16), "auto": auto}
+
+    def voice_receipt_redirect(record, receipt_type, kind):
+        payload = {"v": 1, "user": g.user.id, "auth": g.user.auth_version,
+                   "receipt": receipt_type, "record": record.id, "kind": kind,
+                   "nonce": secrets.token_hex(16)}
+        token = URLSafeTimedSerializer(app.secret_key, salt="patrol-voice-feedback-v1").dumps(payload)
+        endpoint = "execution_success" if receipt_type == "execution" else "checkin_success"
+        args = {"execution_id": record.id} if receipt_type == "execution" else {"record_id": record.id}
+        return redirect(url_for(endpoint, **args, voice_feedback=token))
+
+    def receipt_voice_marker(record, receipt_type, saved_kind):
+        # Receipt authorization runs before this cosmetic signature is examined.
+        # Missing, old, forged or misdirected tokens remain replay-only receipts.
+        fallback = voice_marker("receipt_confirmed", result_id=f"{receipt_type}:{record.id}", auto="false")
+        tokens = request.args.getlist("voice_feedback")
+        if len(tokens) != 1 or not 1 <= len(tokens[0]) <= 2048:
+            return fallback
+        try:
+            payload = URLSafeTimedSerializer(app.secret_key, salt="patrol-voice-feedback-v1").loads(tokens[0], max_age=120)
+        except (BadData, ValueError, TypeError):
+            return fallback
+        if (not isinstance(payload, dict)
+                or set(payload) != {"v", "user", "auth", "receipt", "record", "kind", "nonce"}
+                or any(type(payload.get(key)) is not int for key in ("v", "user", "auth", "record"))
+                or payload["v"] != 1 or payload["user"] != g.user.id or payload["auth"] != g.user.auth_version
+                or payload["receipt"] != receipt_type or payload["record"] != record.id
+                or payload["kind"] not in (saved_kind, "already_recorded")
+                or not isinstance(payload["nonce"], str) or not re.fullmatch(r"[0-9a-f]{32}", payload["nonce"])):
+            return fallback
+        return voice_marker(payload["kind"], result_id=payload["nonce"], auto="true")
+
     def spot_ticket(point, key, slot, day, *, validate=False):
         signer = URLSafeSerializer(app.secret_key, salt="patrol-spot-checkin-v2")
         scope = [g.user.id, g.user.auth_version, point.id, key, slot, day.isoformat(), point.frequency, checkin_location_revision(point)]
@@ -1143,10 +1178,15 @@ def create_app(config=None):
             else:
                 existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
         label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
-        return render_template("checkin.html", point=point, device_state=device_status(), existing=existing, token=token,
+        binding_state = device_status()
+        waiting_for_execution = point.workflow_mode == "two_stage" and g.user.role == "inspector" and not first and not existing
+        result_kind = ("not_saved" if error else "already_recorded" if existing or (stage == "execute" and first) else
+                       "device_required" if binding_state != "approved" and (allowed or waiting_for_execution) else
+                       "waiting_execution" if waiting_for_execution else "point_unavailable" if not allowed else None)
+        return render_template("checkin.html", point=point, device_state=binding_state, existing=existing, token=token,
+                               voice_result=voice_marker(result_kind) if result_kind else None,
                                stage=stage, can_confirm=allowed and not existing, stage_notice=t(notice), receipt_url=receipt_url,
-                               waiting_for_execution=(point.workflow_mode == "two_stage" and g.user.role == "inspector"
-                                                      and not first and not existing),
+                               waiting_for_execution=waiting_for_execution,
                                previous_period=previous_period, draft_day=report_day, draft_slot=report_slot,
                                long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
                                first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
@@ -1201,7 +1241,7 @@ def create_app(config=None):
         else:
             flash("你已完成本日這一次巡檢，以下是你的紀錄。" if personal else "這個巡檢點本次已完成，沒有新增重複紀錄。", "info")
         if can_read_inspection(g.user, record):
-            return redirect(url_for("checkin_success", record_id=record.id))
+            return voice_receipt_redirect(record, "inspection", "already_recorded")
         return redirect(url_for("checkin", token=token))
 
     def previous_spot_response(record):
@@ -1209,7 +1249,7 @@ def create_app(config=None):
         message = ("你今天已在此點簽到，以下是原紀錄。" if record.executor_visit else
                    "這份巡檢表單先前已送出。以下是原紀錄，重送時更改的備註、異常或照片不會追加。")
         flash(message, "info")
-        return redirect(url_for("checkin_success", record_id=record.id))
+        return voice_receipt_redirect(record, "inspection", "already_recorded")
 
     @app.post("/c/<token>/confirm")
     @login_required
@@ -1218,6 +1258,7 @@ def create_app(config=None):
         lock_current_user()
         binding = device_binding()
         if not binding or binding.status != "approved":
+            g.patrol_voice_result = "device_required"
             abort(403, description="此瀏覽器尚未核准，請先申請綁定並由系統管理員核准。")
         point = get_point(token, lock=True)
         if (point.workflow_mode in ("spot", "two_stage") or point.frequency == "daily2") and db.engine.dialect.name == "sqlite":
@@ -1273,7 +1314,7 @@ def create_app(config=None):
             if not own_execution or confirmed_day != local_dt(first.created_at).date().isoformat():
                 return form_error("打卡日期已變更，請重新確認今天的打卡。", 409)
         if own_execution:
-            return redirect(url_for("execution_success", execution_id=first.id))
+            return voice_receipt_redirect(first, "execution", "already_recorded")
         if not allowed:
             return form_error(notice, 409)
         request_id = None
@@ -1305,6 +1346,7 @@ def create_app(config=None):
             message = "處理期間巡檢日期或次數已變更，請重新確認後送出。"
             return form_error(message + ("照片需重新選擇。" if photos else ""), 409)
         if stage == "execute":
+            result_kind = "saved_execute"
             first = new_execution(point, g.user, binding, key, slot, final_instant)
             db.session.add(first)
             binding.last_seen_at = naive_utc(final_instant)
@@ -1318,8 +1360,9 @@ def create_app(config=None):
                     raise
                 if first.user_id != g.user.id:
                     return form_error(checkin_stage(point, first)[2], 409)
+                result_kind = "already_recorded"
             session.pop("after_binding", None)
-            return redirect(url_for("execution_success", execution_id=first.id))
+            return voice_receipt_redirect(first, "execution", result_kind)
         record = Inspection(user_id=g.user.id, point_id=point.id, binding_id=binding.id, created_at=naive_utc(final_instant),
                             period_key=key, frequency=point.frequency, slot=slot, category=point.category,
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
@@ -1346,7 +1389,7 @@ def create_app(config=None):
         if not can_read_inspection(g.user, record):
             return redirect(url_for("checkin", token=token))
         session.pop("after_binding", None)
-        return redirect(url_for("checkin_success", record_id=record.id))
+        return voice_receipt_redirect(record, "inspection", "saved_visit" if record.executor_visit else "saved_inspect")
 
     @app.get("/executions/<int:execution_id>/success")
     @login_required
@@ -1360,6 +1403,7 @@ def create_app(config=None):
         reviewed = execution_reviewed(record)
         instant = now_utc()
         return render_template("checkin_success.html", record=record, stage="execute", finalized=reviewed,
+                               voice_result=receipt_voice_marker(record, "execution", "saved_execute"),
                                flexible_daily2=record.frequency == "daily2" and daily2_anytime(record.period_key),
                                review_status=execution_review_status(record.frequency, record.period_key, record.slot, reviewed, instant),
                                long_period=handoff_period(record.frequency, record.period_key),
@@ -1373,6 +1417,7 @@ def create_app(config=None):
         record = db.get_or_404(Inspection, record_id)
         require_inspection_access(record)
         return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
+                               voice_result=receipt_voice_marker(record, "inspection", "saved_visit" if record.executor_visit else "saved_inspect"),
                                flexible_daily2=record.frequency == "daily2" and daily2_anytime(record.period_key),
                                long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="inspection"),
@@ -2324,6 +2369,11 @@ def create_app(config=None):
         # supplies a localized fallback while preserving our route messages.
         source = None if error.description == type(error).description else error.description
         message = t(source) if source else None
+        voice_result = None
+        if request.endpoint in ("checkin", "confirm_checkin"):
+            kind = ("login_required" if not g.get("user") else g.get("patrol_voice_result") or
+                    ("not_saved" if request.endpoint == "confirm_checkin" and error.code not in (403, 404) else "point_unavailable"))
+            voice_result = voice_marker(kind)
         if request.path.startswith("/api/offline/"):
             source = source or "同步未完成，暫存仍保留；請重新連線後再試。"
             return {"ok": False, "code": "request_rejected", "message": t(source), "message_source": source,
@@ -2335,12 +2385,13 @@ def create_app(config=None):
                 message = t("上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。")
             label = "Retry · 返回此點重新確認" if g.user.role == "executor" else "返回此點重新確認"
             return render_template("error.html", code=error.code, message=message,
+                                   voice_result=voice_result,
                                    recovery_url=url_for("checkin", token=request.view_args["token"]),
                                    recovery_label=t(label)), error.code
         # Preserve the protocol headers (particularly Allow for 405) while
         # displaying the same recovery links as our other error pages.
         response = error.get_response()
-        response.set_data(render_template("error.html", code=error.code, message=message))
+        response.set_data(render_template("error.html", code=error.code, message=message, voice_result=voice_result))
         return response
 
     @app.cli.command("init-db")

@@ -501,6 +501,12 @@
       one('status')?.focus();
     }
     const reportError = error => showNotice(error.message || '操作未完成，原有資料仍保留。');
+    let voiceSequence = 0, scanVoicePending = root.PatrolVoice?.takeScan?.() === true;
+    const voice = (kind, id, auto = true) => { try { root.PatrolVoice?.report(kind, { id, auto }); } catch (_) { /* Optional feedback never interrupts capture. */ } };
+    const voiceFailure = () => voice('not_saved', `failure:${Date.now()}:${++voiceSequence}`);
+    const voiceArrival = (kind, id, destination) => {
+      try { root.PatrolVoice?.armResult?.(kind, id, destination, body.dataset.offlineUser || latestState?.identity?.id); } catch (_) {}
+    };
     // Home pages require a live session and are deliberately never cached.
     // Keep the current draft/queue in place when the device knows it is offline.
     for (const home of all('home')) home.addEventListener('click', event => {
@@ -527,6 +533,10 @@
       const expected = selectedSnapshot?.expected;
       const unchanged = point && expected && point.owner === selectedSnapshot.point.owner && point.revision === expected.revision && point.day === expected.day;
       const eligible = point?.prepared && unchanged && point.availableSlots.includes(expected.slot);
+      if (scanVoicePending && latestState && !body.hasAttribute('data-offline-hydrating')) {
+        scanVoicePending = false;
+        if (!eligible) voice('point_unavailable', `scan:${Date.now()}:${++voiceSequence}`);
+      }
       text('point-code', displayed?.code || t('尚未取得點位')); text('point-name', displayed ? pointName(displayed.name, displayed.name_i18n) : t('請連線登入並準備今日離線資料。'));
       text('point-meta', point ? `${point.floor} · ${point.frequency === 'daily2' ? t('每日兩次') : point.frequency === 'weekly' ? t('每週一次') : point.frequency === 'monthly' ? t('每月一次') : point.frequency === 'irregular' ? t('不定期') : t('每日一次')}` : '');
       text('point-stage', point ? stageText(point.stage) : '');
@@ -543,6 +553,7 @@
     function render(state) {
       const oldIdentity = latestState?.identity;
       if (latestState && latestState.owner !== state.owner) {
+        if (latestState.owner) { document.dispatchEvent(new CustomEvent('patrol:voice-owner-changed')); scanVoicePending = false; }
         localNotice = null;
         if (oldIdentity) uiSessionKnown = null;
       }
@@ -610,11 +621,20 @@
         if (label) { label.dataset.i18n = source; if (label.textContent !== t(source)) label.textContent = t(source); }
       }
       if (one('empty')) one('empty').hidden = state.pending > 0;
+      if (state.identity && !state.locked) {
+        const arrival = root.PatrolVoice?.takeResult?.(state.identity.id);
+        if (arrival) {
+          const key = arrival.id.replace(/^(local|ack):/, '');
+          const exists = arrival.kind === 'offline_stored' ? state.queue.some(row => row.client_id === key && !row.stale_owner) : state.receipts.some(row => row.client_id === key);
+          if (exists) voice(arrival.kind, arrival.id);
+        }
+      }
       if (savedClientId && one('saved')) {
         const queued = state.queue.find(row => row.client_id === savedClientId && !row.stale_owner);
         const receipt = state.receipts.find(row => row.client_id === savedClientId);
         one('saved').hidden = !queued && !receipt;
         if (queued || receipt) {
+          if (!root.PatrolVoice?.state().lastResult) voice(receipt ? 'sync_confirmed' : 'offline_stored', `${receipt ? 'ack' : 'local'}:${savedClientId}`, false);
           const record = queued || receipt;
           const title = document.getElementById('offline-saved-title');
           if (title) title.textContent = receipt ? t('已同步完成') : t('已暫存在這支手機');
@@ -718,9 +738,10 @@
           return;
         }
         if (one('saved')) one('saved').hidden = false;
+        voice('offline_stored', `local:${row.client_id}`);
         text('saved-message', t('{code} · {slot} 已暫存此手機，尚未上傳。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) }));
         await showPoint(); one('saved')?.scrollIntoView({ block: 'nearest' });
-      } catch (error) { reportError(error); }
+      } catch (error) { reportError(error); voiceFailure(); }
       finally { delete form.dataset.submitting; await showPoint().catch(reportError); }
     }, true);
     one('prepare')?.addEventListener('click', async () => {
@@ -730,12 +751,22 @@
       try { await core.prepare(); } catch (error) { reportError(error); }
       finally { preparing = false; button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
     });
-    one('sync')?.addEventListener('click', () => { localNotice = null; core.sync().catch(reportError); });
+    one('sync')?.addEventListener('click', async () => {
+      localNotice = null; const owner = latestState?.owner, before = new Set((latestState?.receipts || []).map(row => row.client_id));
+      try {
+        const state = await core.sync();
+        if (state.owner !== owner || state.locked) return;
+        const fresh = state.receipts.filter(row => !before.has(row.client_id));
+        if (fresh.length) voice(state.pending ? 'sync_partial' : 'sync_confirmed', `sync:${fresh.map(row => row.client_id).join(',').slice(0,145)}`);
+        else if (state.pending) voice('offline_stored', `retry:${Date.now()}:${++voiceSequence}`);
+      } catch (error) { reportError(error); voiceFailure(); }
+    });
     one('cancel-sync')?.addEventListener('click', () => core.cancelSync());
     one('close-point')?.addEventListener('click', () => {
       if (form?.dataset.submitting === 'true') return;
       if (draftPresent(form) && !confirm(t('離開點位會放棄尚未暫存的內容，確定離開？'))) return;
       localNotice = null; selectedToken = null; selectedSnapshot = null;
+      root.PatrolVoice?.cancel(true);
       form?.reset(); resetPhotos();
       if (latestState) render(latestState); else showPoint().catch(reportError);
     });
@@ -798,13 +829,19 @@
         const updated = await core.getState(), receipt = updated.receipts.find(item => item.client_id === entry.client_id);
         if (updated.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
         const receiptURL = receipt?.ack?.receipt_url;
-        if (typeof receiptURL === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(receiptURL)) location.assign(receiptURL);
-        else location.assign('/offline?queued=' + encodeURIComponent(entry.client_id));
+        if (typeof receiptURL === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(receiptURL)) {
+          voiceArrival(receipt.stage === 'execute' ? 'saved_execute' : receipt.stage === 'visit' ? 'saved_visit' : 'saved_inspect', `ack:${entry.client_id}`, receiptURL);
+          location.assign(receiptURL);
+        } else {
+          const destination = '/offline?queued=' + encodeURIComponent(entry.client_id);
+          voiceArrival('offline_stored', `local:${entry.client_id}`, destination); location.assign(destination);
+        }
       } catch (error) {
-        if (durableEntry) { core.allowNavigation(); location.assign('/offline?queued=' + encodeURIComponent(durableEntry.client_id)); return; }
+        if (durableEntry) { core.allowNavigation(); const destination = '/offline?queued=' + encodeURIComponent(durableEntry.client_id); voiceArrival('offline_stored', `local:${durableEntry.client_id}`, destination); location.assign(destination); return; }
         let notice = normal.parentElement.querySelector('[data-offline-form-error]');
         if (!notice) { notice = document.createElement('p'); notice.dataset.offlineFormError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; normal.before(notice); }
         notice.textContent = t(error.message || '無法保存，原本的備註與照片仍保留在表單中。'); notice.focus();
+        voiceFailure();
       } finally {
         normalProgress = null; panel.remove();
         delete normal.dataset.offlineSaving; delete normal.dataset.submitting; normal.removeAttribute('aria-busy');
@@ -825,7 +862,7 @@
         if (shell) { await core.getState(); await showPoint(); refreshUIPreferences(); return; }
         if (body.dataset.offlineWorkspace !== 'true' || !body.dataset.offlineUser) { await core.lock(); return; }
         await core.matchIdentity(body.dataset.offlineUser, body.dataset.offlineVersion);
-      } finally { delete body.dataset.offlineHydrating; }
+      } finally { delete body.dataset.offlineHydrating; if (shell && scanVoicePending) showPoint().catch(reportError); }
       if (navigator.onLine !== false) await core.prepare({ id: body.dataset.offlineUser, version: body.dataset.offlineVersion });
     })().catch(error => { if (shell) reportError(error); });
   }

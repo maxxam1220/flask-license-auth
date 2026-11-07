@@ -1,8 +1,8 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261106-v9';
-const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'];
+const CACHE = 'patrol-offline-shell-20261107-v10';
+const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/offline.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico'];
 const allowed = new Set(REQUIRED);
 // Without a cached shell no account language is available. Offer neutral
 // recovery instructions in every supported language without reading identity.

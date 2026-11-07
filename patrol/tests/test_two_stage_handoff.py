@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 import app as patrol
 from models import Inspection, PatrolExecution, Point, User, db
 from test_app import application, rendered_contexts  # noqa: F401
@@ -45,7 +47,7 @@ def test_cross_day_personal_reviews_use_period_execution(request, monkeypatch, d
         # Taipei midnight within the same period. A retry of a saved execution
         # reads that receipt; yesterday's unsaved inspection cannot be posted.
         now += timedelta(minutes=2)
-        assert executor.post(post, data=first_form).location == first.location
+        assert without_voice_feedback(executor.post(post, data=first_form).location) == without_voice_feedback(first.location)
         assert other_executor.post(post, data=first_form).status_code == 409
         assert other_executor.get(first.location).status_code == 403
         assert executor.post(post, data=first_form | {"personal_day": "2001-01-01"}).status_code == 409
@@ -62,8 +64,8 @@ def test_cross_day_personal_reviews_use_period_execution(request, monkeypatch, d
             receipt = actor.post(post, data=fields)
             assert receipt.status_code == 302 and receipt.location.startswith("/checkins/")
             assert actor.get(receipt.location).status_code == 200
-            assert actor.post(post, data=fields).location == receipt.location
-            receipt_ids.append(int(receipt.location.rsplit("/", 1)[1]))
+            assert without_voice_feedback(actor.post(post, data=fields).location) == without_voice_feedback(receipt.location)
+            receipt_ids.append(int(without_voice_feedback(receipt.location).rsplit("/", 1)[1]))
         assert len(set(receipt_ids)) == 2
         with rendered_contexts(app) as contexts:
             assert executor.get(first.location).status_code == 200
@@ -75,7 +77,7 @@ def test_cross_day_personal_reviews_use_period_execution(request, monkeypatch, d
         assert day_two != day_one
         next_day = inspector.post(post, data=payload(inspector, url))
         assert next_day.status_code == 302
-        assert int(next_day.location.rsplit("/", 1)[1]) not in receipt_ids
+        assert int(without_voice_feedback(next_day.location).rsplit("/", 1)[1]) not in receipt_ids
         rows = db.session.scalars(db.select(Inspection).order_by(Inspection.id)).all()
         assert [(r.period_key, r.personal_day, r.execution_id, r.execution.created_at) for r in rows] == [
             (old_key, d, first_id, first_created_at) for d in (day_one, day_one, day_two)]
@@ -91,7 +93,7 @@ def test_cross_day_personal_reviews_use_period_execution(request, monkeypatch, d
         assert inspector.post(post, data=stage_one_fields | {"stage": "inspect"}).status_code == 409
         assert (db.session.query(PatrolExecution).count(), db.session.query(Inspection).count()) == (1, 3)
         second_execution = executor.post(post, data=stage_one_fields)
-        assert second_execution.status_code == 302 and second_execution.location != first.location
+        assert second_execution.status_code == 302 and without_voice_feedback(second_execution.location) != without_voice_feedback(first.location)
         assert inspector.post(post, data=payload(inspector, url)).status_code == 302
         last = db.session.scalar(db.select(Inspection).order_by(Inspection.id.desc()))
         assert last.period_key == last.execution.period_key == new_key and last.execution_id != first_id

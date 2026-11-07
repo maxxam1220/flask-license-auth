@@ -1,6 +1,8 @@
 """The general manager title uses the same patrol scope and attendance rules as a general inspector."""
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 from models import AuditLog, Inspection, InspectionPhoto, IssueEvent, PatrolExecution, User, db
 from test_app import PASSWORD, application, login, record, seeded  # noqa: F401
 from test_classification_management import form_revision
@@ -47,7 +49,7 @@ def test_title_edits_keep_existing_login_and_attendance_but_invalidate_older_adm
     assert assign(admin, inspector, "general", revision=old_revision).status_code == 409
     assert inspector.general_manager_title and inspector.auth_version == old_version
     assert "總務管理員" in staff.get("/dashboard").text
-    assert staff.post(spot + "/confirm", data=submitted).location == first_receipt.location
+    assert without_voice_feedback(staff.post(spot + "/confirm", data=submitted).location) == without_voice_feedback(first_receipt.location)
     assert db.session.query(Inspection).count() == 1
     assert assign(admin, inspector, "general").status_code == 302
     assert not inspector.general_manager_title and inspector.auth_version == old_version
@@ -90,7 +92,7 @@ def test_both_titles_share_general_handoffs_and_report_access(application, seede
         saved = client.post(pair + "/confirm", data={**payload(client, pair), "note": note,
                             "is_abnormal": "on", "photos": (png(), "check.png")})
         assert saved.status_code == 302 and saved.location.startswith("/checkins/")
-        reports.append(db.session.get(Inspection, int(saved.location.rsplit("/", 1)[-1])))
+        reports.append(db.session.get(Inspection, int(without_voice_feedback(saved.location).rsplit("/", 1)[-1])))
     first, second = reports
     assert first.execution_id == second.execution_id and first.user_id != second.user_id
     close = {"expected_event_id": "0", "note": "完成修復"}

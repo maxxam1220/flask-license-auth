@@ -196,11 +196,13 @@
       const url = new URL(destination || path, location.origin);
       if (url.origin !== location.origin) return;
       if (discardDraft) window.PatrolOffline?.allowNavigation?.();
+      window.PatrolVoice?.armScan?.(url.pathname + url.search);
       location.assign(url.pathname + url.search + url.hash);
     } catch {
       // Normal confirmation remains available if the optional helper is unavailable.
       if (stillCurrent()) {
         if (discardDraft) window.PatrolOffline?.allowNavigation?.();
+        window.PatrolVoice?.armScan?.(path);
         location.assign(path);
       }
     }

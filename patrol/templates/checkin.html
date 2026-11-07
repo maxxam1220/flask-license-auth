@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, csrf, frequency, open_issue_badge %}
+{% from '_voice_controls.html' import voice_controls %}
 {% set title='打卡確認' %}
 {% set execute = stage == 'execute' %}
 {% set visit = stage == 'visit' %}
@@ -11,6 +12,7 @@
 {% set submit_label = '確認直接簽到' if visit else '確認執行簽到' if execute else '確認巡檢' if paired else '確認單段巡檢' if spot else '確認打卡' %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='detail-layout.css') }}" media="screen">{% endblock %}
 {% block content %}
+{% if voice_result %}<span hidden data-voice-result="{{ voice_result.kind }}" data-voice-result-id="{{ voice_result.id }}" data-voice-auto="{{ voice_result.auto }}"></span>{% endif %}
 {% if simple_executor_ui %}{% include '_executor_checkin.html' %}{% else %}
 <div class="checkin-wrap checkin-wrap-wide">
   <a class="back-link" href="{{ progress_url }}">{{ icon('back') }}返回巡檢總覽</a>
@@ -71,6 +73,7 @@
       
     </div>
     {% endif %}
+    {{ voice_controls() }}
     {% if long_period %}
     {% if first_reviewed %}
     <div class="workflow-guide"><strong>{{ '本週' if point.frequency == 'weekly' else '本月' }}已有人完成巡檢</strong><p>{% if can_confirm and not execute %}你仍可登記 {{ personal_day }} 的本人巡檢。{% elif execute %}兩個階段均已完成，本期不需再次執行簽到。{% else %}本期團隊巡檢已達標。{% endif %}</p></div>

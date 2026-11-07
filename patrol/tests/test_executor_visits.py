@@ -6,6 +6,8 @@ from threading import Barrier
 
 import pytest
 
+from receipt_urls import without_voice_feedback
+
 import app as patrol
 from models import DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, PatrolExecution, Point, User, db
 from test_app import FIXED_NOW, application
@@ -149,10 +151,10 @@ def test_each_executor_once_per_taipei_day_across_tickets_and_midnight(applicati
     assert first["spot_ticket"] != second["spot_ticket"]
     original = executor.post(post, data=first)
     assert original.status_code == 302
-    assert executor.post(post, data=first).location == original.location
-    assert executor.post(post, data=second).location == original.location
+    assert without_voice_feedback(executor.post(post, data=first).location) == without_voice_feedback(original.location)
+    assert without_voice_feedback(executor.post(post, data=second).location) == without_voice_feedback(original.location)
     other = peer.post(post, data=payload(peer, url))
-    assert other.status_code == 302 and other.location != original.location
+    assert other.status_code == 302 and without_voice_feedback(other.location) != without_voice_feedback(original.location)
     assert db.session.query(Inspection).count() == 2
     now += timedelta(minutes=1)
     assert executor.post(post, data=first).status_code == 409

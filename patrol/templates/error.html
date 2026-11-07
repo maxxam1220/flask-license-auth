@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon %}
+{% from '_voice_controls.html' import voice_controls %}
 {% set headings = {
   400: '請確認送出的資料',
   403: '此帳號無法進行這項操作',
@@ -23,10 +24,12 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='error-layout.css') }}">
 {% endblock %}
 {% block content %}
+  {% if voice_result %}<span hidden data-voice-result="{{ voice_result.kind }}" data-voice-result-id="{{ voice_result.id }}" data-voice-auto="{{ voice_result.auto }}"></span>{% endif %}
   <section class="error-state" aria-labelledby="error-heading">
     <span class="error-number">{{ t('錯誤') }} {{ code }}</span>
     <h1 id="error-heading">{{ t(title) }}</h1>
     <p>{{ t(message or explanations.get(code, '請返回再試一次，或聯繫系統管理員。')) }}</p>
+    {% if voice_result %}{{ voice_controls() }}{% endif %}
     <a class="button button-primary" href="{{ recovery_url or (home_url if current_user else url_for('login')) }}">
       {{ icon('back') }}<span>{{ t(recovery_label or ('返回今日待簽到' if simple_executor_ui else '返回巡檢總覽' if current_user else '返回登入')) }}</span>
     </a>

@@ -38,6 +38,7 @@
       {% if receipt_url %}<a class="button button-secondary button-full" href="{{ receipt_url }}">{{ icon('list') }}{{ t('查看簽到收據') }}</a>{% endif %}
       {% if can_scan %}{{ scanner_button('next', '繼續掃描') }}{% endif %}
     {% endif %}
+    {{ voice_controls() }}
     <div class="checkin-details">
       <div><span>{{ t('簽到人員') }}</span><strong>{{ current_user.display_name }}</strong></div>
       {% if long_period %}<div><span>{{ t('有效期間') }}</span><strong>{{ long_period.start }} – {{ long_period.end }}</strong></div>
