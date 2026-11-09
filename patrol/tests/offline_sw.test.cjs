@@ -85,8 +85,10 @@ test('versioned checklist script reads the current cached asset offline without 
   const before = w.requests.length;
   assert.equal(await (await w.fetchPage('/static/offline.js?v=checklist-1', { mode: 'cors' })).text(), 'asset');
   assert.equal(await (await w.fetchPage('/static/offline.js?v=checklist-2', { mode: 'cors' })).text(), 'asset');
+  assert.equal(await (await w.fetchPage('/static/offline.js?v=ios-audio-1', { mode: 'cors' })).text(), 'asset');
+  assert.equal(await (await w.fetchPage('/static/patrol-voice.js?v=ios-audio-1', { mode: 'cors' })).text(), 'asset');
   assert.equal(w.requests.length, before);
-  for (const path of ['/static/offline.js?v=checklist-0', '/static/offline.js?v=checklist-1&extra=1', '/static/private.json?v=checklist-1']) assert.equal(await w.fetchPage(path, { mode: 'cors' }), null);
+  for (const path of ['/static/offline.js?v=checklist-0', '/static/offline.js?v=checklist-1&extra=1', '/static/private.json?v=checklist-1', '/static/patrol-voice.js?v=ios-audio-1&extra=1', '/static/private.json?v=ios-audio-1']) assert.equal(await w.fetchPage(path, { mode: 'cors' }), null);
 });
 
 test('missing checklist stylesheet cannot advertise a prepared shell', async () => {

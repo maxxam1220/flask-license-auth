@@ -870,5 +870,17 @@
   "正在準備離線資料與三語提示音，請稍候…": {
     "id": "Menyiapkan data offline dan suara tiga bahasa. Mohon tunggu…",
     "vi": "Đang chuẩn bị dữ liệu ngoại tuyến và âm thanh ba ngôn ngữ. Vui lòng chờ…"
+  },
+  "查看結果": {
+    "id": "Lihat hasil",
+    "vi": "Xem kết quả"
+  },
+  "點一下播放結果": {
+    "id": "Ketuk untuk dengar hasil",
+    "vi": "Chạm để nghe kết quả"
+  },
+  "瀏覽器限制自動播放，請點一下播放結果。": {
+    "id": "Browser membatasi pemutaran otomatis. Ketuk untuk mendengarkan hasil.",
+    "vi": "Trình duyệt chặn phát tự động. Hãy chạm để nghe kết quả."
   }
 }

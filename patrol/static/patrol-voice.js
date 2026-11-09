@@ -26,11 +26,15 @@
     const read = (store, key) => { try { return store?.getItem(key); } catch (_) { return null; } };
     const write = (store, key, value) => { try { store?.setItem(key, value); } catch (_) { /* Cosmetic preference only. */ } };
     let enabled = read(o.localStorage, PREF) !== 'off', status = supported ? 'ready' : 'unavailable';
-    let lastResult = null, speaking = false, epoch = 0, timer = null, active = null, disposed = false;
+    let lastResult = null, speaking = false, epoch = 0, timer = null, active = null, player = null, disposed = false;
+    const idleWaiters = new Set();
     let seen = [];
     try { const value = JSON.parse(read(o.sessionStorage, SEEN) || '[]'); if (Array.isArray(value)) seen = value.filter(x => typeof x === 'string' && x.length <= 180).slice(-50); } catch (_) { /* Storage may be blocked. */ }
     const state = () => ({ enabled, supported, status, lastResult: lastResult && { ...lastResult }, speaking });
-    const emit = () => { try { o.onState?.(state()); } catch (_) { /* Feedback cannot break a save. */ } };
+    const emit = () => {
+      if (disposed || !['waiting', 'playing'].includes(status)) for (const finish of [...idleWaiters]) finish();
+      try { o.onState?.(state()); } catch (_) { /* Feedback cannot break a save. */ }
+    };
     const locale = () => { const value = o.getLocale?.(); return value === 'id' || value === 'vi' ? value : 'zh-Hant'; };
     const visible = () => o.isVisible?.() !== false;
     function stop() {
@@ -38,10 +42,40 @@
       const previous = active; active = null; speaking = false;
       if (previous) {
         previous.onplaying = previous.onended = previous.onerror = null;
-        try { previous.pause(); previous.removeAttribute?.('src'); previous.load?.(); } catch (_) { /* Cosmetic only. */ }
+        // Keep the element and its source alive: Safari grants playback access
+        // to the element used during the gesture, not to every new Audio().
+        try { previous.pause(); } catch (_) { /* Cosmetic only. */ }
       }
     }
+    function audioFor(source) {
+      if (!player) player = o.createAudio(source);
+      if (!player || typeof player.play !== 'function' || typeof player.pause !== 'function') throw new Error('Audio unavailable');
+      player.preload = 'auto'; player.playsInline = true; player.volume = 1; player.muted = false;
+      player.src = source;
+      return player;
+    }
     function cancel(clear = false) { stop(); if (clear) lastResult = null; status = !enabled ? 'off' : supported ? 'ready' : 'unavailable'; emit(); }
+    function prepare() {
+      if (disposed || !enabled || !supported || !visible()) return false;
+      let source;
+      try { source = typeof o.primeSource === 'function' ? o.primeSource() : o.primeSource; } catch (_) { return false; }
+      if (typeof source !== 'string' || !source) return false;
+      stop(); status = 'ready'; emit();
+      const run = epoch; let audio;
+      try { audio = audioFor(source); } catch (_) { return false; }
+      active = audio;
+      const current = () => !disposed && run === epoch && enabled && active === audio;
+      const finish = () => { if (current()) { stop(); emit(); } };
+      // No attendance message, lastResult or success state is created here.
+      // play() must run synchronously inside the real click/submit handler.
+      audio.onplaying = null; audio.onended = finish; audio.onerror = finish;
+      try {
+        const promise = audio.play();
+        if (promise && typeof promise.then === 'function') promise.then(() => {}, finish);
+      } catch (_) { finish(); return false; }
+      if (current()) timer = later(finish, 3000);
+      return true;
+    }
     function start(run) {
       if (disposed || run !== epoch || !enabled || !visible() || !lastResult) return;
       // Fixed public assets only: no device TTS, remote synthesis or private text.
@@ -49,9 +83,7 @@
       try {
         // A fixed public revision avoids the browser's decoded-media cache
         // reusing an older voice after the service-worker cache has updated.
-        audio = o.createAudio('/static/audio/patrol-v1/' + locale() + '/' + lastResult.kind + '.mp3?rev=' + AUDIO_REVISION);
-        if (!audio || typeof audio.play !== 'function' || typeof audio.pause !== 'function') throw new Error('Audio unavailable');
-        audio.preload = 'auto'; audio.playsInline = true; audio.volume = 1; audio.muted = false;
+        audio = audioFor('/static/audio/patrol-v1/' + locale() + '/' + lastResult.kind + '.mp3?rev=' + AUDIO_REVISION);
       } catch (_) { status = 'unavailable'; emit(); return; }
       active = audio; let started = false;
       const current = () => !disposed && run === epoch && enabled && active === audio;
@@ -96,36 +128,72 @@
     }
     function setEnabled(value) { enabled = Boolean(value); write(o.localStorage, PREF, enabled ? 'on' : 'off'); cancel(); }
     function refresh() { cancel(); }
-    function dispose() { stop(); disposed = true; }
+    function waitForIdle(maxMs = 4500) {
+      if (disposed || !['waiting', 'playing'].includes(status)) return Promise.resolve();
+      const delay = Number.isFinite(maxMs) ? Math.max(0, Math.min(maxMs, 4500)) : 4500;
+      return new Promise(resolve => {
+        let timeout = null;
+        const finish = () => { if (timeout !== null) clearTimer(timeout); idleWaiters.delete(finish); resolve(); };
+        idleWaiters.add(finish); timeout = later(finish, delay);
+      });
+    }
+    function dispose() {
+      if (disposed) return;
+      stop(); disposed = true;
+      try { player?.removeAttribute?.('src'); player?.load?.(); } catch (_) { /* Cosmetic only. */ }
+      player = null;
+      try { o.releasePrimeSource?.(); } catch (_) { /* Cosmetic only. */ }
+      emit();
+    }
     if (!enabled) status = 'off';
-    return { report, replay, setEnabled, cancel, refresh, state, dispose };
+    return { report, replay, prepare, waitForIdle, setEnabled, cancel, refresh, state, dispose };
   }
   function install(root) {
     const doc = root.document, t = value => root.PatrolI18n?.t(value) || value;
     const storage = name => { try { return root[name]; } catch (_) { return null; } };
     const session = storage('sessionStorage');
+    let primeURL = null;
+    const primeSource = () => {
+      if (primeURL) return primeURL;
+      if (!root.Blob || !root.URL?.createObjectURL) return null;
+      // 100 ms of actual zero-valued PCM: this cannot announce a successful
+      // save before the local store or server has confirmed anything.
+      const samples = 800, bytes = new ArrayBuffer(44 + samples * 2), view = new DataView(bytes);
+      const label = (offset, value) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
+      label(0, 'RIFF'); view.setUint32(4, bytes.byteLength - 8, true); label(8, 'WAVE'); label(12, 'fmt ');
+      view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, 8000, true); view.setUint32(28, 16000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      label(36, 'data'); view.setUint32(40, samples * 2, true);
+      primeURL = root.URL.createObjectURL(new root.Blob([bytes], { type: 'audio/wav' })); return primeURL;
+    };
     const statusText = {
       off: '語音已關閉。', unavailable: '此瀏覽器無法播放提示音，請以畫面結果為準。',
       audio_missing: '提示音未能載入，請重播或重新整理；打卡結果不受影響。',
       offline_audio: '離線提示音尚未備妥，連線後請重新準備離線資料。', waiting: '正在載入提示音…',
-      playing: '正在播報…', played: '播報結束，可按重播再聽一次。', blocked: '未能自動播報，請按「重播結果」。'
+      playing: '正在播報…', played: '播報結束，可按重播再聽一次。', blocked: '瀏覽器限制自動播放，請點一下播放結果。'
     };
     const core = createFeedback({ createAudio: typeof root.Audio === 'function' ? src => {
       // Media must opt into CORS before src, even on the same origin, so
       // Safari routes its range requests through the offline service worker.
       const audio = new root.Audio(); audio.crossOrigin = 'anonymous'; audio.src = src; return audio;
     } : null,
+      primeSource, releasePrimeSource: () => { if (primeURL) { root.URL.revokeObjectURL?.(primeURL); primeURL = null; } },
       localStorage: storage('localStorage'), sessionStorage: session,
       getLocale: () => root.PatrolI18n?.getLocale() || doc.documentElement.lang, t,
       isVisible: () => doc.visibilityState !== 'hidden', isOnline: () => root.navigator.onLine !== false,
       onState: state => {
         for (const panel of doc.querySelectorAll('[data-voice-controls]')) {
           panel.hidden = false;
+          panel.dataset.voiceStatus = state.status;
           const toggle = panel.querySelector('[data-voice-toggle]'), label = panel.querySelector('[data-voice-state]');
           if (toggle) { toggle.disabled = !state.supported; toggle.setAttribute('aria-checked', String(state.enabled)); }
           if (label) { label.dataset.i18n = state.enabled ? '開啟' : '關閉'; label.textContent = t(label.dataset.i18n); }
           const replay = panel.querySelector('[data-voice-replay]');
-          if (replay) { replay.hidden = !state.lastResult; replay.disabled = !state.enabled || !state.supported || !state.lastResult; }
+          if (replay) {
+            replay.hidden = !state.lastResult; replay.disabled = !state.enabled || !state.supported || !state.lastResult;
+            const label = replay.querySelector('.patrol-voice-label');
+            if (label) { label.dataset.i18n = state.status === 'blocked' ? '點一下播放結果' : '重播結果'; label.textContent = t(label.dataset.i18n); }
+          }
           const status = panel.querySelector('[data-voice-status]');
           if (status) status.textContent = t(statusText[state.status] || (state.lastResult ? '未聽到提示時可重播；請以畫面結果為準。' : '依帳號語言播放內建提示音；請以畫面結果為準。'));
         }
@@ -162,15 +230,17 @@
       } catch (_) { clearResult(); return null; }
     };
     let scanArrival = takeScan();
-    root.PatrolVoice = { ...core, armScan, clearScan, armResult, takeResult, takeScan: () => { const value = scanArrival; scanArrival = false; return value; } };
+    root.PatrolVoice = { ...core, armScan, clearScan, armResult, clearResult, takeResult, takeScan: () => { const value = scanArrival; scanArrival = false; return value; } };
     doc.addEventListener('click', event => {
       const button = event.target.closest?.('button'); if (!button) return;
-      if (button.hasAttribute('data-voice-toggle')) core.setEnabled(!core.state().enabled);
+      if (button.hasAttribute('data-voice-toggle')) { core.setEnabled(!core.state().enabled); if (core.state().enabled) core.prepare(); }
       if (button.hasAttribute('data-voice-replay')) core.replay();
+      if (button.hasAttribute('data-offline-sync') && !button.disabled) core.prepare();
       if (button.hasAttribute('data-qr-start')) { core.cancel(true); clearScan(); }
     });
     doc.addEventListener('submit', event => {
-      if (event.target.id === 'inspection-form') { core.cancel(true); armScan(event.target.action, 'confirm'); }
+      if (event.target.id === 'inspection-form') { core.cancel(true); core.prepare(); armScan(event.target.action, 'confirm'); }
+      if (event.target.id === 'offline-checkin') { core.cancel(true); core.prepare(); }
       if (new URL(event.target.action || '/', root.location.origin).pathname === '/logout') { core.cancel(true); clearScan(); clearResult(); }
     }, true);
     doc.addEventListener('visibilitychange', () => { if (doc.visibilityState === 'hidden') core.cancel(); });

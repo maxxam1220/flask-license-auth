@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261109-v18';
+const CACHE = 'patrol-offline-shell-20261109-v19';
 const AUDIO_VERSION = 'patrol-v1', AUDIO_ROOT = '/static/audio/' + AUDIO_VERSION + '/';
 // Keep the fixed paths compatible with already-open pages and pending drafts.
 // A new revision still requires a complete, verified download before activation.
@@ -139,8 +139,9 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   // Static requests are immutable shell assets, not arbitrary /static paths.
   const versionedAudio = audioAllowed.has(url.pathname) && url.search === '?rev=' + AUDIO_REVISION;
-  const versionedChecklist = url.pathname === '/static/offline.js' && ['?v=checklist-1', '?v=checklist-2'].includes(url.search);
-  if (allowed.has(url.pathname) && url.pathname !== '/offline' && (!url.search || versionedAudio || versionedChecklist)) {
+  const versionedChecklist = url.pathname === '/static/offline.js' && ['?v=checklist-1', '?v=checklist-2', '?v=ios-audio-1'].includes(url.search);
+  const versionedVoice = url.pathname === '/static/patrol-voice.js' && url.search === '?v=ios-audio-1';
+  if (allowed.has(url.pathname) && url.pathname !== '/offline' && (!url.search || versionedAudio || versionedChecklist || versionedVoice)) {
     event.respondWith(caches.open(CACHE).then(async cache => {
       const cached = await cache.match(url.pathname);
       if (!completeResponse(cached)) return fetch(request);

@@ -62,6 +62,16 @@
   overflow-wrap: anywhere;
 }
 .patrol-voice-status:empty { display: none; }
+.patrol-voice-controls[data-voice-status="blocked"] {
+  border-color: #d9b76f;
+  background: #fff9ec;
+}
+.patrol-voice-controls[data-voice-status="blocked"] .patrol-voice-replay {
+  border-color: #a97a2a;
+  color: #684817;
+  background: #fff;
+}
+.patrol-voice-controls[data-voice-status="blocked"] .patrol-voice-status { color: #684817; }
 @media (hover: hover) {
   .patrol-voice-button:not(:disabled):hover { border-color: #4d8f7d; background: #edf5f1; }
 }

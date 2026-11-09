@@ -534,7 +534,7 @@
     const query = new URLSearchParams(location.search);
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
       pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
-      navigationAllowed = false, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, updatingLocale = false,
+      navigationAllowed = false, pageActive = true, pageEpoch = 0, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, updatingLocale = false,
       checklistUIKey = '', checklistLocale = '';
     let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null;
     const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
@@ -586,8 +586,21 @@
     let voiceSequence = 0, scanVoicePending = root.PatrolVoice?.takeScan?.() === true;
     const voice = (kind, id, auto = true) => { try { root.PatrolVoice?.report(kind, { id, auto }); } catch (_) { /* Optional feedback never interrupts capture. */ } };
     const voiceFailure = () => voice('not_saved', `failure:${Date.now()}:${++voiceSequence}`);
-    const voiceArrival = (kind, id, destination) => {
-      try { root.PatrolVoice?.armResult?.(kind, id, destination, body.dataset.offlineUser || latestState?.identity?.id); } catch (_) {}
+    const voiceArrival = async (kind, id, destination, owner, skip) => {
+      // Feedback starts only after a durable local save / server ACK. Keep the
+      // current document alive briefly so iOS can use its prepared audio player.
+      // Optional media failures must never enter the save/retry error path.
+      let deadline;
+      try {
+        if (latestState?.owner !== owner || latestState?.locked) return;
+        const feedback = root.PatrolVoice;
+        feedback?.armResult?.(kind, id, destination, latestState?.identity?.id);
+        feedback?.report?.(kind, { id });
+        if (typeof feedback?.waitForIdle !== 'function') return;
+        await Promise.race([Promise.resolve(feedback.waitForIdle(4500)), skip,
+          new Promise(resolve => { deadline = setTimeout(resolve, 4500); })]);
+      } catch (_) { /* Confirmed records remain confirmed even without audio. */ }
+      finally { clearTimeout(deadline); }
     };
     // Home pages require a live session and are deliberately never cached.
     // Keep the current draft/queue in place when the device knows it is offline.
@@ -703,7 +716,7 @@
       text('count', state.pending ? String(state.pending) : '');
       text('network', state.supported === false ? t('僅限線上') : !state.online ? t('離線') : state.sync?.running ? t('補傳中') : state.pending ? t('待補傳') : state.prepared ? t('已備妥') : t('準備離線'));
       for (const link of all('open')) { if (state.supported === false) link.title = t(state.supportMessage); }
-      if (normalProgress && !normalProgress.saving) {
+      if (normalProgress && !normalProgress.saving && !normalProgress.result) {
         normalProgress.status.textContent = state.sync?.running ?
           t('{phase} · 已等 {seconds} 秒', { phase: state.sync.phase === 'uploading' ? t('正在上傳本筆紀錄（最多 30 秒）') : t('正在檢查連線（最多 5 秒）'), seconds: state.sync.elapsed || 0 }) :
           t('已保存在手機，正在開啟收據或待傳紀錄…');
@@ -930,7 +943,8 @@
       const saved = buttons.map(button => ({ button, disabled: button.disabled, content: button.innerHTML }));
       const controls = [...normal.elements].filter(el => ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && el.type !== 'hidden');
       const originalControls = controls.map(control => ({ control, disabled: control.disabled }));
-      const captureOwner = latestState?.owner; let durableEntry;
+      const captureOwner = latestState?.owner, capturePageEpoch = pageEpoch;
+      let durableEntry, resultSkip, navigationAttempted = false, resultAbandoned = false;
       delete normal.dataset.offlineStored;
       normal.dataset.offlineSaving = 'true'; normal.dataset.submitting = 'true'; normal.setAttribute('aria-busy', 'true');
       for (const button of buttons) { button.disabled = true; button.textContent = t('正在保存／送出…'); }
@@ -940,11 +954,43 @@
       progress.textContent = t('正在保存到手機；請稍候…');
       cancel.type = 'button'; cancel.className = 'button button-secondary button-small'; cancel.dataset.offlineCancelSubmit = '';
       cancel.textContent = t('取消上傳，保留待傳'); cancel.disabled = true;
-      cancel.addEventListener('click', () => { cancel.disabled = true; core.cancelSync(); progress.textContent = t('正在停止上傳，紀錄仍保留在手機…'); });
+      cancel.addEventListener('click', () => {
+        if (resultSkip) {
+          try { root.PatrolVoice?.cancel?.(); } catch (_) {}
+          resultSkip(); return;
+        }
+        cancel.disabled = true; core.cancelSync(); progress.textContent = t('正在停止上傳，紀錄仍保留在手機…');
+      });
       panel.append(progress, cancel);
       const quickAction = normal.closest('.checkin-card')?.querySelector('.checkin-quick-action');
       if (quickAction) quickAction.after(panel); else normal.before(panel);
       normalProgress = { panel, status: progress, cancel, saving: true }; panel.scrollIntoView({ block: 'nearest' });
+      normalProgress.abandon = () => {
+        resultAbandoned = true;
+        try { root.PatrolVoice?.cancel?.(); root.PatrolVoice?.clearResult?.(); } catch (_) {}
+        resultSkip?.();
+      };
+      const finishSaved = async (kind, id, destination) => {
+        if (navigationAttempted) return;
+        if (resultAbandoned || !pageActive || pageEpoch !== capturePageEpoch) { navigationAttempted = true; return; }
+        normalProgress.result = true;
+        progress.textContent = t(kind === 'offline_stored' ? '已暫存在這支手機' : '已同步完成');
+        cancel.textContent = t('查看結果'); cancel.disabled = false;
+        const skip = new Promise(resolve => { resultSkip = resolve; });
+        try { await voiceArrival(kind, id, destination, captureOwner, skip); }
+        finally {
+          resultSkip = null; navigationAttempted = true;
+          const sameOwner = latestState?.owner === captureOwner && !latestState?.locked;
+          if (!sameOwner) {
+            try { root.PatrolVoice?.cancel?.(true); root.PatrolVoice?.clearResult?.(); } catch (_) {}
+          }
+          if (resultAbandoned || !pageActive || pageEpoch !== capturePageEpoch) return;
+          core.allowNavigation();
+          // A browser navigation failure is not a failed save. Do not fall into
+          // the durable-save catch and route or announce the same record twice.
+          try { location.assign(sameOwner ? destination : '/offline'); } catch (_) {}
+        }
+      };
       try {
         const input = { token, note: value('note'), is_abnormal: Boolean(normal.elements.namedItem('is_abnormal')?.checked), checklist: new FormData(normal).getAll('checklist'),
           photos: normal.elements.namedItem('photos')?.files || [], expected: { user_id: body.dataset.offlineUser, auth_version: body.dataset.offlineVersion,
@@ -959,20 +1005,19 @@
         // leave its previous selection ready to submit again.
         normal.querySelectorAll('input[type="checkbox"][name="checklist"]').forEach(choice => { choice.checked = false; });
         normalProgress.saving = false;
-        if (latestState?.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
+        if (latestState?.owner !== captureOwner) { await finishSaved('offline_stored', `local:${entry.client_id}`, '/offline'); return; }
         if (navigator.onLine !== false) await core.sync({ client_id: entry.client_id });
         const updated = await core.getState(), receipt = updated.receipts.find(item => item.client_id === entry.client_id);
-        if (updated.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
+        if (updated.owner !== captureOwner) { await finishSaved('offline_stored', `local:${entry.client_id}`, '/offline'); return; }
         const receiptURL = receipt?.ack?.receipt_url;
         if (typeof receiptURL === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(receiptURL)) {
-          voiceArrival(receipt.stage === 'execute' ? 'saved_execute' : receipt.stage === 'visit' ? 'saved_visit' : 'saved_inspect', `ack:${entry.client_id}`, receiptURL);
-          location.assign(receiptURL);
+          await finishSaved(receipt.stage === 'execute' ? 'saved_execute' : receipt.stage === 'visit' ? 'saved_visit' : 'saved_inspect', `ack:${entry.client_id}`, receiptURL);
         } else {
           const destination = '/offline?queued=' + encodeURIComponent(entry.client_id);
-          voiceArrival('offline_stored', `local:${entry.client_id}`, destination); location.assign(destination);
+          await finishSaved('offline_stored', `local:${entry.client_id}`, destination);
         }
       } catch (error) {
-        if (durableEntry) { core.allowNavigation(); const destination = '/offline?queued=' + encodeURIComponent(durableEntry.client_id); voiceArrival('offline_stored', `local:${durableEntry.client_id}`, destination); location.assign(destination); return; }
+        if (durableEntry) { const destination = '/offline?queued=' + encodeURIComponent(durableEntry.client_id); await finishSaved('offline_stored', `local:${durableEntry.client_id}`, destination); return; }
         let notice = normal.parentElement.querySelector('[data-offline-form-error]');
         if (!notice) { notice = document.createElement('p'); notice.dataset.offlineFormError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; normal.before(notice); }
         notice.textContent = t(error.message || '無法保存，原本的備註與照片仍保留在表單中。'); notice.focus();
@@ -988,13 +1033,26 @@
         root.PatrolChecklist?.refresh(normal);
       }
     }, true);
+    document.addEventListener('click', event => {
+      if (!normalProgress?.result || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const link = event.target.closest?.('a[href]');
+      if (!link || link.hasAttribute('download') || link.target && link.target !== '_self') return;
+      const target = new URL(link.href, location.href);
+      if (target.origin === location.origin && target.pathname === location.pathname && target.search === location.search && target.hash) return;
+      // The record is already safe. Respect a deliberate Home/other-page click
+      // instead of replacing that navigation with a delayed receipt redirect.
+      normalProgress.abandon?.();
+    });
     window.addEventListener('online', () => { if (localNotice?.tone === 'offline') localNotice = null; core.getState().then(refreshUIPreferences).catch(reportError); });
     window.addEventListener('offline', () => { uiSessionKnown = null; cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
     window.addEventListener('pageshow', event => {
-      navigationAllowed = false; renderPhotos();
+      pageActive = true; navigationAllowed = false; renderPhotos();
       core.getState().then(() => { if (event.persisted) refreshUIPreferences(); }).catch(() => {});
     });
-    window.addEventListener('pagehide', () => { uiSessionKnown = null; cancelUIPreferences(); releasePreviews(); });
+    window.addEventListener('pagehide', () => {
+      pageActive = false; ++pageEpoch; normalProgress?.abandon?.();
+      uiSessionKnown = null; cancelUIPreferences(); releasePreviews();
+    });
     document.addEventListener('patrol:locale-changed', () => { if (!updatingLocale && latestState) { render(latestState); renderPhotos(); } });
     (async () => {
       try {

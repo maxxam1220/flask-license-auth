@@ -34,8 +34,8 @@ function setup(options = {}) {
   let locale = options.locale || 'vi', online = true, visible = true;
   function createAudio(src) {
     if (options.factoryThrows) throw Error('Audio constructor unavailable');
-    const audio = { src, originalSrc: src, playCalls: 0, pauseCalls: 0, loadCalls: 0, removed: [],
-      play() { this.playCalls++; return options.play?.(this); },
+    const audio = { src, originalSrc: src, playedSources: [], playCalls: 0, pauseCalls: 0, loadCalls: 0, removed: [],
+      play() { this.playCalls++; this.playedSources.push(this.src); return options.play?.(this); },
       pause() { this.pauseCalls++; options.pause?.(this); },
       removeAttribute(name) { this.removed.push(name); if (name === 'src') this.src = ''; },
       load() { this.loadCalls++; } };
@@ -45,14 +45,14 @@ function setup(options = {}) {
   }
   const localStorage = options.localStorage || new MemoryStorage(), sessionStorage = options.sessionStorage || new MemoryStorage();
   const api = createFeedback({ createAudio: options.unsupported ? undefined : createAudio,
-    localStorage, sessionStorage, getLocale: () => locale,
+    localStorage, sessionStorage, getLocale: () => locale, primeSource: options.primeSource,
     isVisible: () => visible, isOnline: () => online, onState: state => states.push(state),
     setTimeout: (fn, ms) => clock.setTimeout(fn, ms), clearTimeout: id => clock.clearTimeout(id) });
   return { api, createAudio, audios, states, clock, localStorage, sessionStorage,
     setLocale: value => { locale = value; }, setOnline: value => { online = value; }, setVisible: value => { visible = value; } };
 }
 
-test('confirmed audio starts synchronously and reaches end, with a fresh Audio for replay', () => {
+test('confirmed audio starts synchronously and reuses its element until disposal', () => {
   const { api, audios } = setup(); api.setEnabled(true);
   api.report('saved_execute', { id: 'execute-1' });
   assert.equal(audios.length, 1); assert.equal(audios[0].playCalls, 1);
@@ -60,8 +60,9 @@ test('confirmed audio starts synchronously and reaches end, with a fresh Audio f
   assert.equal(audios[0].preload, 'auto'); assert.equal(audios[0].volume, 1); assert.equal(audios[0].muted, false);
   event(audios[0], 'playing'); assert.equal(api.state().status, 'playing');
   event(audios[0], 'ended'); assert.equal(api.state().status, 'played');
-  assert.equal(audios[0].pauseCalls, 1); assert.deepEqual(audios[0].removed, ['src']); assert.equal(audios[0].loadCalls, 1);
-  api.replay(); assert.equal(audios.length, 2); assert.notEqual(audios[0], audios[1]); api.dispose();
+  assert.equal(audios[0].pauseCalls, 1); assert.deepEqual(audios[0].removed, []); assert.equal(audios[0].loadCalls, 0);
+  api.replay(); assert.equal(audios.length, 1); assert.equal(audios[0].playCalls, 2); api.dispose();
+  assert.deepEqual(audios[0].removed, ['src']); assert.equal(audios[0].loadCalls, 1);
 });
 
 for (const locale of ['zh-Hant', 'id', 'vi']) {
@@ -69,10 +70,10 @@ for (const locale of ['zh-Hant', 'id', 'vi']) {
     const { api, audios } = setup({ locale }); assert.equal(Object.keys(MESSAGES).length, 13);
     for (const kind of Object.keys(MESSAGES)) {
       api.report(kind, { id: locale + ':' + kind });
-      assert.equal(audios.at(-1).originalSrc, '/static/audio/patrol-v1/' + locale + '/' + kind + '.mp3?rev=natural-female-1');
-      assert.equal(new URL(audios.at(-1).originalSrc, 'https://patrol.test').search, '?rev=natural-female-1');
+      assert.equal(audios[0].src, '/static/audio/patrol-v1/' + locale + '/' + kind + '.mp3?rev=natural-female-1');
+      assert.equal(new URL(audios[0].src, 'https://patrol.test').search, '?rev=natural-female-1');
     }
-    assert.equal(audios.length, 13); api.dispose();
+    assert.equal(audios.length, 1); assert.equal(audios[0].playCalls, 13); api.dispose();
   });
 }
 
@@ -88,7 +89,7 @@ test('unrecognized locale cannot escape the public locale allowlist', () => {
   const f = setup();
   for (const value of ['../private', '__proto__', 'constructor', 'toString', 'en', 'zh-TW', null]) {
     f.setLocale(value); f.api.report('saved_execute', { id: 'locale:' + String(value) });
-    assert.equal(f.audios.at(-1).originalSrc, '/static/audio/patrol-v1/zh-Hant/saved_execute.mp3?rev=natural-female-1');
+    assert.equal(f.audios[0].src, '/static/audio/patrol-v1/zh-Hant/saved_execute.mp3?rev=natural-female-1');
   }
   f.api.dispose();
 });
@@ -133,7 +134,7 @@ for (const online of [true, false]) {
     assert.equal(f.api.state().lastResult.kind, 'offline_stored');
     f.api.replay(); f.clock.advance(4999); assert.equal(f.api.state().status, 'waiting');
     f.clock.advance(1); assert.equal(f.api.state().status, online ? 'audio_missing' : 'offline_audio');
-    assert.equal(f.audios[1].pauseCalls, 1); f.api.dispose();
+    assert.equal(f.audios.length, 1); assert.equal(f.audios[0].pauseCalls, 2); f.api.dispose();
   });
 }
 
@@ -158,7 +159,7 @@ test('autoplay rejection offers manual retry without losing or relabeling the co
   const play = deferred(), f = setup({ play: () => play.promise });
   f.api.report('saved_inspect', { id: 'blocked' }); play.reject(Object.assign(new Error('gesture required'), { name: 'NotAllowedError' }));
   await Promise.resolve(); assert.equal(f.api.state().status, 'blocked');
-  assert.equal(f.api.state().lastResult.kind, 'saved_inspect'); f.api.replay(); assert.equal(f.audios.length, 2); f.api.dispose();
+  assert.equal(f.api.state().lastResult.kind, 'saved_inspect'); f.api.replay(); assert.equal(f.audios.length, 1); assert.equal(f.audios[0].playCalls, 2); f.api.dispose();
 });
 
 test('synchronous play failure and broken Audio constructors cannot throw into save callers', () => {
@@ -169,21 +170,22 @@ test('synchronous play failure and broken Audio constructors cannot throw into s
 });
 
 test('cancel and mute ignore captured late handlers and settled play promises', async () => {
-  for (const cancel of [f => f.api.cancel(true), f => f.api.setEnabled(false), f => f.api.dispose()]) {
+  for (const [cancel, released] of [[f => f.api.cancel(true), false], [f => f.api.setEnabled(false), false], [f => f.api.dispose(), true]]) {
     const play = deferred(), f = setup({ play: () => play.promise });
     f.api.report('saved_inspect', { id: 'cancel-1' });
     const audio = f.audios[0], callbacks = [audio.onplaying, audio.onended, audio.onerror];
     cancel(f); const after = f.api.state();
     callbacks.forEach(fn => fn()); play.resolve(); await Promise.resolve(); f.clock.advance(25000);
-    assert.deepEqual(f.api.state(), after); assert.equal(audio.pauseCalls, 1); assert.equal(audio.src, '');
+    assert.deepEqual(f.api.state(), after); assert.equal(audio.pauseCalls, 1);
+    assert.equal(audio.src, released ? '' : audio.originalSrc);
     assert.equal(audio.onplaying, null); assert.equal(audio.onended, null); assert.equal(audio.onerror, null); f.api.dispose();
   }
 });
 
 test('a superseded result cannot be overwritten by the old audio rejection', async () => {
-  const old = deferred(), f = setup({ play: audio => new URL(audio.originalSrc, 'https://patrol.test').pathname.endsWith('/saved_execute.mp3') ? old.promise : undefined });
+  const old = deferred(), f = setup({ play: audio => new URL(audio.src, 'https://patrol.test').pathname.endsWith('/saved_execute.mp3') ? old.promise : undefined });
   f.api.report('saved_execute', { id: 'old' }); f.api.report('offline_stored', { id: 'new' });
-  event(f.audios[1], 'playing'); old.reject(new Error('late network failure')); await Promise.resolve();
+  event(f.audios[0], 'playing'); old.reject(new Error('late network failure')); await Promise.resolve();
   assert.equal(f.api.state().lastResult.kind, 'offline_stored'); assert.equal(f.api.state().status, 'playing'); f.api.dispose();
 });
 
@@ -196,7 +198,7 @@ test('hidden result and disposed module cannot start audio', () => {
 test('locale refresh cancels old playback and manual replay selects the new language', () => {
   const f = setup(); f.api.report('saved_visit', { id: 'language' });
   f.setLocale('id'); f.api.refresh(); assert.equal(f.audios[0].pauseCalls, 1); assert.equal(f.audios.length, 1);
-  f.api.replay(); assert.equal(f.audios[1].originalSrc, '/static/audio/patrol-v1/id/saved_visit.mp3?rev=natural-female-1'); f.api.dispose();
+  f.api.replay(); assert.equal(f.audios.length, 1); assert.equal(f.audios[0].src, '/static/audio/patrol-v1/id/saved_visit.mp3?rev=natural-female-1'); f.api.dispose();
 });
 
 test('missing Audio API and denied storage remain nonfatal to check-in callers', () => {
@@ -220,11 +222,13 @@ function installed(options = {}) {
   fixture.api.dispose();
   doc.visibilityState = 'visible'; doc.documentElement = { lang: 'vi' };
   doc.body = { dataset: { offlineUser: options.actor || 'actor-a' }, hasAttribute: () => Boolean(options.shell) };
-  doc.querySelectorAll = () => [];
+  doc.querySelectorAll = selector => selector === '[data-voice-controls]' ? options.panels || [] : [];
   doc.querySelector = selector => selector === '[data-voice-result]' && options.result ? { dataset: options.result } : null;
   root.document = doc; root.localStorage = fixture.localStorage; root.sessionStorage = fixture.sessionStorage;
   root.location = new URL(options.path || '/c/point-a?round=2', 'https://patrol.test');
   root.navigator = { onLine: true }; root.audioConstruction = [];
+  root.Blob = Blob; root.primeBlobs = []; root.revokedURLs = [];
+  root.URL = { createObjectURL(blob) { root.primeBlobs.push(blob); return 'blob:patrol-prime'; }, revokeObjectURL(value) { root.revokedURLs.push(value); } };
   root.Audio = function (...args) {
     root.audioConstruction.push(args);
     const audio = fixture.createAudio(args[0]);
@@ -306,6 +310,15 @@ test('cross-page offline result waits for identity and cannot cross account or d
   assert.equal(fixture.api.takeResult('actor-a'), null); fixture.api.dispose();
 });
 
+test('explicitly clearing a pending arrival prevents later playback after an account change', () => {
+  const fixture = installed({ path: '/offline', shell: true });
+  fixture.api.armResult('offline_stored', 'local-before-owner-change', '/offline', 'actor-a');
+  assert(fixture.sessionStorage.getItem('patrol-voice-arrival-v1'));
+  fixture.api.clearResult();
+  assert.equal(fixture.sessionStorage.getItem('patrol-voice-arrival-v1'), null);
+  assert.equal(fixture.api.takeResult('actor-a'), null); assert.equal(fixture.audios.length, 0); fixture.api.dispose();
+});
+
 test('cross-tab mute applies without replaying prior speech when enabled again', () => {
   const fixture = installed(); fixture.api.report('saved_visit', { id: 'tab-mute' });
   dispatch(fixture.root, 'storage', { key: 'patrol-voice-enabled-v1', newValue: 'off' });
@@ -319,8 +332,8 @@ test('partial sync, local storage and confirmed sync retain distinct result mean
   for (const [kind, id] of [['offline_stored', 'local:one'], ['sync_partial', 'partial:one'], ['sync_confirmed', 'ack:one']]) {
     fixture.api.report(kind, { id }); assert.equal(fixture.api.state().lastResult.kind, kind);
   }
-  assert.equal(fixture.audios.length, 3);
-  assert.equal(new Set(fixture.audios.map(value => value.originalSrc)).size, 3); fixture.api.dispose();
+  assert.equal(fixture.audios.length, 1);
+  assert.equal(new Set(fixture.audios[0].playedSources).size, 3); fixture.api.dispose();
 });
 
 test('confirm intent can cover its own validation page but not another point', () => {
@@ -350,4 +363,102 @@ test('installed native Audio sets anonymous CORS before src and never passes src
   assert.equal(f.audios[0].crossOrigin, 'anonymous');
   assert.equal(f.audios[0].originalSrc, '/static/audio/patrol-v1/vi/saved_execute.mp3?rev=natural-female-1');
   assert.equal(f.audios[0].playCalls, 1); f.api.dispose();
+});
+
+test('gesture preparation silently unlocks one element for a later asynchronous result', async () => {
+  let gesture = true;
+  const f = setup({ primeSource: 'blob:zero-pcm', play(audio) {
+    if (!gesture && !audio.unlocked) throw Object.assign(Error('gesture required'), { name: 'NotAllowedError' });
+    audio.unlocked = true; return Promise.resolve();
+  } });
+  assert.equal(f.api.prepare(), true); assert.equal(f.audios[0].playCalls, 1);
+  assert.equal(f.audios[0].muted, false); assert.equal(f.api.state().lastResult, null);
+  assert.equal(f.api.state().speaking, false); assert.equal(f.api.state().status, 'ready');
+  assert.equal(f.sessionStorage.getItem('patrol-voice-seen-v1'), null);
+  gesture = false; await Promise.resolve(); event(f.audios[0], 'ended');
+  await Promise.resolve(); f.api.report('saved_execute', { id: 'actual-server-ack' }); await Promise.resolve();
+  assert.equal(f.audios.length, 1); assert.equal(f.api.state().status, 'playing');
+  assert.deepEqual(f.audios[0].playedSources, ['blob:zero-pcm', '/static/audio/patrol-v1/vi/saved_execute.mp3?rev=natural-female-1']);
+  f.api.dispose();
+});
+
+test('late silent preparation callbacks and promise failure cannot interrupt confirmed audio', async () => {
+  const priming = deferred(), f = setup({ primeSource: 'blob:zero-pcm', play: audio => audio.src === 'blob:zero-pcm' ? priming.promise : undefined });
+  f.api.prepare(); const audio = f.audios[0], ended = audio.onended, failed = audio.onerror;
+  f.api.report('saved_inspect', { id: 'confirmed-after-prime' }); event(audio, 'playing');
+  const pauseCalls = audio.pauseCalls; ended(); failed(); priming.reject(new Error('old request aborted')); await Promise.resolve();
+  assert.equal(f.api.state().status, 'playing'); assert.equal(audio.pauseCalls, pauseCalls);
+  assert.equal(f.api.state().lastResult.id, 'confirmed-after-prime');
+  f.clock.advance(3000); assert.equal(f.api.state().status, 'playing'); f.api.dispose();
+});
+
+test('failed, muted, hidden or unsupported preparation never claims a result or throws', async () => {
+  for (const options of [{ factoryThrows: true }, { unsupported: true }, { primeSource: () => { throw Error('blob denied'); } },
+    { play: () => Promise.reject(Object.assign(Error('no gesture'), { name: 'NotAllowedError' })) }]) {
+    const f = setup({ primeSource: 'blob:zero-pcm', ...options });
+    assert.doesNotThrow(() => f.api.prepare()); await Promise.resolve();
+    assert.equal(f.api.state().lastResult, null); assert.equal(f.api.state().speaking, false); f.api.dispose();
+  }
+  const f = setup({ primeSource: 'blob:zero-pcm' }); f.api.setEnabled(false); assert.equal(f.api.prepare(), false);
+  f.api.setEnabled(true); f.setVisible(false); assert.equal(f.api.prepare(), false);
+  f.setVisible(true); f.api.dispose(); assert.equal(f.api.prepare(), false); assert.equal(f.audios.length, 0);
+});
+
+test('idle waiting is bounded independently of the loading and playback watchdogs', async () => {
+  const f = setup(); f.api.report('saved_inspect', { id: 'idle-bound' });
+  let done = false; f.api.waitForIdle(4500).then(() => { done = true; });
+  assert.equal(f.clock.jobs.size, 2); f.clock.advance(4499); await Promise.resolve(); assert.equal(done, false);
+  f.clock.advance(1); await Promise.resolve(); assert.equal(done, true); assert.equal(f.api.state().status, 'waiting');
+  assert.equal(f.clock.jobs.size, 1); f.clock.advance(500); assert.equal(f.api.state().status, 'audio_missing'); f.api.dispose();
+});
+
+test('idle waiting resolves on ended, rejected, cancelled, muted, hidden and disposed playback', async () => {
+  for (const finish of [f => event(f.audios[0], 'ended'), f => event(f.audios[0], 'error'),
+    f => f.api.cancel(true), f => f.api.setEnabled(false), f => { f.setVisible(false); f.api.cancel(); }, f => f.api.dispose()]) {
+    const f = setup(); f.api.report('saved_inspect', { id: 'idle-terminal' }); event(f.audios[0], 'playing');
+    let done = false; f.api.waitForIdle().then(() => { done = true; }); finish(f); await Promise.resolve();
+    assert.equal(done, true); assert.equal(f.clock.jobs.size, 0); assert.equal(f.audios[0].playCalls, 1); f.api.dispose();
+  }
+  const f = setup(); await f.api.waitForIdle(); assert.equal(f.audios.length, 0); assert.equal(f.clock.jobs.size, 0); f.api.dispose();
+});
+
+test('installed submit and sync hooks prepare actual silent PCM without reporting attendance', async () => {
+  const f = installed({ strictCORS: true });
+  dispatch(f.doc, 'submit', { target: { id: 'inspection-form', action: '/c/point-a/confirm' } });
+  assert.equal(f.audios.length, 1); assert.equal(f.audios[0].src, 'blob:patrol-prime'); assert.equal(f.api.state().lastResult, null);
+  dispatch(f.doc, 'submit', { target: { id: 'offline-checkin', action: '/offline' } });
+  const button = { hasAttribute: key => key === 'data-offline-sync' };
+  dispatch(f.doc, 'click', { target: { closest: () => button } });
+  assert.equal(f.audios[0].playCalls, 3); assert.equal(f.audios.length, 1); assert.equal(f.root.primeBlobs.length, 1);
+  const bytes = await f.root.primeBlobs[0].arrayBuffer(), view = new DataView(bytes);
+  assert.equal(f.root.primeBlobs[0].type, 'audio/wav'); assert.equal(bytes.byteLength, 1644);
+  assert.equal(new TextDecoder().decode(new Uint8Array(bytes, 0, 4)), 'RIFF');
+  assert.equal(view.getUint32(24, true), 8000); assert.equal(view.getUint32(40, true), 1600);
+  assert(new Uint8Array(bytes, 44).every(value => value === 0));
+  f.api.dispose(); assert.deepEqual(f.root.revokedURLs, ['blob:patrol-prime']);
+});
+
+test('only enabling the local toggle prepares audio; cross-tab enable does not play', () => {
+  const f = installed(); f.api.setEnabled(false);
+  const button = { hasAttribute: key => key === 'data-voice-toggle' };
+  dispatch(f.doc, 'click', { target: { closest: () => button } });
+  assert.equal(f.audios[0].playCalls, 1); assert.equal(f.api.state().lastResult, null);
+  dispatch(f.root, 'storage', { key: 'patrol-voice-enabled-v1', newValue: 'off' });
+  dispatch(f.root, 'storage', { key: 'patrol-voice-enabled-v1', newValue: 'on' });
+  assert.equal(f.audios[0].playCalls, 1); f.api.dispose();
+});
+
+test('blocked panels expose a visible manual playback action and restore normal replay wording', async () => {
+  const label = { dataset: {} }, replay = { querySelector: selector => selector === '.patrol-voice-label' ? label : null }, status = {};
+  const panel = { dataset: {}, querySelector: selector => ({ '[data-voice-replay]': replay, '[data-voice-status]': status })[selector] || null };
+  let blocked = true;
+  const f = installed({ panels: [panel], play: () => blocked ? Promise.reject(Object.assign(Error('gesture required'), { name: 'NotAllowedError' })) : undefined });
+  f.api.report('saved_inspect', { id: 'blocked-panel' }); await Promise.resolve();
+  assert.equal(panel.hidden, false); assert.equal(panel.dataset.voiceStatus, 'blocked');
+  assert.equal(replay.hidden, false); assert.equal(replay.disabled, false);
+  assert.equal(label.dataset.i18n, '點一下播放結果'); assert.equal(label.textContent, '點一下播放結果');
+  assert.equal(status.textContent, '瀏覽器限制自動播放，請點一下播放結果。');
+  blocked = false; f.api.replay(); event(f.audios[0], 'playing');
+  assert.equal(panel.dataset.voiceStatus, 'playing'); assert.equal(label.dataset.i18n, '重播結果'); assert.equal(label.textContent, '重播結果');
+  event(f.audios[0], 'ended'); assert.equal(panel.dataset.voiceStatus, 'played'); f.api.dispose();
 });
