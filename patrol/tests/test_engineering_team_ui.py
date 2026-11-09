@@ -57,7 +57,7 @@ def test_qr_labels_show_current_team_and_scheduled_frequency_without_rotating_ur
     assert labels.status_code == 200
     assert "qr-label-engineering" in labels.text and "工務巡檢</span>" in labels.text
     assert "單段 · 每日一次" in labels.text
-    assert "2026-11-10 起 · 之前每週一次" in labels.text
+    assert "2026-11-10" not in labels.text and "之前" not in labels.text
     assert point.qr_token == token and point.frequency == "weekly"
     management = admin.get("/admin/points", query_string={"inspection_team": "engineering"})
     assert management.status_code == 200
