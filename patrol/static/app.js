@@ -292,7 +292,9 @@
         else if (files.some(file => !supportsPhoto(file))) message = t('請選擇 JPG、PNG、WebP 或 HEIC 照片。');
         input.setCustomValidity(message);
         input.setAttribute('aria-invalid', message ? 'true' : 'false');
-        feedback.textContent = message || (files.length ? t('已選 {count} 張，確認打卡時才會上傳。', { count: files.length }) : '');
+        const selectionMessage = container.dataset.photoSubmitLabel === '確認結案'
+          ? '已選 {count} 張，確認結案時才會上傳。' : '已選 {count} 張，確認打卡時才會上傳。';
+        feedback.textContent = message || (files.length ? t(selectionMessage, { count: files.length }) : '');
         feedback.classList.toggle('is-error', !!message);
       }
 

@@ -37,7 +37,7 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 | `INITIAL_ADMIN_PASSWORD_HASH` | 首次管理員密碼的 scrypt 雜湊；從受控記憶體安全填入，不是明文密碼 |
 | `PUBLIC_BASE_URL` | 選填；預設使用平台的 `RENDER_EXTERNAL_URL`。自訂網域時才設定 HTTPS 根網址，無 `/login`、`/patrol`、查詢參數或片段 |
 | `IMPORT_SAFETY_POINTS` | 此次升級設為 `1`，一次性匯入 42 個職安點位；完成標記存於資料庫，後續重啟不覆寫 |
-| `PHOTO_STORAGE_LIMIT_BYTES` | 選填，預設 `209715200`（200 MiB），限制巡檢壓縮照片總量 |
+| `PHOTO_STORAGE_LIMIT_BYTES` | 選填，預設 `209715200`（200 MiB），原始巡檢及結案照片共用此總量限制 |
 
 不要把憑證值寫進此文件、Git、工單或指令列。使用 Render Environment 設定保存。不要自行設定或猜測 `RENDER_EXTERNAL_URL`，平台會注入此值。網站建立後，核對 QR Code 目的網址與 Dashboard 顯示的實際網址完全一致；正式列印 QR Code 前完成此檢查。
 
@@ -82,3 +82,5 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 版本 14 在 `patrol_users` 新增 `ui_language`（預設 `zh-Hant`）與 `simple_executor_ui`（預設關閉）。只新增欄位，不重寫巡檢、綁定、密碼或離線紀錄；切換語言及簡易介面不撤銷既有登入或暫存授權。升級前確認備份完成。部署後由管理員替指定帳號選擇語言及「僅今日待簽到」，不要依姓名自動指派；只有執行人員會啟用簡易導覽。後續修正須使用支援 schema 14 的程式，不能用舊程式降版啟動。
 
 版本 15 在 `patrol_points` 增加 `inspection_team`（預設 general）、`pending_frequency` 與 `frequency_effective_date`；資料表升級不改派任何點位。備份完成並確認新版上線後，由系統管理員至 `/admin/points/revision-20261109` 核對 15 點方案，再套用：11 點工務分流立即生效，10 點頻率於 2026/11/10 台北時間零時起啟用。新排程與一次性標記同一交易提交，原 QR、Inspection、PatrolExecution 不改寫。到期啟用在工作請求前完成；若設定不一致，打卡停止但管理及診斷頁保留。後續修正版必須支援 schema 15，不得降版本或還原整個共用資料庫。頻率變更前未同步的舊設定暫存會被拒絕而保留，現場需先同步並重新準備。
+
+版本 16 只新增 `patrol_issue_event_photos`，每張處理後照片歸屬不可覆寫的結案事件，既有巡檢、結案歷程與 QR 不變。升級前完成 Render 邏輯匯出；總務管理員獲得總務及工務案件結案權，職安與重新開案權限維持原規則。所有照片寫入共用原照片配額及 PostgreSQL advisory lock。XLSX 含照片匯出新增 openpyxl 依賴，單次限 100 件／500 張／原圖 50 MiB，並在載入照片前序列化匯出工作。部署後以唯讀方式驗證總覽提醒、異常匯出、照片存取與 schema 16；不要建立測試結案或覆寫共用資料庫。後續修正版須支援 schema 16，不可直接降版啟動。

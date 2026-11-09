@@ -168,7 +168,10 @@ def test_manager_sees_both_teams_and_can_filter_without_management_escalation(te
         for path in ('/admin/points', '/admin/users', '/admin/devices'):
             assert client.get(path).status_code == 403
         assert client.post(f'/issues/{t.records["engineering"].id}/resolve',
-            data={'note': 'not the reporter', 'expected_event_id': '0'}).status_code == 403
+            data={'note': 'manager verified the repair', 'expected_event_id': '0'}).status_code == 302
+        assert t.records['engineering'].issue.status == 'resolved'
+        assert client.post(f'/admin/issues/{t.records["engineering"].id}/reopen',
+            data={'note': 'manager cannot reopen', 'expected_event_id': '0'}).status_code == 403
 
 
 def test_point_handover_blocks_old_form_grant_and_old_team_history(teams):

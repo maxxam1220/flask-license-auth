@@ -859,6 +859,14 @@
     "id": "Halaman offline dan suara belum siap. Sambungkan internet lalu coba lagi.",
     "vi": "Trang ngoại tuyến và âm thanh chưa sẵn sàng. Hãy kết nối mạng rồi thử lại."
   },
+  "確認結案": {
+    "id": "Konfirmasi penyelesaian",
+    "vi": "Xác nhận đóng vụ việc"
+  },
+  "已選 {count} 張，確認結案時才會上傳。": {
+    "id": "{count} foto dipilih. Foto diunggah setelah Anda mengonfirmasi penyelesaian.",
+    "vi": "Đã chọn {count} ảnh. Ảnh chỉ được tải lên khi xác nhận đóng vụ việc."
+  },
   "正在準備離線資料與三語提示音，請稍候…": {
     "id": "Menyiapkan data offline dan suara tiga bahasa. Mohon tunggu…",
     "vi": "Đang chuẩn bị dữ liệu ngoại tuyến và âm thanh ba ngôn ngữ. Vui lòng chờ…"

@@ -124,8 +124,10 @@ def test_both_roles_preserve_handoffs_and_team_reports_within_assigned_points(ap
         assert peer.note in client.get(f"/records/{peer.id}").text
         assert peer.note in client.get("/records/export?category=safety").get_data(as_text=True)
         assert client.get(f"/photos/{peer.photos[0].id}").data == peer.photos[0].data
-        assert client.post(f"/issues/{peer.id}/resolve", data=close).status_code == 403
+        is_manager = client is lead and title == "general_manager"
+        assert client.post(f"/issues/{peer.id}/resolve", data=close).status_code == (302 if is_manager else 403)
         assert client.post(f"/issues/{own.id}/resolve", data=close).status_code == 302
-        assert own.issue.status == "resolved" and own.issue.resolved_by_id == own.user_id
+        expected_actor = user.id if title == "general_manager" else own.user_id
+        assert own.issue.status == "resolved" and own.issue.resolved_by_id == expected_actor
         assert client.post(f"/admin/issues/{own.id}/reopen", data=close).status_code == 403
     assert db.session.query(IssueEvent).count() == 2

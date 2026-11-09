@@ -6,3 +6,4 @@ qrcode[pil]>=8.0,<9
 waitress>=3.0,<4
 tzdata>=2025.1
 pillow-heif>=1.8.1,<2
+openpyxl>=3.1.5,<3.2

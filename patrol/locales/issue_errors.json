@@ -1,0 +1,13 @@
+{
+  "每次結案最多上傳 3 張照片。": {"id": "Maksimal 3 foto untuk setiap penyelesaian kasus.", "vi": "Mỗi lần đóng vụ việc được tải lên tối đa 3 ảnh."},
+  "照片儲存空間已滿，本次尚未結案。請聯絡系統管理員，或移除照片後重新送出。": {"id": "Penyimpanan foto penuh. Kasus belum ditutup. Hubungi administrator sistem atau hapus foto lalu kirim lagi.", "vi": "Dung lượng lưu ảnh đã đầy. Vụ việc chưa được đóng. Hãy liên hệ quản trị viên hoặc bỏ ảnh rồi gửi lại."},
+  "案件已是指定狀態，沒有新增重複處理紀錄；本次照片與說明未追加。": {"id": "Status kasus sudah sesuai. Tidak ada catatan penanganan ganda; foto dan rincian dari pengiriman ini tidak ditambahkan.", "vi": "Vụ việc đã ở trạng thái được yêu cầu. Không tạo lịch sử trùng lặp; ảnh và nội dung lần gửi này không được thêm vào."},
+  "重新開啟案件不接受照片，請於結案時附上處理後照片。": {"id": "Foto tidak dapat dilampirkan saat membuka kembali kasus. Lampirkan foto hasil penanganan saat menutup kasus.", "vi": "Không nhận ảnh khi mở lại vụ việc. Hãy đính kèm ảnh sau xử lý khi đóng vụ việc."},
+  "回報日期的起日不能晚於迄日。": {"id": "Tanggal awal laporan tidak boleh setelah tanggal akhir.", "vi": "Ngày bắt đầu báo cáo không được sau ngày kết thúc."},
+  "正在產生另一份異常報表，請稍後再匯出。": {"id": "Laporan masalah lain sedang dibuat. Silakan coba ekspor lagi nanti.", "vi": "Đang tạo một báo cáo sự cố khác. Vui lòng xuất lại sau."},
+  "單次最多匯出 {count} 件異常。請縮小回報日期、樓層或狀態後再匯出。": {"id": "Maksimal {count} kasus per ekspor. Batasi tanggal laporan, lantai, atau status lalu ekspor lagi.", "vi": "Mỗi lần xuất tối đa {count} sự cố. Hãy thu hẹp ngày báo cáo, tầng hoặc trạng thái rồi xuất lại."},
+  "這次匯出的照片超過 500 張或 50 MB，請縮小回報日期、樓層或狀態後再匯出。": {"id": "Foto ekspor melebihi 500 foto atau 50 MB. Batasi tanggal laporan, lantai, atau status lalu ekspor lagi.", "vi": "Ảnh xuất vượt quá 500 ảnh hoặc 50 MB. Hãy thu hẹp ngày báo cáo, tầng hoặc trạng thái rồi xuất lại."},
+  "部分照片無法讀取，報表尚未匯出。請聯絡系統管理員檢查照片。": {"id": "Beberapa foto tidak dapat dibaca. Laporan belum diekspor. Hubungi administrator sistem untuk memeriksa foto.", "vi": "Không đọc được một số ảnh. Báo cáo chưa được xuất. Hãy liên hệ quản trị viên kiểm tra ảnh."},
+  "上傳內容太大，本次尚未結案。請重新選取照片，最多 3 張，每張不超過 8 MB。": {"id": "Unggahan terlalu besar. Kasus belum ditutup. Pilih ulang maksimal 3 foto, masing-masing tidak lebih dari 8 MB.", "vi": "Nội dung tải lên quá lớn. Vụ việc chưa được đóng. Hãy chọn lại tối đa 3 ảnh, mỗi ảnh không quá 8 MB."},
+  "返回異常明細": {"id": "Kembali ke rincian masalah", "vi": "Quay lại chi tiết sự cố"}
+}

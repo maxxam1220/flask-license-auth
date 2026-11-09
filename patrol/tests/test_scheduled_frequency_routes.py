@@ -73,7 +73,9 @@ def test_daily_to_weekly_uses_same_qr_and_week_key_after_cutover(teams):
     labels = t.clients['admin'].get('/admin/points/print', query_string={'ids': str(point.id)})
     assert labels.status_code == 200
     assert '工務巡檢' in labels.text and '每週一次' in labels.text
-    assert '2026-11-10' in labels.text or '2026/11/10' in labels.text
+    # The printed label shows only the final frequency; dates stay in point
+    # management so the permanent sign does not carry the old test schedule.
+    assert '2026-11-10' not in labels.text and '2026/11/10' not in labels.text
     t.clock[0] = datetime(2026, 11, 9, 16, tzinfo=timezone.utc)
     weekly = payload(engineer, url)
     assert weekly['frequency'] == 'weekly' and weekly['period_key'] == '2026-11-09'

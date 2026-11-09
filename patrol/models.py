@@ -364,7 +364,23 @@ class IssueEvent(db.Model):
     note = db.Column(db.Text, nullable=False, default="", server_default="")
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     issue = db.relationship(InspectionIssue, back_populates="events")
+    photos = db.relationship("IssueEventPhoto", back_populates="event", lazy="select",
+                             order_by="IssueEventPhoto.id")
     __table_args__ = (db.CheckConstraint("action IN ('resolved', 'reopened')", name="patrol_issue_event_action"),)
+
+
+class IssueEventPhoto(db.Model):
+    """Resolution evidence belongs to one historical event, never the current case."""
+    __tablename__ = "patrol_issue_event_photos"
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, db.ForeignKey("patrol_issue_events.id"), nullable=False, index=True)
+    data = db.deferred(db.Column(db.LargeBinary, nullable=False))
+    mime_type = db.Column(db.String(40), nullable=False, default="image/jpeg", server_default="image/jpeg")
+    size_bytes = db.Column(db.Integer, nullable=False)
+    width = db.Column(db.Integer, nullable=False)
+    height = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    event = db.relationship(IssueEvent, back_populates="photos")
 
 
 class SchemaVersion(db.Model):

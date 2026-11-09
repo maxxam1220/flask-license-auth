@@ -2,8 +2,9 @@
 import re
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import object_session
 
-from models import Inspection, InspectionIssue, IssueEvent, Point, db
+from models import Inspection, InspectionIssue, IssueEvent, IssueEventPhoto, Point, db
 from patrol_access import apply_point_scope, can_access_category, can_access_point_team, patrol_scope
 
 
@@ -53,7 +54,26 @@ def issue_version(issue):
     return max((event.id for event in issue.events), default=0) if issue else 0
 
 
+def can_resolve_issue(actor, record, *, point=None):
+    """Resolution permission; it never grants reopen or point administration."""
+    if (actor is None or record is None or not actor.active or actor.must_change_password
+            or actor.role not in ("admin", "inspector") or not can_access_category(actor, record.category)):
+        return False
+    if record.category == "general" and not can_access_point_team(actor, point if point is not None else record.point):
+        return False
+    if actor.role == "admin":
+        return True
+    manager = (patrol_scope(actor) == "general" and bool(getattr(actor, "general_manager_title", False))
+               and not bool(getattr(actor, "engineering_inspector_title", False)))
+    return bool(actor.id == record.user_id or (manager and record.category == "general"))
+
+
 def transition_issue(inspection_id, target_status, actor, expected_event_id, note, instant):
+    """Compatibility API; use the event API when attaching resolution photos."""
+    return transition_issue_event(inspection_id, target_status, actor, expected_event_id, note, instant) is not None
+
+
+def transition_issue_event(inspection_id, target_status, actor, expected_event_id, note, instant):
     """Caller locks/revalidates actor first; then lock point and its issue.
 
     This follows the check-in lock order. No commit here: issue, event and the
@@ -75,15 +95,15 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
                               .execution_options(populate_existing=True))
     if category == "general" and not can_access_point_team(actor, point):
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    if actor.role != "admin" and owner_id != actor.id:
-        raise IssueActionError("只能結案自己回報的異常案件。", 403)
     record = db.session.scalar(select(Inspection).where(Inspection.id == inspection_id).with_for_update()
                                .execution_options(populate_existing=True))
     if record is None:
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
     if not can_access_category(actor, record.category):
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
-    if actor.role != "admin" and record.user_id != actor.id:
+    if record.point_id != point_id:
+        raise IssueActionError("案件已由其他操作更新，請重新載入後再試。", 409)
+    if not can_resolve_issue(actor, record, point=point):
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
     # Authorize using the locked inspection before parsing form details or
     # materializing a legacy issue. An unauthorized POST must never reveal the
@@ -103,7 +123,7 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
         db.session.add(issue)
         db.session.flush()
     if issue.status == target_status:
-        return False
+        return None
     latest_event_id = db.session.scalar(select(db.func.coalesce(db.func.max(IssueEvent.id), 0))
                                        .where(IssueEvent.inspection_id == inspection_id))
     if int(expected_event_id) != latest_event_id:
@@ -119,6 +139,44 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
         issue.resolved_by_id = None
         issue.resolved_by_name = ""
         issue.resolution_note = ""
-    db.session.add(IssueEvent(inspection_id=inspection_id, actor_id=actor.id, actor_name=actor.display_name,
-                             action="resolved" if target_status == "resolved" else "reopened", note=note, created_at=instant))
-    return True
+    event = IssueEvent(inspection_id=inspection_id, actor_id=actor.id, actor_name=actor.display_name,
+                      action="resolved" if target_status == "resolved" else "reopened", note=note, created_at=instant)
+    db.session.add(event)
+    # A capability valid only for this transaction. Queries used for image quota
+    # may autoflush the event, so checking session.new alone would be too strict.
+    if target_status == "resolved":
+        event._resolution_transaction = db.session().get_transaction()
+    return event
+
+
+def append_resolution_photos(event, prepared, instant):
+    """Attach processed JPEGs to this transaction's new resolution only.
+
+    The caller authorizes/version-checks via transition_issue_event before
+    processing uploads, then commits evidence, status and audit atomically.
+    No files are parsed and no transaction is committed here.
+    """
+    session = db.session()
+    transaction = session.get_transaction()
+    if (not isinstance(event, IssueEvent) or event.action != "resolved" or object_session(event) is not session
+            or transaction is None or not transaction.is_active
+            or getattr(event, "_resolution_transaction", None) is not transaction
+            or getattr(event, "_resolution_photos_attached", False)):
+        raise IssueActionError("照片只能附加到本次新建立的結案紀錄。", 409)
+    prepared = list(prepared)
+    if len(prepared) > 3:
+        raise IssueActionError("每次結案最多上傳 3 張照片。")
+    photos = []
+    fields = {"data", "mime_type", "size_bytes", "width", "height"}
+    for item in prepared:
+        if (not isinstance(item, dict) or set(item) != fields or not isinstance(item["data"], bytes)
+                or not item["data"] or item["mime_type"] != "image/jpeg"
+                or any(type(item[name]) is not int or item[name] <= 0 for name in ("size_bytes", "width", "height"))
+                or item["size_bytes"] != len(item["data"])):
+            raise IssueActionError("結案照片資料無效，請重新選擇照片。")
+        photos.append(IssueEventPhoto(**item, created_at=instant))
+    # Validate the complete batch first so an invalid later item cannot leave
+    # a partially attached evidence list even before the caller rolls back.
+    event.photos.extend(photos)
+    event._resolution_photos_attached = True
+    return len(photos)

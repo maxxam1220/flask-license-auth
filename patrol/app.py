@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import threading
 from tempfile import SpooledTemporaryFile
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlencode, urlsplit
@@ -30,7 +31,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from account_roles import ACCOUNT_CHOICES, ACCOUNT_ROLE_LABELS, account_role_choice, role_label
 from i18n import client_catalog, get_locale, point_name as localized_point_name, t
 
-from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, LoginAttempt, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginAttempt, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
 from login_client import classify_login_client
 from login_history import login_records_page
 from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execution_in_slot, execution_review_status,
@@ -38,13 +39,14 @@ from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execu
 from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from missed import period_bounds
-from images import PhotoValidationError, process_uploads
+from images import PhotoValidationError, photo_storage_used, process_uploads
 from patrol_access import (apply_point_scope, can_access_category, can_access_point, can_access_point_team,
                            can_read_inspection, can_view_execution_records, can_view_general_team,
                            inspection_team_scope, patrol_scope)
 from ready_patrol import ready_patrol_points
 from daily_rounds import daily2_anytime, next_daily2_slot
-from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts as count_open_issues, open_issue_for, transition_issue
+from issues import (IssueActionError, append_resolution_photos, can_resolve_issue, issue_state, issue_version,
+                    open_issue_condition, open_issue_counts as count_open_issues, open_issue_for, transition_issue_event)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
@@ -52,6 +54,7 @@ QR_RETURN_PATH = re.compile(r"/c/([A-Za-z0-9_-]{1,100})")
 PASSWORD_MIN_LENGTH = 6
 PASSWORD_MAX_LENGTH = 256
 UI_LANGUAGES = {"zh-Hant": "繁體中文", "id": "Bahasa Indonesia（印尼文）", "vi": "Tiếng Việt（越南文）"}
+ISSUE_EXPORT_SLOT = threading.BoundedSemaphore(1)
 
 
 def flash(message, category="message"):
@@ -163,7 +166,7 @@ def normalise_return_to(value, user):
         if len({key for key, _ in pairs}) != len(pairs):
             return None
         allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency", "stage", "page", "inspection_team"}
-                   if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page", "inspection_team"})
+                   if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page", "inspection_team", "date_from", "date_to"})
         values = {}
         for key, item in pairs:
             if key not in allowed or any(ord(char) < 32 or ord(char) == 127 for char in item):
@@ -213,6 +216,8 @@ def normalise_return_to(value, user):
             end = date.fromisoformat(values.get("date_to", today.isoformat()))
             if begin > end or (end - begin).days > 366:
                 return None
+        elif values.get("date_from") and values.get("date_to") and values["date_from"] > values["date_to"]:
+            return None
         return parsed.path + ("?" + urlencode(values) if values else "")
     except (ValueError, TypeError):
         return None
@@ -348,7 +353,8 @@ def create_app(config=None):
                 "can_filter_inspection_team": can_filter_inspection_team(user),
                 "viewer_team_label": ("總務與工務" if can_filter_inspection_team(user) else
                                       "工務" if inspection_team_scope(user) == "engineering" else "總務"),
-                "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
+                "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state,
+                "can_resolve_issue": lambda record: can_resolve_issue(user, record)}
 
     def can_filter_inspection_team(user):
         return bool(user and (user.role == "admin" or (can_view_general_team(user)
@@ -387,10 +393,16 @@ def create_app(config=None):
         return count_open_issues(point_ids, user_id, category, actor=g.get("user"),
                                  inspection_team=selected_inspection_team())
 
+    def visible_open_issue_total():
+        if not g.get("user") or g.user.role == "executor":
+            return 0
+        owner = None if g.user.role == "admin" or can_view_general_team(g.user) else g.user.id
+        return sum(open_issue_counts(user_id=owner, category=patrol_scope(g.user)).values())
+
     @app.url_defaults
     def preserve_inspection_team(endpoint, values):
         if endpoint in {"dashboard", "ready", "dashboard_ready", "records", "export_records", "missed",
-                        "missed_export", "issues", "points", "print_qr", "create_point", "update_point",
+                        "missed_export", "issues", "export_issues_xlsx", "points", "print_qr", "create_point", "update_point",
                         "restore_point", "delete_point", "rotate_point_qr"} and request:
             if values.get("category") in ("safety", "uncategorized"):
                 values.pop("inspection_team", None)
@@ -494,7 +506,7 @@ def create_app(config=None):
         camera_policy = "(self)" if can_scan else "()"
         response.headers["Permissions-Policy"] = f"camera={camera_policy}, microphone=(), geolocation=()"
         if request.endpoint != "static":
-            response.headers["Cache-Control"] = "private, no-store" if request.endpoint in ("photo_file", "ui_preferences") else "no-store"
+            response.headers["Cache-Control"] = "private, no-store" if request.endpoint in ("photo_file", "issue_photo_file", "export_issues_xlsx", "ui_preferences") else "no-store"
         if app.config["COOKIE_SECURE"]:
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
         return response
@@ -1082,7 +1094,8 @@ def create_app(config=None):
                                following_period=following_period if following_period <= last_date else None,
                                current_period=period_day <= today <= period_end,
                                missed_count=sum(card["missed_count"] for card in cards),
-                               open_issue_counts=issue_counts, device_state=current_binding.status if current_binding else "none",
+                               open_issue_counts=issue_counts, outstanding_issue_count=visible_open_issue_total(),
+                               device_state=current_binding.status if current_binding else "none",
                                approved_elsewhere=approved_elsewhere, irregular_points=irregular_points, spot_points=irregular_points,
                                recent=db.session.scalars(recent_query).all(), recent_executions=recent_executions,
                                missed_query_url=url_for("missed", **report_filters),
@@ -1430,7 +1443,7 @@ def create_app(config=None):
         if photos:
             if db.engine.dialect.name == "postgresql":
                 db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
-            used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
+            used = photo_storage_used()
             if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
                 return form_error("照片儲存空間已滿，這次打卡尚未儲存。請聯絡系統管理員，或移除照片後重新確認送出。", 409)
         final_instant = now_utc()
@@ -1547,7 +1560,7 @@ def create_app(config=None):
                                long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
                                issue_action_note=request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n"),
                                issue_version=issue_version(record.issue),
-                               can_manage_issue=g.user.role == "admin" or (g.user.role == "inspector" and record.user_id == g.user.id),
+                               can_manage_issue=can_resolve_issue(g.user, record),
                                can_reopen_issue=g.user.role == "admin",
                                back_url=back_url, back_label="返回異常追蹤" if urlsplit(back_url).path == "/issues" else "返回巡檢紀錄",
                                point_open_issue_count=open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0)), status
@@ -1556,18 +1569,36 @@ def create_app(config=None):
         actor = lock_current_user()
         source = normalise_return_to(request.form.get("return_to"), actor)
         try:
-            changed = transition_issue(inspection_id, target_status, actor, request.form.get("expected_event_id"),
-                                       request.form.get("note", ""), naive_utc())
+            instant = naive_utc()
+            event = transition_issue_event(inspection_id, target_status, actor, request.form.get("expected_event_id"),
+                                           request.form.get("note", ""), instant)
+            changed = event is not None
+            uploads = request.files.getlist("photos")
+            if target_status != "resolved" and any(upload.filename for upload in uploads):
+                raise IssueActionError("重新開啟案件不接受照片，請於結案時附上處理後照片。")
             if changed:
-                audit("issue_resolved" if target_status == "resolved" else "issue_reopened", inspection_id)
+                # The locked transition authorizes the actor and checks the
+                # event version before any private image decoding or storage.
+                photos = process_uploads(uploads) if target_status == "resolved" else []
+                if photos:
+                    if db.engine.dialect.name == "postgresql":
+                        db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
+                    if photo_storage_used() + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
+                        raise IssueActionError("照片儲存空間已滿，本次尚未結案。請聯絡系統管理員，或移除照片後重新送出。", 409)
+                    append_resolution_photos(event, photos, instant)
+                audit("issue_resolved" if target_status == "resolved" else "issue_reopened", inspection_id,
+                      f"photos={len(photos)}")
             db.session.commit()
-        except IssueActionError as error:
+        except (IssueActionError, PhotoValidationError) as error:
             db.session.rollback()
-            if error.status in (403, 404):
-                abort(error.status, description=str(error))
+            status = getattr(error, "status", 400)
+            message = str(error).replace("每次打卡最多上傳", "每次結案最多上傳")
+            if status in (403, 404):
+                abort(status, description=message)
             record = db.get_or_404(Inspection, inspection_id)
-            return render_record_detail(record, str(error), error.status)
-        flash(("案件已結案。" if target_status == "resolved" else "案件已重新開啟。") if changed else "案件已是指定狀態，沒有新增重複處理紀錄。", "success" if changed else "info")
+            return render_record_detail(record, message, status)
+        flash(("案件已結案。" if target_status == "resolved" else "案件已重新開啟。") if changed else
+              "案件已是指定狀態，沒有新增重複處理紀錄；本次照片與說明未追加。", "success" if changed else "info")
         return redirect(url_for("record_detail", record_id=inspection_id, **({"return_to": source} if source else {})))
 
     @app.post("/admin/issues/<int:inspection_id>/resolve")
@@ -1581,17 +1612,19 @@ def create_app(config=None):
     def reopen_issue(inspection_id):
         return apply_issue_action(inspection_id, "open")
 
-    @app.get("/issues")
-    @login_required
-    def issues():
+    def issue_query():
+        """One authorization/filter contract for the list and its full export."""
         if g.user.role == "executor":
             abort(403, description="異常追蹤由巡檢員與系統管理員處理。")
         floor, category = scope_filters()
         state = request.args.get("status", "open")
         if state not in ("open", "resolved", "all"):
             abort(400, description="案件狀態選項不正確。")
-        page = parse_id(request.args.get("page", "1"))
         point_id = request.args.get("point_id", "")
+        begin = parse_date(request.args.get("date_from"), None)
+        end = parse_date(request.args.get("date_to"), None)
+        if begin and end and begin > end:
+            abort(400, description="回報日期的起日不能晚於迄日。")
         selected_point = None
         if point_id:
             selected_id = parse_id(point_id)
@@ -1619,12 +1652,25 @@ def create_app(config=None):
             query = query.where(Inspection.point_floor == int(floor))
         if selected_point:
             query = query.where(Inspection.point_id == selected_point.id)
+        if begin:
+            query = query.where(Inspection.created_at >= naive_utc(datetime.combine(begin, time.min, TAIPEI)))
+        if end:
+            query = query.where(Inspection.created_at < naive_utc(datetime.combine(end + timedelta(days=1), time.min, TAIPEI)))
+        order_time = InspectionIssue.resolved_at if state == "resolved" else db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at)
+        filters = {"status": state, "floor": floor, "category": category, "point_id": point_id,
+                   "date_from": begin.isoformat() if begin else "", "date_to": end.isoformat() if end else ""}
+        return query, filters, selected_point, order_time
+
+    @app.get("/issues")
+    @login_required
+    def issues():
+        query, filters, selected_point, order_time = issue_query()
+        page = parse_id(request.args.get("page", "1"))
         total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
         per_page = 50
         pages = max(1, (total + per_page - 1) // per_page)
         if page > pages:
-            return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
-        order_time = InspectionIssue.resolved_at if state == "resolved" else db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at)
+            return redirect(url_for("issues", **filters, page=pages))
         rows = db.session.scalars(query.options(selectinload(Inspection.issue), selectinload(Inspection.photos), selectinload(Inspection.point))
                                   .order_by(order_time.desc(), Inspection.id.desc()).offset((page - 1) * per_page).limit(per_page)).all()
         if page > 1 and not rows:
@@ -1633,11 +1679,81 @@ def create_app(config=None):
             total = db.session.scalar(select(db.func.count()).select_from(query.subquery()))
             pages = max(1, (total + per_page - 1) // per_page)
             if page > pages:
-                return redirect(url_for("issues", status=state, floor=floor, category=category, point_id=point_id, page=pages))
-        open_total = sum(open_issue_counts(user_id=None if g.user.role == "admin" or can_view_general_team(g.user) else g.user.id,
-                                         category=patrol_scope(g.user)).values())
-        return render_template("issues.html", records=rows, filters={"status": state, "floor": floor, "category": category, "point_id": point_id},
-                               selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page}, open_total=open_total)
+                return redirect(url_for("issues", **filters, page=pages))
+        return render_template("issues.html", records=rows, filters=filters,
+                               selected_point=selected_point, pagination={"page": page, "pages": pages, "total": total, "per_page": per_page},
+                               open_total=visible_open_issue_total())
+
+    @app.get("/issues/export.xlsx")
+    @login_required
+    def export_issues_xlsx():
+        from issue_export import (ExportEvent, ExportImageError, ExportIssue, ExportLimitError, ExportPhoto,
+                                  MAX_EXPORT_ISSUES, MAX_EXPORT_PHOTOS, MAX_SOURCE_PHOTO_BYTES, build_issue_workbook)
+        query, filters, _, order_time = issue_query()
+        # This covers database image loading as well as XLSX compression, so
+        # concurrent downloads cannot multiply memory usage in the web worker.
+        if not ISSUE_EXPORT_SLOT.acquire(blocking=False):
+            abort(429, description="正在產生另一份異常報表，請稍後再匯出。")
+        data = None
+        try:
+            ids = list(db.session.scalars(query.with_only_columns(Inspection.id).order_by(
+                order_time.desc(), Inspection.id.desc()).limit(MAX_EXPORT_ISSUES + 1)))
+            if len(ids) > MAX_EXPORT_ISSUES:
+                raise ExportLimitError(f"單次最多匯出 {MAX_EXPORT_ISSUES} 件異常。請縮小回報日期、樓層或狀態後再匯出。")
+            # Serialize evidence reads against resolve/reopen (which take
+            # FOR UPDATE on the inspection, including legacy cases). Hold
+            # only while making the DTO snapshot, never during XLSX encoding.
+            db.session.execute(select(Inspection.id).where(Inspection.id.in_(ids))
+                               .order_by(Inspection.id).with_for_update(read=True)).all()
+            original_count, original_size = db.session.execute(select(
+                db.func.count(InspectionPhoto.id), db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)
+            ).where(InspectionPhoto.inspection_id.in_(ids))).one()
+            treatment_count, treatment_size = db.session.execute(select(
+                db.func.count(IssueEventPhoto.id), db.func.coalesce(db.func.sum(IssueEventPhoto.size_bytes), 0)
+            ).join(IssueEvent).where(IssueEvent.inspection_id.in_(ids))).one()
+            if original_count + treatment_count > MAX_EXPORT_PHOTOS or original_size + treatment_size > MAX_SOURCE_PHOTO_BYTES:
+                raise ExportLimitError("這次匯出的照片超過 500 張或 50 MB，請縮小回報日期、樓層或狀態後再匯出。")
+            rows = db.session.scalars(query.where(Inspection.id.in_(ids)).options(
+                selectinload(Inspection.photos).undefer(InspectionPhoto.data),
+                selectinload(Inspection.issue).selectinload(InspectionIssue.events).selectinload(IssueEvent.photos).undefer(IssueEventPhoto.data),
+                selectinload(Inspection.point), selectinload(Inspection.user)
+            ).order_by(order_time.desc(), Inspection.id.desc())).all()
+            exports = []
+            for row in rows:
+                location = report_point_location(row)
+                issue = row.issue
+                exports.append(ExportIssue(
+                    inspection_id=row.id, point_code=location.code, point_name=location.name, floor=location.floor,
+                    responsible_team=point_team_label(row), reporter=reporter_name(row), reported_at=row.created_at,
+                    status=issue_state(row), note=row.note or "",
+                    photos=tuple(ExportPhoto(photo.data, f"回報照片 {index}") for index, photo in enumerate(row.photos, 1)),
+                    events=tuple(ExportEvent(event.action, event.actor_name, event.created_at, event.note,
+                                 tuple(ExportPhoto(photo.data, f"處理後照片 {index}") for index, photo in enumerate(event.photos, 1)))
+                                 for event in issue.events) if issue else (),
+                    resolved_by=issue.resolved_by_name if issue else "", resolved_at=issue.resolved_at if issue else None,
+                    resolution_note=issue.resolution_note if issue else ""))
+            description = " · ".join((
+                {"open": "未結案", "resolved": "已結案", "all": "全部異常"}[filters["status"]],
+                category_label(filters["category"]) if filters["category"] else "可查看的全部分類",
+                ("工務" if selected_inspection_team() == "engineering" else "總務") if selected_inspection_team() else "全部負責單位",
+                floor_label(filters["floor"]) if filters["floor"] else "全部樓層",
+                f"回報日期：{filters['date_from'] or '不限起日'} ～ {filters['date_to'] or '不限迄日'}"))
+            db.session.rollback()  # Pure read transaction; release snapshot locks.
+            data = build_issue_workbook(exports, generated_at=now_utc(), filter_description=description)
+            response = send_file(data, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                 as_attachment=True, download_name=f"patrol-issues-{local_dt(now_utc()):%Y%m%d-%H%M%S}.xlsx", conditional=False)
+            response.call_on_close(data.close)
+            return response
+        except ExportLimitError as error:
+            abort(413, description=str(error))
+        except ExportImageError:
+            abort(409, description="部分照片無法讀取，報表尚未匯出。請聯絡系統管理員檢查照片。")
+        except Exception:
+            if data is not None:
+                data.close()
+            raise
+        finally:
+            ISSUE_EXPORT_SLOT.release()
 
     @app.get("/photos/<int:photo_id>")
     @login_required
@@ -1647,6 +1763,16 @@ def create_app(config=None):
         response = make_response(photo.data)
         response.headers["Content-Type"] = photo.mime_type
         response.headers["Content-Disposition"] = f'inline; filename="inspection-{photo.id}.jpg"'
+        return response
+
+    @app.get("/issue-photos/<int:photo_id>")
+    @login_required
+    def issue_photo_file(photo_id):
+        photo = db.get_or_404(IssueEventPhoto, photo_id)
+        require_inspection_access(photo.event.issue.inspection)
+        response = make_response(photo.data)
+        response.headers["Content-Type"] = photo.mime_type
+        response.headers["Content-Disposition"] = f'inline; filename="resolution-{photo.id}.jpg"'
         return response
 
     @app.get("/devices")
@@ -1894,7 +2020,7 @@ def create_app(config=None):
                 users.append(SimpleNamespace(id=selected_id, display_name=name or f"人員 {selected_id}"))
         storage = {}
         if g.user.role == "admin":
-            storage = {"photo_storage_used": db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0))),
+            storage = {"photo_storage_used": photo_storage_used(),
                        "photo_storage_limit": app.config["PHOTO_STORAGE_LIMIT_BYTES"]}
         execution_states = {}
         if stage == "execution":
@@ -2520,6 +2646,11 @@ def create_app(config=None):
                                    voice_result=voice_result,
                                    recovery_url=url_for("checkin", token=request.view_args["token"]),
                                    recovery_label=t(label)), error.code
+        if request.endpoint == "resolve_issue" and g.get("user") and error.code == 413:
+            return render_template("error.html", code=413,
+                                   message=t("上傳內容太大，本次尚未結案。請重新選取照片，最多 3 張，每張不超過 8 MB。"),
+                                   recovery_url=url_for("record_detail", record_id=request.view_args["inspection_id"]),
+                                   recovery_label=t("返回異常明細")), 413
         # Preserve the protocol headers (particularly Allow for 405) while
         # displaying the same recovery links as our other error pages.
         response = error.get_response()

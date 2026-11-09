@@ -21,6 +21,19 @@ class PhotoValidationError(ValueError):
     """A user-facing validation failure, with no partial storage."""
 
 
+def photo_storage_used():
+    """One quota shared by original reports and immutable resolution evidence.
+
+    Writers hold the same advisory lock before calling this and adding photos.
+    Avoid loading any image bodies just to calculate storage usage.
+    """
+    from sqlalchemy import select
+    from models import InspectionPhoto, IssueEventPhoto, db
+    report_bytes = select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)).scalar_subquery()
+    treatment_bytes = select(db.func.coalesce(db.func.sum(IssueEventPhoto.size_bytes), 0)).scalar_subquery()
+    return db.session.scalar(select(report_bytes + treatment_bytes)) or 0
+
+
 def process_uploads(files):
     uploads = [item for item in files if item and item.filename]
     if not uploads:

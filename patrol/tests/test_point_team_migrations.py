@@ -48,7 +48,7 @@ def test_v15_only_adds_default_team_and_preserves_existing_rows(engine, v14):
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == LATEST_VERSION == 15
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert not any(s.lstrip().upper().startswith(("DROP TABLE", "DELETE ", "UPDATE ")) for s in statements)
@@ -65,11 +65,11 @@ def test_v15_only_adds_default_team_and_preserves_existing_rows(engine, v14):
             floor=1, category="general", frequency="daily", workflow_mode="spot", active=True,
             qr_token="old-worker-qr", schedule_start=date(2026, 1, 1), created_at=datetime(2026, 1, 1)))
         connection.execute(Point.__table__.update().where(Point.id == 1).values(inspection_team="engineering"))
-    assert upgrade_schema(engine) == 15
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         assert connection.execute(select(Point.id, Point.inspection_team).where(Point.id.in_((1, 4))).order_by(Point.id)).all() == [
             (1, "engineering"), (4, "general")]
-        assert connection.scalar(select(func.count()).where(SchemaVersion.version == 15)) == 1
+        assert connection.scalar(select(func.count()).where(SchemaVersion.version == LATEST_VERSION)) == 1
 
 
 @pytest.mark.parametrize("identifier,team", [(2, "engineering"), (3, "engineering"), (1, "unknown"), (1, None)])

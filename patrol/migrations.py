@@ -13,11 +13,11 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, case, exists, inspect, literal, select, text
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
-from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
+from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
                     ENGINEERING_TITLE_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 15
+LATEST_VERSION = 16
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -129,6 +129,8 @@ def _upgrade_locked(connection) -> int:
         if current < 15:
             _add_missing_columns(connection, Point.__tablename__, [Point.__table__.c.inspection_team,
                 Point.__table__.c.pending_frequency, Point.__table__.c.frequency_effective_date])
+        if current < 16:
+            IssueEventPhoto.__table__.create(connection, checkfirst=True)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -434,11 +436,12 @@ def _validate_current(connection):
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
                                    "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked,
-                                   LoginEvent.__tablename__, OfflineSubmission.__tablename__}
+                                   LoginEvent.__tablename__, OfflineSubmission.__tablename__, IssueEventPhoto.__tablename__}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     _validate_login_events(inspector)
     _validate_offline_submissions(inspector)
+    _validate_issue_event_photos(inspector)
     for table_name, required in {
         User.__tablename__: ("general_manager_title", "engineering_inspector_title", "ui_language", "simple_executor_ui"),
         "patrol_points": ("category", "workflow_mode", "inspection_team"),
@@ -573,6 +576,28 @@ def _validate_login_events(inspector):
         if (not index or index["unique"] or index["column_names"] != list(expected.columns.keys())
                 or any(key.endswith("_where") for key in index.get("dialect_options", {}))):
             raise SchemaMigrationError(f"Missing or invalid login event index: {expected.name}.")
+
+
+def _validate_issue_event_photos(inspector):
+    """A partial pre-created table must fail closed instead of losing evidence."""
+    table = IssueEventPhoto.__table__
+    actual = {column["name"]: column for column in inspector.get_columns(table.name)}
+    for expected in table.columns:
+        column = actual.get(expected.name)
+        if (not column or bool(column["nullable"]) != bool(expected.nullable)
+                or not isinstance(column["type"], type(expected.type))
+                or getattr(column["type"], "length", None) != getattr(expected.type, "length", None)):
+            raise SchemaMigrationError(f"Invalid issue event photo column: {expected.name}.")
+    if (inspector.get_pk_constraint(table.name)["constrained_columns"] != ["id"]
+            or str(actual["mime_type"]["default"]).replace("::character varying", "") != "'image/jpeg'"):
+        raise SchemaMigrationError("Issue event photo primary key or image default is invalid.")
+    if not any(fk["constrained_columns"] == ["event_id"] and fk["referred_table"] == IssueEvent.__tablename__
+               and fk["referred_columns"] == ["id"] for fk in inspector.get_foreign_keys(table.name)):
+        raise SchemaMigrationError("Issue event photo history foreign key is missing.")
+    if not any(index["column_names"] == ["event_id"] and not index["unique"]
+               and not any(key.endswith("_where") for key in index.get("dialect_options", {}))
+               for index in inspector.get_indexes(table.name)):
+        raise SchemaMigrationError("Issue event photo history index is missing.")
 
 
 def _validate_offline_submissions(inspector):

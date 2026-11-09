@@ -18,7 +18,7 @@ from account_roles import role_label
 from daily_rounds import daily2_anytime
 from domain import floor_label
 from general_workflow import execution_in_slot, new_execution, personal_inspection_in_slot
-from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, process_uploads
+from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, photo_storage_used, process_uploads
 from issues import open_issue_for
 from i18n import client_catalog, t, translate
 from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
@@ -301,7 +301,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         if photos:
             if db.engine.dialect.name == "postgresql":
                 db.session.execute(db.text("SELECT pg_advisory_xact_lock(714032610303)"))
-            used = db.session.scalar(select(db.func.coalesce(db.func.sum(InspectionPhoto.size_bytes), 0)))
+            used = photo_storage_used()
             if used + sum(photo["size_bytes"] for photo in photos) > app.config["PHOTO_STORAGE_LIMIT_BYTES"]:
                 return fail("storage_full", "伺服器照片空間不足；整筆暫存保留，請聯絡管理員。", retryable=True)
         received = now()

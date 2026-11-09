@@ -3,7 +3,7 @@
 {% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge, inspection_team_filter %}
 {% set title='巡檢總覽' %}
 {% from '_scanner.html' import scanner_button %}
-{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-layout.css') }}" media="screen">{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-layout.css') }}" media="screen"><link rel="stylesheet" href="{{ url_for('static', filename='issue-detail.css') }}">{% endblock %}
 {% macro stage_badge(slot) %}
   {%- if slot.status == 'done' %}<span class="badge badge-done">兩階段已完成</span>
   {%- elif slot.status == 'not_due' %}<span class="badge badge-not_due">尚未開始</span>
@@ -50,6 +50,13 @@
     </p>
   </div>
 </div>
+{% if current_user.role != 'executor' and outstanding_issue_count|default(0) > 0 %}
+<a class="dashboard-issue-notice" href="{{ url_for('issues', status='open') }}">
+  <span class="dashboard-issue-symbol">{{ icon('alert') }}</span>
+  <span class="dashboard-issue-copy"><strong>{{ t('尚有 {count} 件未結案異常', count=outstanding_issue_count) }}</strong><small>{{ t('跨日期持續追蹤，查看待處理案件。') }}</small></span>
+  <span class="dashboard-issue-action">{{ t('查看異常') }} {{ icon('arrow') }}</span>
+</a>
+{% endif %}
 {% if not is_patrol_admin and not viewer_category %}<section class="panel" id="today-ready" tabindex="-1">{{ empty('等待指派巡檢分類', '請聯絡系統管理員設定你的巡檢角色。完成指派後，就能查看負責的點位並掃碼打卡。', 'users') }}</section>
 {% else %}
 <noscript><p class="scanner-fallback">使用手機內建相機掃描現場 QR Code，再點選連結開啟打卡確認頁。</p></noscript>
