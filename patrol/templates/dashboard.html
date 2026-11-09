@@ -28,8 +28,8 @@
 {% macro point_issues(point_id, count) -%}
   {% if count %}
   <div class="point-issue-row">
-    {{ open_issue_badge(count, url_for('issues', point_id=point_id, category=(selected_category or none) if is_patrol_admin else none) if is_patrol_admin or can_view_general_team else '') }}
-    {% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point_id) }}">查看我回報的異常 {{ icon('arrow') }}</a>{% endif %}
+    {{ open_issue_badge(count, url_for('issues', date_from='', date_to='', point_id=point_id, category=(selected_category or none) if is_patrol_admin else none) if is_patrol_admin or can_view_general_team else '') }}
+    {% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', date_from='', date_to='', point_id=point_id) }}">查看我回報的異常 {{ icon('arrow') }}</a>{% endif %}
   </div>
   {% endif %}
 {%- endmacro %}
@@ -51,7 +51,7 @@
   </div>
 </div>
 {% if current_user.role != 'executor' and outstanding_issue_count|default(0) > 0 %}
-<a class="dashboard-issue-notice" href="{{ url_for('issues', status='open') }}">
+<a class="dashboard-issue-notice" href="{{ url_for('issues', status='open', date_from='', date_to='') }}">
   <span class="dashboard-issue-symbol">{{ icon('alert') }}</span>
   <span class="dashboard-issue-copy"><strong>{{ t('尚有 {count} 件未結案異常', count=outstanding_issue_count) }}</strong><small>{{ t('跨日期持續追蹤，查看待處理案件。') }}</small></span>
   <span class="dashboard-issue-action">{{ t('查看異常') }} {{ icon('arrow') }}</span>

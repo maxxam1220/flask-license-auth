@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261109-v15';
+const CACHE = 'patrol-offline-shell-20261109-v17';
 const AUDIO_VERSION = 'patrol-v1', AUDIO_ROOT = '/static/audio/' + AUDIO_VERSION + '/';
 // Keep the fixed paths compatible with already-open pages and pending drafts.
 // A new revision still requires a complete, verified download before activation.
@@ -10,7 +10,7 @@ const AUDIO_KINDS = ['saved_execute', 'saved_inspect', 'saved_visit', 'already_r
   'offline_stored', 'sync_confirmed', 'sync_partial', 'not_saved', 'login_required', 'receipt_confirmed'];
 const AUDIO_PATHS = ['zh-Hant', 'id', 'vi'].flatMap(locale => AUDIO_KINDS.map(kind => AUDIO_ROOT + locale + '/' + kind + '.mp3'));
 const AUDIO_MANIFEST = AUDIO_ROOT + 'manifest.json', audioAllowed = new Set(AUDIO_PATHS);
-const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', AUDIO_MANIFEST, ...AUDIO_PATHS];
+const REQUIRED = ['/offline', '/static/app.css', '/static/offline.css', '/static/checklist.css', '/static/executor-locale.css', '/static/i18n.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', AUDIO_MANIFEST, ...AUDIO_PATHS];
 const allowed = new Set(REQUIRED);
 const completeResponse = response => response && response.status === 200 && response.type !== 'opaque' && !response.redirected;
 function audioManifest(value) {
@@ -131,7 +131,7 @@ self.addEventListener('message', event => {
         await prepareCache(); ready = await cacheReady(await caches.open(CACHE));
       }
     } catch (_) { /* Leave existing entries and private IndexedDB data intact. */ }
-    event.ports[0]?.postMessage({ ready, audioReady: ready, audioVersion: AUDIO_VERSION, audioRevision: AUDIO_REVISION });
+    event.ports[0]?.postMessage({ ready, audioReady: ready, checklistVersion: 1, audioVersion: AUDIO_VERSION, audioRevision: AUDIO_REVISION });
   })());
 });
 self.addEventListener('fetch', event => {
@@ -139,7 +139,8 @@ self.addEventListener('fetch', event => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   // Static requests are immutable shell assets, not arbitrary /static paths.
   const versionedAudio = audioAllowed.has(url.pathname) && url.search === '?rev=' + AUDIO_REVISION;
-  if (allowed.has(url.pathname) && url.pathname !== '/offline' && (!url.search || versionedAudio)) {
+  const versionedChecklist = url.pathname === '/static/offline.js' && url.search === '?v=checklist-1';
+  if (allowed.has(url.pathname) && url.pathname !== '/offline' && (!url.search || versionedAudio || versionedChecklist)) {
     event.respondWith(caches.open(CACHE).then(async cache => {
       const cached = await cache.match(url.pathname);
       if (!completeResponse(cached)) return fetch(request);

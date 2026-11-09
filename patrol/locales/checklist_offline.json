@@ -1,0 +1,30 @@
+{
+  "執行與直接簽到不接受備註或照片。": {
+    "id": "Check-in pelaksanaan dan check-in langsung tidak menerima catatan atau foto.",
+    "vi": "Ghi nhận thực hiện và ghi nhận trực tiếp không nhận ghi chú hoặc ảnh."
+  },
+  "執行／直接簽到不接受備註或照片。": {
+    "id": "Check-in pelaksanaan/check-in langsung tidak menerima catatan atau foto.",
+    "vi": "Ghi nhận thực hiện/ghi nhận trực tiếp không nhận ghi chú hoặc ảnh."
+  },
+  "直接簽到不接受備註或照片。": {
+    "id": "Check-in langsung tidak menerima catatan atau foto.",
+    "vi": "Ghi nhận trực tiếp không nhận ghi chú hoặc ảnh."
+  },
+  "離線點檢資料需要更新。請連線按「更新離線資料」；原有待補傳紀錄仍保留並可同步。": {
+    "id": "Data daftar pemeriksaan offline perlu diperbarui. Sambungkan internet lalu tekan “Perbarui data offline”. Catatan tertunda tetap tersimpan dan dapat disinkronkan.",
+    "vi": "Cần cập nhật danh sách kiểm tra ngoại tuyến. Kết nối mạng rồi nhấn “Cập nhật dữ liệu ngoại tuyến”. Các bản ghi chờ gửi vẫn được giữ và có thể đồng bộ."
+  },
+  "已勾選 {count} / {total} 項": {
+    "id": "Dicentang {count} / {total} item",
+    "vi": "Đã chọn {count} / {total} hạng mục"
+  },
+  "點檢項目未勾選或已變更，暫存仍保留。請先核對紀錄；需要重新打卡時，請確認移除這筆暫存後到現場重新掃描。": {
+    "id": "Item pemeriksaan belum dicentang atau telah berubah. Catatan lokal tetap tersimpan. Periksa catatan terlebih dahulu. Jika perlu mencatat ulang, konfirmasikan penghapusan catatan lokal ini, lalu pindai lagi di lokasi.",
+    "vi": "Chưa chọn hạng mục kiểm tra hoặc danh sách đã thay đổi. Bản ghi tạm vẫn được giữ. Hãy kiểm tra bản ghi trước. Nếu cần ghi nhận lại, xác nhận xóa bản ghi tạm này rồi quét lại tại hiện trường."
+  },
+  "這筆舊版暫存未記錄點檢勾選。可先同步核對是否已有收據；若被拒絕，請核對後明確刪除，再到現場重新掃描。": {
+    "id": "Catatan dari versi lama ini tidak menyimpan pilihan pemeriksaan. Sinkronkan dahulu untuk memeriksa apakah bukti penerimaan sudah ada. Jika ditolak, periksa lalu konfirmasikan penghapusan, dan pindai lagi di lokasi.",
+    "vi": "Bản ghi tạm từ phiên bản cũ chưa lưu các hạng mục đã chọn. Hãy đồng bộ để kiểm tra xem đã có biên nhận chưa. Nếu bị từ chối, kiểm tra và xác nhận xóa, rồi quét lại tại hiện trường."
+  }
+}

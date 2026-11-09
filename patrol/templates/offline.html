@@ -12,12 +12,13 @@
   <link rel="icon" type="image/x-icon" href="/static/logo.ico">
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/offline.css">
+  <link rel="stylesheet" href="/static/checklist.css">
   <link rel="stylesheet" href="/static/executor-locale.css">
   <script id="patrol-i18n" type="application/json">{{ client_i18n|tojson }}</script>
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/patrol-voice.css">
   <script defer src="/static/patrol-voice.js"></script>
-  <script defer src="/static/offline.js"></script>
+  <script defer src="{{ url_for('static', filename='offline.js', v='checklist-1') }}"></script>
   <script defer src="/static/offline-update.js"></script>
   <script defer src="/static/patrol-scanner.js"></script>
 </head>
@@ -41,6 +42,12 @@
       <div class="offline-confirm-action"><button class="button button-primary button-full button-large" type="submit" data-offline-save disabled><strong lang="en">OK</strong> <span data-i18n="確認暫存打卡">{{ t('確認暫存打卡') }}</span></button><p><span data-i18n="暫存成功後仍需同步，系統確認收件才算完成。">{{ t('暫存成功後仍需同步，系統確認收件才算完成。') }}</span></p></div>
       <fieldset class="offline-fields" data-offline-fields disabled>
         <legend class="sr-only"><span data-i18n="本次現場回報">{{ t('本次現場回報') }}</span></legend>
+        <fieldset class="checklist-fieldset" data-offline-checklist hidden aria-describedby="offline-checklist-hint offline-checklist-count">
+          <legend data-offline-checklist-title></legend>
+          <p class="checklist-hint" id="offline-checklist-hint" data-i18n="請至少勾選 1 項已完成的點檢項目。">{{ t('請至少勾選 1 項已完成的點檢項目。') }}</p>
+          <div class="checklist-options" data-offline-checklist-options></div>
+          <p class="checklist-count" id="offline-checklist-count" data-offline-checklist-count role="status" aria-live="polite"></p>
+        </fieldset>
         <div data-offline-report-fields>
           <label class="offline-abnormal"><input type="checkbox" name="is_abnormal" value="on"><span>{{ icon('alert') }}<span data-i18n="發現異常">{{ t('發現異常') }}</span><small><span data-i18n="同步成功後列入異常追蹤。">{{ t('同步成功後列入異常追蹤。') }}</span></small></span></label>
           <label class="offline-field-label" for="offline-note"><span data-i18n="巡檢備註">{{ t('巡檢備註') }}</span> <span><span data-i18n="選填">{{ t('選填') }}</span></span></label>

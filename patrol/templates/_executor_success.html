@@ -15,6 +15,7 @@
       {% if long_period %}<div class="receipt-period"><span>{{ t('有效期間') }}</span><strong>{{ long_period.start }} – {{ long_period.end }}</strong></div>{% endif %}
       {% if executed %}<div><span>{{ t('第二階段') }}</span><strong class="badge receipt-stage-status {{ 'badge-done' if phase_status == 'done' else 'badge-missed' if phase_status == 'expired' else 'badge-neutral' if phase_status == 'unknown' else 'badge-review' }}">{{ t('已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢') }}</strong></div>{% endif %}
     </div>
+    {% if checklist_snapshot is defined %}{{ checklist_summary(checklist_snapshot(record), 'execute' if executed else 'visit') }}{% endif %}
     {% if flexible_daily2 %}<p class="checkin-footnote">{{ t('再次掃描同一點可登記第二次；完成兩次後請前往下一點。') }}</p>{% endif %}
   </div>
 </div>

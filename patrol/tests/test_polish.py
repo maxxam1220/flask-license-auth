@@ -98,7 +98,7 @@ def test_last_issue_on_second_page_resolves_then_return_clamps_to_last_page(appl
     db.session.commit()
     client = application.test_client()
     login(client, "manager")
-    source = "/issues?status=open&category=safety&floor=1&page=2"
+    source = "/issues?status=open&category=safety&floor=1&page=2&date_from=&date_to="
     response = client.post(f"/admin/issues/{rows[0].id}/resolve", data={"expected_event_id": "0", "note": "最後一件處理完成", "return_to": source})
     assert response.status_code == 302
     with rendered_contexts(application) as contexts:
@@ -143,7 +143,7 @@ def test_concurrent_resolution_between_count_and_fetch_recovers_empty_last_page(
                 resolved_by_name="Manager", resolution_note="Concurrent completion"))
     event.listen(Session, "do_orm_execute", close_before_fetch)
     try:
-        response = client.get("/issues?status=open&floor=1&page=2")
+        response = client.get("/issues?status=open&floor=1&page=2&date_from=&date_to=")
     finally:
         event.remove(Session, "do_orm_execute", close_before_fetch)
         db.session.rollback()

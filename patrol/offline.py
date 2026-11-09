@@ -15,6 +15,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from account_roles import role_label
+from checklist_catalog import checklist_for_point, validate_checklist
+from checklist_records import encode_checklist
 from daily_rounds import daily2_anytime
 from domain import floor_label
 from general_workflow import execution_in_slot, new_execution, personal_inspection_in_slot
@@ -175,9 +177,10 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                              name_i18n={language: translate(point.name, language) for language in ("id", "vi")},
                              floor=floor_label(point.floor), frequency=point.frequency, workflow_mode=point.workflow_mode,
                              inspection_team=point.inspection_team,
+                             checklist=checklist_for_point(point),
                              stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed,
                              grant=signer.dumps(grant)))
-        return jsonify(ok=True, version=1, owner=owner(user, binding), identity=identity(user, binding),
+        return jsonify(ok=True, version=1, checklist_version=1, owner=owner(user, binding), identity=identity(user, binding),
                        server_time=iso(instant), day=day.isoformat(), capture_until=iso(capture_until),
                        sync_until=iso(sync_until), csrf_token=csrf_token(), points=rows)
 
@@ -203,8 +206,11 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                 raise ValueError("oversized entry")
             entry = json.loads(raw_entry)
             required = {"client_id", "owner", "token", "grant", "slot", "observed_at", "note", "is_abnormal"}
-            if not isinstance(entry, dict) or set(entry) != required:
+            if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"checklist"}:
                 raise ValueError("invalid entry fields")
+            if "checklist" in entry and (not isinstance(entry["checklist"], list) or len(entry["checklist"]) > 30
+                    or any(not isinstance(item, str) or len(item) > 100 for item in entry["checklist"])):
+                raise ValueError("invalid checklist fields")
             if any(not isinstance(entry[key], str) for key in required - {"is_abnormal"}):
                 raise ValueError("invalid entry type")
             if type(entry["is_abnormal"]) is not bool:
@@ -284,6 +290,10 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             return fail("invalid_slot", "暫存日期或次數不符合點位設定；暫存仍保留。")
         if consumed(user, point, day, key, slot, stage):
             return fail("duplicate", "這個日期／次數已有紀錄，這筆暫存尚未合併或刪除。請核對原紀錄。")
+        try:
+            checklist_data = encode_checklist(validate_checklist(point, entry.get("checklist", [])))
+        except ValueError:
+            return fail("invalid_checklist", "點檢項目未勾選或已變更，暫存仍保留。請先核對紀錄；需要重新打卡時，請確認移除這筆暫存後到現場重新掃描。")
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None
         if stage == "inspect" and point.workflow_mode == "two_stage":
             if first is None:
@@ -293,7 +303,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             if first.created_at > naive_utc(observed):
                 return fail("execution_order", "手機巡檢時間早於執行簽到，尚未列為完成；請核對兩支手機時間。")
         if stage in ("execute", "visit") and (note or entry["is_abnormal"] or uploads):
-            return fail("invalid_stage_content", "執行／直接簽到只記錄人員、點位與時間，不接受備註或照片。", 400)
+            return fail("invalid_stage_content", "執行／直接簽到不接受備註或照片。", 400)
         try:
             photos = process_uploads(uploads) if stage == "inspect" else []
         except PhotoValidationError as error:
@@ -316,6 +326,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                                 payload_hash=payload_hash, observed_at=naive_utc(observed), received_at=naive_utc(received))
         if stage == "execute":
             record = new_execution(point, user, binding, key, slot, observed)
+            record.checklist_data = checklist_data
             row.execution = record
         else:
             record = Inspection(user_id=user.id, point_id=point.id, binding_id=binding.id,
@@ -325,7 +336,8 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                                 execution_id=first.id if first else None,
                                 spot_request_id=f"offline:{user.id}:{entry['client_id']}" if point.workflow_mode == "spot" else None,
                                 personal_day=day if point.workflow_mode in ("spot", "two_stage") else None,
-                                executor_visit=stage == "visit", note=note, is_abnormal=entry["is_abnormal"])
+                                executor_visit=stage == "visit", note=note, is_abnormal=entry["is_abnormal"],
+                                checklist_data=checklist_data)
             record.photos.extend(InspectionPhoto(**photo) for photo in photos)
             open_issue_for(record)
             row.inspection = record

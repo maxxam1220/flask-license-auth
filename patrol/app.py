@@ -29,6 +29,8 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from account_roles import ACCOUNT_CHOICES, ACCOUNT_ROLE_LABELS, account_role_choice, role_label
+from checklist_catalog import checklist_for_point, checklist_revision, validate_checklist
+from checklist_records import checklist_snapshot, encode_checklist, checklist_text
 from i18n import client_catalog, get_locale, point_name as localized_point_name, t
 
 from models import AuditLog, DeviceBinding, Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginAttempt, LoginEvent, PatrolExecution, Point, PointSchedule, RevokedSession, User, db
@@ -92,6 +94,8 @@ def checkin_location_revision(point):
     location = (str(point.id), point.code, point.name, str(point.floor), point.category, point.workflow_mode)
     if getattr(point, "inspection_team", "general") == "engineering":
         location += ("engineering",)
+    if revision := checklist_revision(point):
+        location += ("checklist", revision)
     return hashlib.sha256("\x00".join(location).encode("utf-8")).hexdigest()
 
 
@@ -172,6 +176,8 @@ def normalise_return_to(value, user):
             if key not in allowed or any(ord(char) < 32 or ord(char) == 127 for char in item):
                 return None
             if not item:
+                if parsed.path == "/issues" and key in ("date_from", "date_to"):
+                    values[key] = ""
                 continue
             if key in ("date_from", "date_to"):
                 parsed_date = date.fromisoformat(item)
@@ -340,6 +346,7 @@ def create_app(config=None):
         user = g.get("user")
         return {"current_user": user, "role_label": role_label, "is_patrol_admin": bool(user and user.role == "admin"),
                 "t": t, "ui_locale": get_locale(), "ui_languages": UI_LANGUAGES,
+                "checklist_snapshot": checklist_snapshot,
                 "simple_executor_ui": uses_simple_executor_ui(user), "home_url": home_url(user),
                 "localized_point_name": localized_point_name, "client_i18n": client_catalog(),
                 "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
@@ -1290,13 +1297,17 @@ def create_app(config=None):
                        "device_required" if binding_state != "approved" and (allowed or waiting_for_execution) else
                        "waiting_execution" if waiting_for_execution else "point_unavailable" if not allowed else None)
         return render_template("checkin.html", point=point, device_state=binding_state, existing=existing, token=token,
+                               checkin_checklist=checklist_for_point(point),
+                               checkin_selected=(request.form.getlist("checklist") if not previous_period
+                                   and request.form.get("point_revision") == checkin_location_revision(point)
+                                   and request.form.get("slot") == slot else []),
                                voice_result=voice_marker(result_kind) if result_kind else None,
                                stage=stage, can_confirm=allowed and not existing, stage_notice=t(notice), receipt_url=receipt_url,
                                waiting_for_execution=waiting_for_execution,
                                previous_period=previous_period, draft_day=report_day, draft_slot=report_slot,
                                long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
                                first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
-                               execution_time=first.created_at if first else None,
+                               execution_time=first.created_at if first else None, checkin_execution=first,
                                personal_day=day.isoformat(),
                                flexible_daily2=flexible_daily2,
                                daily2_existing_daily_record=daily2_existing_daily_record,
@@ -1410,7 +1421,7 @@ def create_app(config=None):
             return form_error("打卡階段與目前角色不符，請重新核對。", 409)
         if stage in ("execute", "visit") and (note or abnormal or any(upload.filename for upload in uploads)):
             if stage == "visit":
-                return form_error("直接簽到只記錄人員、點位與時間。")
+                return form_error("直接簽到不接受備註或照片。")
             return form_error("執行登記不接受巡檢回報內容；備註、照片及異常請於巡檢階段填寫。")
         own_execution = stage == "execute" and first is not None and first.user_id == g.user.id
         requires_day = flexible_daily2 or (mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly")))
@@ -1434,6 +1445,10 @@ def create_app(config=None):
         record = prior_inspection(point, key, slot, day) if stage != "execute" else None
         if record:
             return existing_checkin_response(record, token, note, abnormal, uploads)
+        try:
+            checklist_data = encode_checklist(validate_checklist(point, request.form.getlist("checklist")))
+        except ValueError as error:
+            return form_error(str(error))
         if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
             return form_error("備註最多 2,000 字，且不可包含無效控制字元。")
         try:
@@ -1454,6 +1469,7 @@ def create_app(config=None):
         if stage == "execute":
             result_kind = "saved_execute"
             first = new_execution(point, g.user, binding, key, slot, final_instant)
+            first.checklist_data = checklist_data
             db.session.add(first)
             binding.last_seen_at = naive_utc(final_instant)
             audit("execution", point.code)
@@ -1474,7 +1490,7 @@ def create_app(config=None):
                             point_code=point.code, point_name=point.name, point_floor=point.floor, user_name=g.user.display_name,
                             workflow_mode=mode, execution_id=first.id if first else None, spot_request_id=request_id,
                             personal_day=day if mode in ("spot", "two_stage") else None,
-                            executor_visit=stage == "visit", note=note, is_abnormal=abnormal)
+                            executor_visit=stage == "visit", note=note, is_abnormal=abnormal, checklist_data=checklist_data)
         record.photos.extend(InspectionPhoto(**photo) for photo in photos)
         open_issue_for(record)
         db.session.add(record)
@@ -1621,8 +1637,10 @@ def create_app(config=None):
         if state not in ("open", "resolved", "all"):
             abort(400, description="案件狀態選項不正確。")
         point_id = request.args.get("point_id", "")
-        begin = parse_date(request.args.get("date_from"), None)
-        end = parse_date(request.args.get("date_to"), None)
+        default_week = "date_from" not in request.args and "date_to" not in request.args
+        today = local_dt(now_utc()).date()
+        begin = parse_date(request.args.get("date_from"), today - timedelta(days=6) if default_week else None)
+        end = parse_date(request.args.get("date_to"), today if default_week else None)
         if begin and end and begin > end:
             abort(400, description="回報日期的起日不能晚於迄日。")
         selected_point = None
@@ -1731,7 +1749,8 @@ def create_app(config=None):
                                  tuple(ExportPhoto(photo.data, f"處理後照片 {index}") for index, photo in enumerate(event.photos, 1)))
                                  for event in issue.events) if issue else (),
                     resolved_by=issue.resolved_by_name if issue else "", resolved_at=issue.resolved_at if issue else None,
-                    resolution_note=issue.resolution_note if issue else ""))
+                    resolution_note=issue.resolution_note if issue else "", checklist=checklist_text(row),
+                    execution_checklist=checklist_text(row.execution) if row.execution else ""))
             description = " · ".join((
                 {"open": "未結案", "resolved": "已結案", "all": "全部異常"}[filters["status"]],
                 category_label(filters["category"]) if filters["category"] else "可查看的全部分類",
@@ -2045,6 +2064,16 @@ def create_app(config=None):
                              db.or_(Inspection.offline_submission.has(), Inspection.execution.has(PatrolExecution.offline_submission.has())))
         has_offline = db.session.scalar(select(query.order_by(None).where(offline_condition).exists()))
         offline_header = ["打卡時間來源", "伺服器收件時間（台北）", "對應執行時間來源", "執行收件時間（台北）"] if has_offline else []
+        checklist_condition = (PatrolExecution.checklist_data != "" if filters["stage"] == "execution" else
+                               db.or_(Inspection.checklist_data != "", Inspection.execution.has(PatrolExecution.checklist_data != "")))
+        has_checklist = db.session.scalar(select(query.order_by(None).where(checklist_condition).exists()))
+        checklist_header = ["點檢項目（☑已勾選／☐未勾選）", "對應執行點檢項目"] if has_checklist else []
+
+        def checklist_fields(row):
+            if not has_checklist:
+                return []
+            first = row.execution if isinstance(row, Inspection) else None
+            return [csv_text(checklist_text(row)), csv_text(checklist_text(first)) if first else ""]
 
         def offline_fields(row):
             if not has_offline:
@@ -2059,23 +2088,23 @@ def create_app(config=None):
 
         if filters["stage"] == "execution":
             instant = now_utc()
-            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "巡檢狀態"] + offline_header)
+            writer.writerow(["執行人員", "樓層", "點位編號", "點位名稱", "執行時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "巡檢狀態"] + offline_header + checklist_header)
             for row, reviewed in db.session.execute(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
                 writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                                 point_team_label(row), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]] + offline_fields(row))
+                                 point_team_label(row), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]] + offline_fields(row) + checklist_fields(row))
         elif g.user.role == "executor":
-            writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"] + offline_header)
+            writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"] + offline_header + checklist_header)
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
                 writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
-                                 format_localtime(row.created_at)] + offline_fields(row))
+                                 format_localtime(row.created_at)] + offline_fields(row) + checklist_fields(row))
         else:
             has_workflows = db.session.scalar(select(query.order_by(None).where(Inspection.workflow_mode != "standard").exists()))
             header = ["人員", "樓層", "點位編號", "點位名稱", "打卡時間（台北）", "巡檢頻率", "週期開始日", "分類", "次數", "異常", "備註", "照片數", "處理狀態", "結案人員", "結案時間（台北）", "處理說明"]
-            writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []) + offline_header)
+            writer.writerow(header + (["作業模式", "執行人員", "執行時間（台北）"] if has_workflows else []) + offline_header + checklist_header)
             query = query.options(selectinload(Inspection.photos), selectinload(Inspection.issue), selectinload(Inspection.execution))
             for row in db.session.scalars(query.execution_options(yield_per=500)):
                 point = report_point_location(row)
@@ -2096,7 +2125,7 @@ def create_app(config=None):
                     fields.extend([mode_label,
                                    csv_text(row.execution.user_name) if row.execution else "",
                                    format_localtime(row.execution.created_at) if row.execution else ""])
-                writer.writerow(fields + offline_fields(row))
+                writer.writerow(fields + offline_fields(row) + checklist_fields(row))
 
     @app.get("/records/export")
     @login_required

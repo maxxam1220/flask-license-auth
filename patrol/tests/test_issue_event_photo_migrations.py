@@ -56,7 +56,7 @@ def test_v16_only_adds_evidence_table_and_preserves_all_prior_data(engine, v15):
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == LATEST_VERSION == 16
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert not any(s.lstrip().upper().startswith(("DROP ", "ALTER ", "DELETE ", "UPDATE ")) for s in statements)

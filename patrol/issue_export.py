@@ -83,6 +83,8 @@ class ExportIssue:
     resolved_by: str = ''
     resolved_at: datetime | None = None
     resolution_note: str = ''
+    checklist: str = ''
+    execution_checklist: str = ''
 
 
 def _utc(value):
@@ -245,6 +247,10 @@ def _detail(ws, issue, index, events, resolution, streams, start_row):
     _merged(ws, row, 4, 8, issue.reported_at)
     ws.row_dimensions[row].height = 24
     row += 2
+    if issue.checklist:
+        row = _text_block(ws, row, 1, 13, '巡檢點檢項目\n' + issue.checklist, 110)
+    if issue.execution_checklist:
+        row = _text_block(ws, row, 1, 13, '對應執行點檢項目\n' + issue.execution_checklist, 110)
     actor, resolved_at, note, latest = resolution
     _merged(ws, row, 1, 6, '改善前｜原始異常回報', header=True)
     _merged(ws, row, 8, 13, '改善後｜最近一次結案', header=True)

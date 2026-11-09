@@ -62,7 +62,7 @@
   <div class="management-top">
     <div class="management-identity"><span class="floor-tile">{{ floor_label(point.floor) }}</span><div><span class="point-code">{{ point.code }}</span><h3>{{ point.name }}</h3></div></div>
     <div class="management-meta">
-      {{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id)) }}
+      {{ open_issue_badge(open_issue_counts.get(point.id, 0), url_for('issues', point_id=point.id, date_from='', date_to='')) }}
       <span class="badge badge-category">{{ point_team_label(point) }}</span>
       {% if point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段巡檢</span>{% endif %}
       <span class="badge badge-neutral">{{ frequency(point.frequency) }}</span>
@@ -78,7 +78,7 @@
   </div>
   {% if show_deleted %}
   <div class="archive-row"><span class="muted">刪除時間：{{ point.deleted_at|localtime }}</span><div class="archive-actions">
-    <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all') }}">查看歷史案件</a>
+    <a class="button button-secondary button-small" href="{{ url_for('issues', point_id=point.id, status='all', date_from='', date_to='') }}">查看歷史案件</a>
     <form method="post" action="{{ url_for('restore_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="還原 {{ point.code }}「{{ point.name }}」後，點位會回到現有清單並維持停用。舊 QR 不會恢復；請重新啟用並列印新標籤。" data-confirm-title="還原巡檢點" data-confirm-label="確認還原">{{ csrf() }}{{ management_revision(point) }}<button class="button button-primary button-small">還原點位</button></form>
   </div></div>
   {% else %}

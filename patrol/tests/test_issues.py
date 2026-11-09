@@ -230,7 +230,7 @@ def test_legacy_abnormal_visible_without_get_writes_and_can_be_resolved(applicat
     db.session.commit()
     assert open_issue_counts() == {point.id: 1}
     admin = admin_client(application)
-    for url in ("/dashboard", "/records", f"/records/{row.id}", "/issues"):
+    for url in ("/dashboard", "/records", f"/records/{row.id}", "/issues?date_from=&date_to="):
         assert admin.get(url).status_code == 200
     assert db.session.query(InspectionIssue).count() == db.session.query(IssueEvent).count() == 0
     assert action(admin, row, note="處理交接期間異常").status_code == 302
@@ -259,21 +259,22 @@ def test_paginated_issues_include_every_record_and_real_open_total_without_n_plu
             event.remove(db.engine, "before_cursor_execute", capture)
         assert response.status_code == 200
         return len(statements), contexts[-1][1]
-    small, _ = reads("/issues")
+    # These deliberately historical cases test pagination, not the new recent-week default.
+    small, _ = reads("/issues?date_from=&date_to=")
     user = db.session.get(User, user_id)
     point = db.session.get(Point, point_id)
     for day in range(1, 55):
         legacy_record(user, point, day=day)
     db.session.commit()
-    large, context = reads("/issues")
+    large, context = reads("/issues?date_from=&date_to=")
     assert large <= small + 2
     assert len(context["records"]) == 50 and context["open_total"] == 55
     assert context["pagination"] == {"page": 1, "pages": 2, "total": 55, "per_page": 50}
-    _, second = reads("/issues?page=2")
+    _, second = reads("/issues?page=2&date_from=&date_to=")
     assert len(second["records"]) == 5
     assert not {row.id for row in context["records"]} & {row.id for row in second["records"]}
     # A final row may disappear after resolution; return to the last valid page.
-    response = admin.get(f"/issues?status=open&category=safety&floor=1&point_id={point_id}&page=3")
+    response = admin.get(f"/issues?status=open&category=safety&floor=1&point_id={point_id}&page=3&date_from=&date_to=")
     assert response.status_code == 302
     target = urlsplit(response.location)
     assert target.path == "/issues"

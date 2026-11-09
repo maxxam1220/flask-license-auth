@@ -84,3 +84,6 @@ Root Directory 會影響命令的工作目錄；不要把命令改成 `pip insta
 版本 15 在 `patrol_points` 增加 `inspection_team`（預設 general）、`pending_frequency` 與 `frequency_effective_date`；資料表升級不改派任何點位。備份完成並確認新版上線後，由系統管理員至 `/admin/points/revision-20261109` 核對 15 點方案，再套用：11 點工務分流立即生效，10 點頻率於 2026/11/10 台北時間零時起啟用。新排程與一次性標記同一交易提交，原 QR、Inspection、PatrolExecution 不改寫。到期啟用在工作請求前完成；若設定不一致，打卡停止但管理及診斷頁保留。後續修正版必須支援 schema 15，不得降版本或還原整個共用資料庫。頻率變更前未同步的舊設定暫存會被拒絕而保留，現場需先同步並重新準備。
 
 版本 16 只新增 `patrol_issue_event_photos`，每張處理後照片歸屬不可覆寫的結案事件，既有巡檢、結案歷程與 QR 不變。升級前完成 Render 邏輯匯出；總務管理員獲得總務及工務案件結案權，職安與重新開案權限維持原規則。所有照片寫入共用原照片配額及 PostgreSQL advisory lock。XLSX 含照片匯出新增 openpyxl 依賴，單次限 100 件／500 張／原圖 50 MiB，並在載入照片前序列化匯出工作。部署後以唯讀方式驗證總覽提醒、異常匯出、照片存取與 schema 16；不要建立測試結案或覆寫共用資料庫。後續修正版須支援 schema 16，不可直接降版啟動。
+
+
+版本 17 僅在 patrol_inspections 與 patrol_executions 各新增 checklist_data TEXT NOT NULL DEFAULT 空字串；不回填歷史勾選、不修改 QR／帳號／點位。新版 server 在所有建立紀錄入口驗證合法勾選，舊成功 UUID 重送仍先回原收據。先備份，再更新 schema17 及新版離線快取；現場更新離線資料後使用。舊未傳點檢資料可能因設定變更拒絕但保留，先核對原紀錄再由使用者明確移除。回復修正須維持 schema17，不降版或還原共用授權資料庫。

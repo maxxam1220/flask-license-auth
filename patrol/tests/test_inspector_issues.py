@@ -70,7 +70,8 @@ def test_own_issue_counts_lists_notes_and_photos_are_isolated(application, seede
                             (f"?status=all&user_id={seeded['colleague'].id}",
                              {cases["own"].id, cases["own_legacy"].id, cases["own_resolved"].id})]:
         with rendered_contexts(application) as contexts:
-            response = client.get("/issues" + query)
+            # January fixtures cover full owner history, not the recent-week default.
+            response = client.get("/issues" + query + ("&" if query else "?") + "date_from=&date_to=")
         assert response.status_code == 200
         context = contexts[-1][1]
         assert {row.id for row in context["records"]} == expected
@@ -208,7 +209,7 @@ def test_own_list_pagination_filters_and_safe_return_never_count_other_owners(ap
         make_case(seeded["colleague"], seeded["daily"], day, note="NOT-MY-REPORT")
     db.session.commit()
     client = staff_client(application)
-    source = "/issues?status=open&floor=1&category=safety&page=2"
+    source = "/issues?status=open&floor=1&category=safety&page=2&date_from=&date_to="
     with rendered_contexts(application) as contexts:
         response = client.get(source)
     assert response.status_code == 200

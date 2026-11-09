@@ -157,6 +157,7 @@ class PatrolExecution(db.Model):
     point_name = db.Column(db.String(100), nullable=False)
     point_floor = db.Column(db.Integer, nullable=False)
     user_name = db.Column(db.String(100), nullable=False)
+    checklist_data = db.Column(db.Text, nullable=False, default="", server_default="")
     user = db.relationship(User)
     point = db.relationship(Point)
     inspections = db.relationship("Inspection", back_populates="execution", order_by="Inspection.created_at, Inspection.id",
@@ -193,6 +194,7 @@ class Inspection(db.Model):
         "AND slot = 'any' AND note = '' AND NOT is_abnormal)", name="patrol_executor_visit_fields"),
         nullable=False, default=False, server_default=db.false())
     note = db.Column(db.Text, nullable=False, default="", server_default="")
+    checklist_data = db.Column(db.Text, nullable=False, default="", server_default="")
     is_abnormal = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     point_code = db.Column(db.String(30), nullable=False)
     point_name = db.Column(db.String(100), nullable=False)

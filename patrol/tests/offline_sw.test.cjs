@@ -12,7 +12,7 @@ const audioPaths = ['zh-Hant', 'id', 'vi'].flatMap(locale => kinds.map(kind => a
 const audioBytes = new Uint8Array([73, 68, 51, 3, 0, 0, 0, 0, 0, 0, 255, 251, 144, 0, 17, 32, 48, 64, 80, 96]);
 const manifest = { version: 'patrol-v1', revision: 'natural-female-1', files: audioPaths.map(path => ({ path, locale: path.split('/').at(-2), kind: path.split('/').at(-1).slice(0, -4),
   bytes: audioBytes.byteLength, sha256: createHash('sha256').update(audioBytes).digest('hex') })) };
-const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
+const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/checklist.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
 function defaultResponse(path) {
   return path === audioRoot + 'manifest.json' ? new Response(JSON.stringify(manifest), { headers: { 'Content-Type': 'application/json' } }) :
     audioPaths.includes(path) ? new Response(audioBytes, { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(audioBytes.length), ETag: '"qa-audio-v1"' } }) :
@@ -71,12 +71,29 @@ test('readiness requires every cached asset; activation deletes only old patrol 
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, true);
   assert.equal(answer.audioReady, true); assert.equal(answer.audioVersion, 'patrol-v1');
   assert.equal(answer.audioRevision, 'natural-female-1');
+  assert.equal(answer.checklistVersion, 1);
   const current = [...w.stores.keys()][0]; w.stores.get(current).delete('/static/offline.js');
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, false);
   w.stores.set('patrol-offline-shell-old', new Map()); w.stores.set('unrelated-app-cache', new Map()); await w.lifecycle('activate');
   assert.equal(w.stores.has('patrol-offline-shell-old'), true); assert.equal(w.actions.includes('claim'), false);
   w.stores.get(current).set('/static/offline.js', defaultResponse('/static/offline.js')); await w.lifecycle('activate');
   assert.equal(w.stores.has('patrol-offline-shell-old'), false); assert.equal(w.stores.has('unrelated-app-cache'), true);
+});
+
+test('versioned checklist script reads the current cached asset offline without widening the allowlist', async () => {
+  const w = worker(); await w.lifecycle('install'); w.self.navigator.onLine = false;
+  const before = w.requests.length;
+  assert.equal(await (await w.fetchPage('/static/offline.js?v=checklist-1', { mode: 'cors' })).text(), 'asset');
+  assert.equal(w.requests.length, before);
+  for (const path of ['/static/offline.js?v=checklist-0', '/static/offline.js?v=checklist-1&extra=1', '/static/private.json?v=checklist-1']) assert.equal(await w.fetchPage(path, { mode: 'cors' }), null);
+});
+
+test('missing checklist stylesheet cannot advertise a prepared shell', async () => {
+  const w = worker(); await w.lifecycle('install'); let answer;
+  w.stores.get([...w.stores.keys()][0]).delete('/static/checklist.css');
+  await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] });
+  assert.equal(answer.ready, false); assert.equal(answer.checklistVersion, 1);
+  await w.lifecycle('activate'); assert.equal(w.actions.includes('claim'), false);
 });
 
 test('stale audio manifest fails update without replacing an older usable cache', async () => {

@@ -52,7 +52,7 @@ def test_category_query_cannot_broaden_dashboard_missed_issues_records_or_export
         assert context["open_issue_counts"] == {safety.id: 2}
         assert general.name not in markup and general.code not in markup
         date_filter = "&date_from=2026-01-01&date_to=2026-01-06"
-        context, markup = render(application, client, "/issues?" + params)
+        context, markup = render(application, client, "/issues?" + params + date_filter)
         assert [r.id for r in context["records"]] == [own.id] and context["open_total"] == 1
         context, markup = render(application, client, "/records?" + params + date_filter)
         assert [r.id for r in context["records"]] == [own.id]
@@ -82,7 +82,7 @@ def test_general_team_dashboard_and_open_cases_follow_the_recorded_category(appl
     # expose the name used in its new category.
     general.category, general.name = "safety", "Current safety name"
     db.session.commit()
-    issues, markup = render(application, client, f"/issues?point_id={general.id}&category=safety")
+    issues, markup = render(application, client, f"/issues?point_id={general.id}&category=safety&date_from=&date_to=")
     assert [r.id for r in issues["records"]] == [team_case.id]
     assert issues["open_total"] == 1
     assert issues["selected_point"].name == team_case.point_name
@@ -161,7 +161,7 @@ def test_history_uses_own_snapshot_without_exposing_the_new_teams_name(applicati
     old = point.schedules[0]
     assert (old.point_code, old.point_name, old.floor) == (None, None, None)
     client = open_as(application, seeded)
-    ctx, markup = render(application, client, f"/issues?point_id={point.id}")
+    ctx, markup = render(application, client, f"/issues?point_id={point.id}&date_from=&date_to=")
     assert (ctx["selected_point"].code, ctx["selected_point"].name) == (original_code, original_name)
     assert [r.id for r in ctx["records"]] == [own.id]
     for path in ("/dashboard?date=2026-11-01", "/missed?date_from=2026-11-01&date_to=2026-11-01",

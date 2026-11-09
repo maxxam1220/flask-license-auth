@@ -1,0 +1,38 @@
+{% set checklist_words = {
+  'zh-Hant': {'hint':'請勾選本次已完成的項目，至少選一項。', 'jump':'請先勾選至少一個項目', 'count':'已勾選 {count} / {total} 項', 'selected':'已勾選', 'unselected':'未勾選', 'inspection':'本次巡檢項目', 'execute':'第一階段 · 執行項目', 'visit':'本次簽到項目'},
+  'id': {'hint':'Pilih pekerjaan yang sudah dilakukan kali ini. Pilih minimal satu.', 'jump':'Pilih minimal satu pekerjaan terlebih dahulu', 'count':'Dipilih {count} / {total}', 'selected':'Dipilih', 'unselected':'Tidak dipilih', 'inspection':'Pekerjaan yang diperiksa kali ini', 'execute':'Tahap 1 · Pekerjaan yang dilakukan', 'visit':'Pekerjaan saat check-in ini'},
+  'vi': {'hint':'Chọn công việc đã hoàn thành lần này. Chọn ít nhất một mục.', 'jump':'Vui lòng chọn ít nhất một công việc trước', 'count':'Đã chọn {count} / {total}', 'selected':'Đã chọn', 'unselected':'Chưa chọn', 'inspection':'Công việc kiểm tra lần này', 'execute':'Bước 1 · Công việc đã thực hiện', 'visit':'Công việc trong lần ghi nhận này'}
+} %}
+{% set checklist_language = ui_locale if ui_locale in checklist_words else 'zh-Hant' %}
+{% set checklist_copy = checklist_words[checklist_language] %}
+{% macro checklist_text(value) -%}{{ value.get(checklist_language) or value.get('zh-Hant','') if value is mapping else value }}{%- endmacro %}
+{% macro checklist_prompt() -%}
+<a class="checklist-jump" href="#inspection-checklist" data-checklist-prompt="{{ checklist_copy.jump }}">{{ checklist_copy.jump }}</a>
+{%- endmacro %}
+{% macro checklist_form(catalog, selected=[]) -%}
+{% if catalog %}
+<fieldset id="inspection-checklist" class="checklist-fieldset" data-checklist data-checklist-key="{{ catalog.key }}" data-checklist-version="{{ catalog.version }}" data-checklist-message="{{ checklist_copy.hint }}" data-checklist-count-format="{{ checklist_copy.count }}" aria-describedby="inspection-checklist-hint inspection-checklist-count">
+  <legend>{{ checklist_text(catalog.title) }}</legend>
+  <p id="inspection-checklist-hint" class="checklist-hint">{{ checklist_copy.hint }}</p>
+  <div class="checklist-options">
+  {% for item in catalog['items'] %}
+    <label class="checklist-option"><input type="checkbox" name="checklist" value="{{ item.id }}" autocomplete="off" {% if item.id in selected %}checked{% endif %}><span>{% if item.get('source_code') %}<small class="checklist-source-code">{{ item.source_code }}</small>{% endif %}{{ checklist_text(item.label) }}</span></label>
+  {% endfor %}
+  </div>
+  <p id="inspection-checklist-count" class="checklist-count" role="status" aria-live="polite">{{ checklist_copy.count|replace('{count}',selected|length|string)|replace('{total}',catalog['items']|length|string) }}</p>
+</fieldset>
+{% endif %}
+{%- endmacro %}
+{% macro checklist_summary(snapshot, kind='inspection', expanded=true) -%}
+{% if snapshot %}
+{% set selected = snapshot.get('selected',[]) %}
+<details class="checklist-snapshot" {% if expanded %}open{% endif %}>
+  <summary><span><strong>{{ checklist_copy.get(kind,checklist_copy.inspection) }}</strong><small>{{ checklist_text(snapshot.title) }}</small></span><span class="checklist-summary-count">{{ selected|length }} / {{ snapshot['items']|length }}</span></summary>
+  <ul class="checklist-results">
+  {% for item in snapshot['items'] %}{% set checked = item.id in selected %}
+    <li class="{{ 'is-checked' if checked else 'is-unchecked' }}"><span class="checklist-result-mark" aria-hidden="true">{{ '✓' if checked else '–' }}</span><span class="checklist-result-label">{% if item.get('source_code') %}<small class="checklist-source-code">{{ item.source_code }}</small>{% endif %}{{ checklist_text(item.label) }}</span><span class="checklist-result-status">{{ checklist_copy.selected if checked else checklist_copy.unselected }}</span></li>
+  {% endfor %}
+  </ul>
+</details>
+{% endif %}
+{%- endmacro %}

@@ -46,9 +46,20 @@
 /* The export follows the visible filters, including optional report dates. */
 .issue-page-heading .issue-export-action { min-height: 44px; flex-shrink: 0; }
 .issue-export-note { margin: -.45rem 0 1rem; color: var(--muted); font-size: .9375rem; line-height: 1.6; }
-.issue-filter-form { align-items: end; }
-.issue-filter-form > label { min-width: 0; }
-.issue-filter-form input[type="date"] { min-width: 0; max-width: 100%; }
+.issue-filter-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 12rem));
+  align-items: end;
+  justify-content: start;
+  gap: 1rem;
+}
+.issue-filter-form > label { grid-column: auto; min-width: 0; }
+.issue-filter-form input[type="date"],
+.issue-filter-form select { width: 100%; min-width: 0; max-width: 100%; min-height: 44px; }
+.issue-filter-actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; min-width: 0; }
+.issue-filter-actions > .button,
+.issue-filter-actions > .text-link { min-height: 44px; justify-content: center; white-space: nowrap; }
+.issue-filter-actions > .button { flex: 1; }
 
 /* This notice counts unresolved cases across dates rather than inspection slots. */
 .dashboard-issue-notice {
@@ -85,6 +96,10 @@
   .dashboard-issue-copy small { font-size: .875rem; }
 }
 @media (max-width: 520px) {
+  .issue-filter-form { grid-template-columns: minmax(0, 1fr); gap: .85rem; }
+  .issue-filter-form input[type="date"],
+  .issue-filter-form select { font-size: max(16px, 1rem); }
+  .issue-filter-actions > .text-link { flex: 1; }
   .report-page .issue-page-heading { grid-template-columns: minmax(0, 1fr); }
   .report-page .issue-page-heading > .issue-export-action { grid-column: 1; grid-row: 3; justify-self: start; margin-top: .4rem; white-space: normal; }
   .dashboard-issue-notice { display: grid; grid-template-columns: auto minmax(0, 1fr); }

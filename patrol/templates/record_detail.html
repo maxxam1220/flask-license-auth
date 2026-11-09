@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
 {% from '_ui.html' import icon, csrf, frequency, slot_label, issue_status %}
+{% from '_checklist.html' import checklist_summary with context %}
 {% set title='巡檢紀錄詳情' %}
 {% set issue=record.issue %}
 {% set current_issue_state=issue_state(record) %}
@@ -41,6 +42,11 @@
     {% endif %}
   </div>
 </section>
+{% if checklist_snapshot is defined %}
+{% set record_checklist = checklist_snapshot(record) %}
+{% set execution_checklist = checklist_snapshot(record.execution) if record.execution else none %}
+{% if record_checklist or execution_checklist %}<div class="{{ 'checklist-history-pair spaced' if record_checklist and execution_checklist else 'spaced' }}">{{ checklist_summary(execution_checklist, 'execute') }}{{ checklist_summary(record_checklist) }}</div>{% endif %}
+{% endif %}
 {% if record.execution %}<section class="panel spaced"><div class="section-heading"><div><h2>兩階段作業紀錄</h2><p>{{ '這兩筆打卡屬於同一週。' if long_period and record.frequency == 'weekly' else '這兩筆打卡屬於同一個月。' if long_period else '這筆巡檢對應的執行簽到。' }}</p></div></div><ol class="stage-trail"><li><span>1</span><div><strong>執行簽到 · {{ record.execution.user_name }}</strong><small>{{ record.execution.created_at|localtime }}{% if record.execution.offline_submission %}（手機記錄）<br>補傳收件 {{ record.execution.offline_submission.received_at|localtime }}{% endif %}</small></div></li><li><span>2</span><div><strong>完成巡檢 · {{ reporter_name(record) }}</strong><small>{{ record.created_at|localtime }}{% if record.offline_submission %}（手機記錄）<br>補傳收件 {{ record.offline_submission.received_at|localtime }}{% endif %}</small></div></li></ol></section>{% endif %}
 {% if current_issue_state %}<div class="issue-comparison spaced" aria-label="{{ t('異常處理前後對照') }}">{% endif %}
 <section class="panel {{ '' if current_issue_state else 'spaced' }} field-report" aria-labelledby="field-report-title">

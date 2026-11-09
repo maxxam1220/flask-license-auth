@@ -21,7 +21,7 @@ def test_two_rounds_of_multiline_issue_actions_and_recently_closed_order(applica
     db.session.refresh(earliest)
     assert earliest.issue.resolution_note == note
     assert earliest.issue.events[-1].note == note
-    first = owner.get("/issues?status=resolved").text
+    first = owner.get("/issues?status=resolved&date_from=&date_to=").text
     assert first.index(f'href="/records/{earliest.id}?') < first.index(f'href="/records/{recent[-1].id}?')
     reopen = admin.post(f"/admin/issues/{earliest.id}/reopen", data={
         "expected_event_id": earliest.issue.events[-1].id, "note": submitted,

@@ -472,6 +472,8 @@ def test_v2_upgrade_preserves_old_columns_and_backfills_abnormal_once(engine, ve
                                              "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN LEGACY_SLOT_REPEAT",
                                              "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN LEGACY_UNSCHEDULED",
                                              "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN EXECUTOR_VISIT",
+                                             "ALTER TABLE PATROL_INSPECTIONS ADD COLUMN CHECKLIST_DATA",
+                                             "ALTER TABLE PATROL_EXECUTIONS ADD COLUMN CHECKLIST_DATA",
                                              "ALTER TABLE PATROL_POINT_SCHEDULES ADD COLUMN LEGACY_UNSCHEDULED",
                                              "ALTER TABLE PATROL_EXECUTIONS DROP CONSTRAINT PATROL_EXECUTION_VALID_SLOT",
                                              "ALTER TABLE PATROL_EXECUTIONS ADD CONSTRAINT PATROL_EXECUTION_VALID_SLOT",

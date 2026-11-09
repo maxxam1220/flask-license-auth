@@ -17,7 +17,7 @@ from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, Is
                     ENGINEERING_TITLE_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 16
+LATEST_VERSION = 17
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -131,6 +131,9 @@ def _upgrade_locked(connection) -> int:
                 Point.__table__.c.pending_frequency, Point.__table__.c.frequency_effective_date])
         if current < 16:
             IssueEventPhoto.__table__.create(connection, checkfirst=True)
+        if current < 17:
+            for model in (Inspection, PatrolExecution):
+                _add_missing_columns(connection, model.__tablename__, [model.__table__.c.checklist_data])
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -447,9 +450,9 @@ def _validate_current(connection):
         "patrol_points": ("category", "workflow_mode", "inspection_team"),
         "patrol_point_schedules": ("category", "workflow_mode", "legacy_unscheduled"),
         "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled",
-                               "executor_visit"),
+                               "executor_visit", "checklist_data"),
         "patrol_executions": ("user_id", "binding_id", "point_id", "frequency", "period_key", "slot", "created_at",
-                              "category", "point_code", "point_name", "point_floor", "user_name"),
+                              "category", "point_code", "point_name", "point_floor", "user_name", "checklist_data"),
         "patrol_inspection_photos": ("inspection_id", "data", "mime_type", "size_bytes", "width", "height", "created_at"),
         "patrol_inspection_issues": ("inspection_id", "status", "opened_at", "resolved_by_name", "resolution_note"),
         "patrol_issue_events": ("inspection_id", "actor_id", "actor_name", "action", "note", "created_at"),
@@ -458,6 +461,10 @@ def _validate_current(connection):
         columns = {column["name"]: column for column in inspector.get_columns(table_name)}
         if any(name not in columns or columns[name]["nullable"] for name in required):
             raise SchemaMigrationError(f"Required non-null columns are missing in {table_name}.")
+        if "checklist_data" in required:
+            column = columns["checklist_data"]
+            if not isinstance(column["type"], db.Text) or _compact(str(column["default"])) not in ("''", "''::text"):
+                raise SchemaMigrationError(f"Expected text {table_name}.checklist_data with an empty default.")
         for name in ("general_manager_title", "engineering_inspector_title", "simple_executor_ui", "executor_visit"):
             if name in required:
                 column = columns[name]

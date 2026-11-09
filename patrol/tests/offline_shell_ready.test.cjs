@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createShellReadiness } = require('../static/offline.js');
-const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1' };
+const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1 };
 function fixture(options = {}) {
   const calls = [], channels = [];
   class Channel {
@@ -36,6 +36,18 @@ test('previous voice revision cannot satisfy the new audio preparation', async (
   x.registration.active = x.worker(old); await x.ensure();
   assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
   assert(!x.calls.includes('PATROL_OFFLINE_PREPARE'));
+});
+
+test('audio-ready legacy shell must update before it can capture checklist entries', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.checklistVersion;
+  x.registration.active = x.worker(legacy); await x.ensure();
+  assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
+  assert(!x.calls.includes('PATROL_OFFLINE_PREPARE'));
+});
+
+test('legacy cached checklist shell fails offline without replacing stored drafts', async () => {
+  const x = fixture(); x.env.navigator.onLine = false; x.registration.active = x.worker({ ...complete, checklistVersion: 0 });
+  await assert.rejects(x.ensure(), /尚未備妥/); assert(!x.calls.includes('update'));
 });
 
 test('offline old audio revision fails promptly without network repair', async () => {

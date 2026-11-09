@@ -5,7 +5,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
-const catalog = JSON.parse(fs.readFileSync(path.join(root, 'locales/client.json'), 'utf8'));
+// Mirror i18n.public_messages(): all public UI packs are merged in filename
+// order, while private point names remain in the authorized point manifest.
+const localeDirectory = path.join(root, 'locales');
+const publicPacks = fs.readdirSync(localeDirectory).filter(name => name.endsWith('.json') && name !== 'points.json').sort();
+const catalog = {};
+for (const name of publicPacks) {
+  for (const [source, translations] of Object.entries(JSON.parse(fs.readFileSync(path.join(localeDirectory, name), 'utf8')))) {
+    Object.assign(catalog[source] ||= {}, translations);
+  }
+}
 const placeholders = value => [...value.matchAll(/\{([A-Za-z_][A-Za-z_0-9]*)\}/g)].map(match => match[1]).sort();
 
 function runtime(locale) {
@@ -24,7 +33,10 @@ test('all client translations are complete and preserve every named parameter', 
     for (const locale of ['id', 'vi']) {
       const text = translations[locale];
       assert.equal(typeof text, 'string', source); assert(text.trim(), source);
-      assert(!/[\u4e00-\u9fff]/.test(text), source + ': untranslated Chinese');
+      // The registered company name is intentionally identical in every UI
+      // language. All action/status/help text must still be fully translated.
+      if (source === '福和生鮮農產股份有限公司') assert.equal(text, source);
+      else assert(!/[\u4e00-\u9fff]/.test(text), source + ': untranslated Chinese');
       assert.deepEqual(placeholders(text), placeholders(source), source + ': lost parameters');
     }
   }

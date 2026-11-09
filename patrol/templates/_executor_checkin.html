@@ -10,7 +10,8 @@
     {% if can_confirm and not existing and point.active and device_state == 'approved' %}
       <div class="checkin-quick-action">
         <p>{{ t(current_slot_label) if point.frequency == 'daily2' else t({'daily':'每日一次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(point.frequency,point.frequency)) }}</p>
-        <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ t('正在儲存簽到…') }}">{{ icon('check') }}<strong class="checkin-ok" lang="en">OK</strong><span>{{ t('確認簽到') }}</span></button>
+        <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ t('正在儲存簽到…') }}" {% if checkin_checklist|default(none) and not checkin_selected|default([]) %}disabled data-checklist-disabled="true"{% endif %}>{{ icon('check') }}<strong class="checkin-ok" lang="en">OK</strong><span>{{ t('確認簽到') }}</span></button>
+        {% if checkin_checklist|default(none) %}{{ checklist_prompt() }}{% endif %}
         <p class="executor-help">{{ t('請先核對點位，再按 OK。') }}</p>
       </div>
       <form id="inspection-form" method="post" action="{{ url_for('confirm_checkin', token=request.view_args.get('token')) }}" enctype="multipart/form-data" data-submit-once data-inspection-form>
@@ -24,6 +25,8 @@
         <input type="hidden" name="stage" value="{{ stage }}">
         <input type="hidden" name="workflow_mode" value="{{ point.workflow_mode }}">
         {% if spot %}<input type="hidden" name="spot_ticket" value="{{ spot_ticket }}">{% endif %}
+        {{ checklist_form(checkin_checklist|default(none), checkin_selected|default([])) }}
+        {% if checkin_checklist|default(none) %}<button class="button button-primary button-full button-large" type="submit" data-loading-text="{{ t('正在儲存簽到…') }}" {% if not checkin_selected|default([]) %}disabled data-checklist-disabled="true"{% endif %}>{{ icon('check') }}<strong class="checkin-ok" lang="en">OK</strong><span>{{ t('確認簽到') }}</span></button>{% endif %}
       </form>
       <p class="checkin-footnote">{{ t('看到「簽到完成」後，即可前往下一點。') }}</p>
     {% elif needs_binding %}

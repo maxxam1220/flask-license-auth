@@ -270,7 +270,7 @@ def test_export_covers_all_filtered_pages_and_preserves_issue_order(evidence):
     t = evidence
     extra = [add_case(t, 'general', datetime(2026, 9, 1, 2) + timedelta(days=i), i) for i in range(51)]
     db.session.commit()
-    query = '?status=all&inspection_team=general'
+    query = '?status=all&inspection_team=general&date_from=&date_to='
     context, _ = rendered(t.app, t.clients['manager'], '/issues' + query)
     assert len(context['records']) == 50 and context['pagination']['total'] == 52
     _, workbook = workbook_response(t.clients['manager'], query + '&page=2')
@@ -296,7 +296,7 @@ def test_export_case_limit_is_checked_before_loading_photo_bytes(evidence, monke
         statements.append(statement)
     event.listen(db.engine, 'before_cursor_execute', record_sql)
     try:
-        response = t.clients['manager'].get(EXPORT + '?status=all&inspection_team=general')
+        response = t.clients['manager'].get(EXPORT + '?status=all&inspection_team=general&date_from=&date_to=')
     finally:
         event.remove(db.engine, 'before_cursor_execute', record_sql)
     assert response.status_code == 413 and '100' in response.text

@@ -3,6 +3,7 @@
 {% from '_ui.html' import icon, slot_label, open_issue_badge, issue_status %}
 {% from '_scanner.html' import scanner_button %}
 {% from '_voice_controls.html' import voice_controls %}
+{% from '_checklist.html' import checklist_summary with context %}
 {% set executed = stage == 'execute' %}
 {% set visit = stage == 'visit' %}
 {% set phase_status = review_status|default('done' if finalized else 'pending') %}
@@ -39,7 +40,11 @@
     {% if executed %}<div><span>第二階段</span><strong class="badge receipt-stage-status {{ 'badge-done' if phase_status == 'done' else 'badge-missed' if phase_status == 'expired' else 'badge-neutral' if phase_status == 'unknown' else 'badge-review' }}">{{ '已巡檢' if phase_status == 'done' else '已到期、未巡檢' if phase_status == 'expired' else '未巡檢（期間未明）' if phase_status == 'unknown' else '待巡檢（可跨日接續）' if long_period else '待巡檢' }}</strong></div>
     {% elif not visit %}<div><span>回報狀態</span>{{ issue_status(record) }}</div><div><span>現場照片</span><strong>{{ record.photos|length }} 張已儲存</strong></div>{% endif %}
   </div>
-  {% if not visit and point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=record.point_id) if is_patrol_admin or can_view_general_team else '') }}<p>此點位的未結案異常仍持續追蹤。</p></div>{% endif %}
+  {% if checklist_snapshot is defined %}
+    {% if not executed and record.execution %}{{ checklist_summary(checklist_snapshot(record.execution), 'execute', false) }}{% endif %}
+    {{ checklist_summary(checklist_snapshot(record), 'execute' if executed else 'visit' if visit else 'inspection') }}
+  {% endif %}
+  {% if not visit and point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=record.point_id, date_from='', date_to='') if is_patrol_admin or can_view_general_team else '') }}<p>此點位的未結案異常仍持續追蹤。</p></div>{% endif %}
   <a class="button button-secondary button-full" href="{{ progress_url }}">查看巡檢進度 {{ icon('arrow') }}</a>
   {% if from_results and (visit or executed) %}<a class="button button-text button-full" href="{{ results_link }}">返回查詢結果</a>
   {% elif visit %}<a class="button button-text button-full" href="{{ results_link }}">{{ '查看我的直接簽到' if current_user.role == 'executor' else '返回巡檢紀錄' }}</a>

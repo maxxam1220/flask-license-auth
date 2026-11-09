@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% from '_ui.html' import icon, csrf, frequency, open_issue_badge %}
 {% from '_voice_controls.html' import voice_controls %}
+{% from '_checklist.html' import checklist_form, checklist_prompt, checklist_summary with context %}
 {% set title='打卡確認' %}
 {% set execute = stage == 'execute' %}
 {% set visit = stage == 'visit' %}
@@ -37,7 +38,8 @@
     {% if can_confirm and not existing and point.active and device_state == 'approved' %}
     <div class="checkin-quick-action">
       {% if not long_period %}<p>{% if paired %}{{ "第一階段 · 執行" if execute else "第二階段 · 巡檢" }} · {% endif %}{{ current_slot_label if point.frequency == 'daily2' else frequency(point.frequency) }} · <span class="period-label">{{ period_label }}</span></p>{% endif %}
-      <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
+      <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ 'Saving… 正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}" {% if checkin_checklist|default(none) and not checkin_selected|default([]) %}disabled data-checklist-disabled="true"{% endif %}>{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>
+      {% if checkin_checklist|default(none) %}{{ checklist_prompt() }}{% endif %}
       {% if not simple_signin %}<a class="checkin-report-link" href="#inspection-fields">填寫異常、備註或照片 {{ icon('down') }}</a>{% endif %}
     </div>
     {% elif needs_binding %}
@@ -82,7 +84,7 @@
     <div class="workflow-guide"><strong>{{ '每次巡檢皆須對應執行簽到' if point.frequency == 'daily2' else '先執行，再巡檢' }}</strong><p>{% if point.frequency == 'daily2' %}{{ current_slot_label }}：{% endif %}{% if execution_time %}已於 {{ execution_time|localtime }} 執行簽到。{% else %}請由總務執行人員先至現場簽到。{% endif %}{% if flexible_daily2 %}兩次執行可先完成，巡檢員之後再分別巡檢，無須間隔。{% endif %}對應巡檢人員可各自掃描同一張 QR Code，留下本人的巡檢紀錄。</p></div>
     {% elif visit %}<div class="workflow-guide"><strong>不定期直接簽到</strong><p>到場後即可記錄人員、點位及時間。此點不列入漏打。</p></div>
     {% elif spot %}<div class="workflow-guide"><strong>單段巡檢</strong><p>{% if point.frequency == 'daily2' %}{% if flexible_daily2 %}每日可隨時巡檢兩次，無須間隔。{% endif %}無須執行人員先簽到，每次有一人巡檢即達標。{% else %}巡檢人員可各自直接打卡。{{ '此點不列入漏打。' if point.frequency == 'irregular' else '本期只要有人完成，即達成團隊進度。' }}{% endif %}</p></div>{% endif %}
-    {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id) if is_patrol_admin or can_view_general_team else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p>{% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point.id) }}">查看我在此點的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
+    {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id, date_from='', date_to='') if is_patrol_admin or can_view_general_team else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p>{% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point.id, date_from='', date_to='') }}">查看我在此點的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
     {% if personal %}<p class="checkin-personal-rule">{{ '每人每點每天可登記兩次，不限時間與間隔。' if flexible_daily2 else '每日兩次，每次可登記一筆。' if point.frequency == 'daily2' else '每人每點每天可登記一次。' }}其他人的紀錄不影響本人的打卡。</p>{% endif %}
     <div class="checkin-details">
       <div><span>巡檢週期</span><strong>{{ frequency(point.frequency) }}</strong></div>
@@ -115,6 +117,8 @@
         <input type="hidden" name="stage" value="{{ stage }}">
         <input type="hidden" name="workflow_mode" value="{{ point.workflow_mode }}">
         {% if spot %}<input type="hidden" name="spot_ticket" value="{{ spot_ticket }}">{% endif %}
+        {% if checkin_execution|default(none) and checklist_snapshot is defined %}{{ checklist_summary(checklist_snapshot(checkin_execution), 'execute', false) }}{% endif %}
+        {{ checklist_form(checkin_checklist|default(none), checkin_selected|default([])) }}
         {% if not simple_signin %}<div class="inspection-fields" id="inspection-fields" tabindex="-1">
           <label class="abnormal-toggle"><input type="checkbox" name="is_abnormal" value="on" {% if is_abnormal %}checked{% endif %}><span>{{ icon('alert') }}發現異常<small>勾選後可在「異常追蹤」查看，處理完成後由你或系統管理員結案。</small></span></label>
           <label for="inspection-note">巡檢備註 <span class="optional-label">選填</span></label>
@@ -132,9 +136,9 @@
             <div hidden><button type="button" class="button button-secondary" data-photo-clear>清空已選照片</button></div>
           </div>
         </div>
-        {% endif %}{% if not simple_signin %}<button class="button button-primary button-full button-large" type="submit" data-loading-text="{{ '正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}">{{ icon('check') }}{{ submit_label }}</button>{% endif %}
+        {% endif %}{% if not simple_signin or checkin_checklist|default(none) %}<button class="button button-primary button-full button-large" type="submit" data-loading-text="{{ '正在儲存簽到…' if simple_signin else '正在上傳並儲存…' }}" {% if checkin_checklist|default(none) and not checkin_selected|default([]) %}disabled data-checklist-disabled="true"{% endif %}>{{ icon('check') }}{% if simple_signin %}<strong class="checkin-ok" lang="en">OK</strong> {% endif %}{{ submit_label }}</button>{% endif %}
       </form>
-      <p class="checkin-footnote">{% if visit %}看到「直接簽到完成」後，即可前往下一點。{% elif execute %}簽到只記錄人員、點位與時間。看到「執行簽到完成」後，即可前往下一點。{% else %}附照片時請稍候，顯示「打卡成功」才表示紀錄與照片已儲存。<br>打卡時間以系統紀錄為準。{% endif %}</p>
+      <p class="checkin-footnote">{% if visit %}看到「直接簽到完成」後，即可前往下一點。{% elif execute %}{% if not checkin_checklist|default(none) %}簽到只記錄人員、點位與時間。{% endif %}看到「執行簽到完成」後，即可前往下一點。{% else %}附照片時請稍候，顯示「打卡成功」才表示紀錄與照片已儲存。<br>打卡時間以系統紀錄為準。{% endif %}</p>
     {% endif %}
   </div>
   <p class="checkin-outside-note">{% if existing %}{% if daily2_existing_daily_record %}此點頻率已調整，原有紀錄已計入今日打卡限制，今天不需再打。{% elif flexible_daily2 %}{{ '本人' if personal else '此點' }}今日兩次皆已完成，可繼續前往下一個巡檢點。{% else %}{{ '本人本次' if personal and point.frequency == 'daily2' else '本人當日' if personal else '本次' if point.frequency == 'daily2' else '本期' }}已有完成紀錄，可繼續前往下一個巡檢點。{% endif %}{% elif can_confirm and not simple_signin %}離開前，請確認畫面顯示「打卡成功」。{% endif %}</p>

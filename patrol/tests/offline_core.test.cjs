@@ -6,10 +6,10 @@ const { createCore, validatePhotos, requestPersistence } = require('../static/of
 const stamp = Date.parse('2026-11-06T01:10:00Z');
 const response = (json, status = 200) => new Response(JSON.stringify(json), { status, headers: { 'Content-Type': 'application/json' } });
 function manifest(overrides = {}) {
-  return { ok: true, version: 1, owner: 'u1v1b11inspectorgeneral', identity: { id: 1, auth_version: 1, binding_id: 11, name: 'Test', role: 'inspector', category: 'general' },
+  return { ok: true, version: 1, checklist_version: 1, owner: 'u1v1b11inspectorgeneral', identity: { id: 1, auth_version: 1, binding_id: 11, name: 'Test', role: 'inspector', category: 'general' },
     server_time: new Date(stamp).toISOString(), day: '2026-11-06', capture_until: '2026-11-06T16:00:00Z', sync_until: '2026-11-07T16:00:00Z', csrf_token: 'csrf-current',
     points: [{ id: 1, token: 'test-point', code: '1F-G01', name: 'Point', floor: '1F', frequency: 'daily2', workflow_mode: 'spot', stage: 'inspect',
-      period_key: '2026-11-06', slots: ['am', 'pm'], used_slots: [], executed_slots: [], grant: 'signed-grant', revision: 'revision-1' }], ...overrides };
+      period_key: '2026-11-06', slots: ['am', 'pm'], used_slots: [], executed_slots: [], grant: 'signed-grant', revision: 'revision-1', checklist: null }], ...overrides };
 }
 function harness(options = {}) {
   const state = { manifest: manifest(), now: stamp, calls: [], uploads: [], navigator: { onLine: true }, sync: null, prepare: null, status: null };
@@ -98,7 +98,8 @@ test('explicit matching ACK alone moves queue to receipt, with exact multipart f
   assert.equal((await rows(h.dbName, 'queue')).length, 0);
   assert.equal((await rows(h.dbName, 'receipts'))[0].client_id, entry.client_id);
   const sent = h.state.uploads[0]; assert.equal(sent.init.headers['X-CSRF-Token'], 'fresh-csrf');
-  assert.deepEqual(Object.keys(sent.entry).sort(), ['client_id', 'grant', 'is_abnormal', 'note', 'observed_at', 'owner', 'slot', 'token']);
+  assert.deepEqual(Object.keys(sent.entry).sort(), ['checklist', 'client_id', 'grant', 'is_abnormal', 'note', 'observed_at', 'owner', 'slot', 'token']);
+  assert.deepEqual(sent.entry.checklist, []);
 });
 test('unknown ACK ID never removes queue or advances local quota', async t => {
   const h = await prepared(t); const entry = await h.core.enqueue(input);
