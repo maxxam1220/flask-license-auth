@@ -954,6 +954,10 @@
         const entry = durableEntry = await core.enqueue(input);
         // Files are cleared only after the atomic local write has completed.
         normal.dataset.offlineStored = 'true'; normal.reset();
+        // A server-returned validation draft can have defaultChecked=true.
+        // Native reset restores those defaults, but a saved round must not
+        // leave its previous selection ready to submit again.
+        normal.querySelectorAll('input[type="checkbox"][name="checklist"]').forEach(choice => { choice.checked = false; });
         normalProgress.saving = false;
         if (latestState?.owner !== captureOwner) { core.allowNavigation(); location.assign('/offline'); return; }
         if (navigator.onLine !== false) await core.sync({ client_id: entry.client_id });
@@ -978,6 +982,10 @@
         delete normal.dataset.offlineSaving; delete normal.dataset.submitting; normal.removeAttribute('aria-busy');
         for (const item of saved) { item.button.disabled = item.disabled; item.button.innerHTML = item.content; }
         for (const item of originalControls) item.control.disabled = item.disabled;
+        // A durable save resets the form before attempting navigation. If the
+        // browser keeps this page open, restore checklist gating after the
+        // busy-state controls so an empty selection never looks ready again.
+        root.PatrolChecklist?.refresh(normal);
       }
     }, true);
     window.addEventListener('online', () => { if (localNotice?.tone === 'offline') localNotice = null; core.getState().then(refreshUIPreferences).catch(reportError); });

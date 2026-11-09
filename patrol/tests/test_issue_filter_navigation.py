@@ -88,3 +88,22 @@ def test_point_issue_counts_and_archive_links_open_old_cases_outside_default_wee
     assert query(history)['status'] == ['all']
     assert query(history)['date_from'] == query(history)['date_to'] == ['']
     assert old_case.note in admin.get(history['href']).text
+
+
+@pytest.mark.parametrize('role', ['admin', 'general_manager'])
+@pytest.mark.parametrize('team', ['general', 'engineering'])
+def test_page_recovery_preserves_team_filter_and_explicit_all_dates(application, role, team):
+    general, _, admin, _ = setup_teams(application)
+    manager = db.session.scalar(db.select(User).where(User.username == 'inspect'))
+    manager.general_manager_title = True
+    db.session.commit()
+    client = admin if role == 'admin' else general
+    response = client.get('/issues', query_string={
+        'inspection_team': team, 'date_from': '', 'date_to': '', 'page': '999', 'status': 'all',
+    })
+    assert response.status_code == 302
+    target = parse_qs(urlsplit(response.headers['Location']).query, keep_blank_values=True)
+    assert target['inspection_team'] == [team]
+    assert target['date_from'] == target['date_to'] == ['']
+    assert target['status'] == ['all'] and target['page'] == ['1']
+    assert client.get(response.headers['Location']).status_code == 200

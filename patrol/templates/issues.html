@@ -24,7 +24,7 @@
     <span class="records-query-summary"><span class="records-query-title">查詢條件</span><span class="records-query-dates">{% if selected_inspection_team %}<span>{{ '工務' if selected_inspection_team == 'engineering' else '總務' }}</span><span aria-hidden="true">·</span>{% elif is_patrol_admin %}<span>{{ category_label(filters.category) if filters.category else '全部分類' }}</span><span aria-hidden="true">·</span>{% elif viewer_category == 'general' %}<span>{{ viewer_team_label }}</span><span aria-hidden="true">·</span>{% endif %}<span>{{ floor_label(filters.floor) if filters.floor else '全部樓層' }}</span>{% if filters.get('date_from') or filters.get('date_to') %}<span aria-hidden="true">·</span><span>{{ filters.get('date_from') or t('不限起日') }} — {{ filters.get('date_to') or t('不限迄日') }}</span>{% endif %}</span></span>
     <span class="records-query-action"><span data-query-action>調整查詢</span>{{ icon('down') }}</span>
   </button>
-  <div id="issue-query-fields" data-query-fields><form method="get" class="filter-form issue-filter-form">
+  <div id="issue-query-fields" data-query-fields><form method="get" class="filter-form issue-filter-form" data-date-range data-date-range-unlimited>
   <input type="hidden" name="status" value="{{ selected_status }}">
   {{ inspection_team_filter(selected_inspection_team, can_filter_inspection_team) }}
   {% if filters.get('point_id') %}<input type="hidden" name="point_id" value="{{ filters.get('point_id') }}">{% endif %}

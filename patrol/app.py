@@ -1328,7 +1328,7 @@ def create_app(config=None):
         if require_location and not revision:
             return "草稿的點位資料已過期。請核對現場位置，再確認打卡。"
         if revision is not None and revision != checkin_location_revision(point):
-            return "點位名稱、樓層、編號或分類已更新。請重新核對現場位置，再確認打卡。"
+            return "點位名稱、樓層、編號或分類已更新，或點檢項目已調整。請重新核對現場位置與本次項目，再確認打卡。"
         return None
 
     @app.route("/c/<token>", methods=["GET", "POST"])
@@ -1676,7 +1676,8 @@ def create_app(config=None):
             query = query.where(Inspection.created_at < naive_utc(datetime.combine(end + timedelta(days=1), time.min, TAIPEI)))
         order_time = InspectionIssue.resolved_at if state == "resolved" else db.func.coalesce(InspectionIssue.opened_at, Inspection.created_at)
         filters = {"status": state, "floor": floor, "category": category, "point_id": point_id,
-                   "date_from": begin.isoformat() if begin else "", "date_to": end.isoformat() if end else ""}
+                   "date_from": begin.isoformat() if begin else "", "date_to": end.isoformat() if end else "",
+                   "inspection_team": selected_inspection_team()}
         return query, filters, selected_point, order_time
 
     @app.get("/issues")
@@ -1734,7 +1735,7 @@ def create_app(config=None):
             rows = db.session.scalars(query.where(Inspection.id.in_(ids)).options(
                 selectinload(Inspection.photos).undefer(InspectionPhoto.data),
                 selectinload(Inspection.issue).selectinload(InspectionIssue.events).selectinload(IssueEvent.photos).undefer(IssueEventPhoto.data),
-                selectinload(Inspection.point), selectinload(Inspection.user)
+                selectinload(Inspection.point), selectinload(Inspection.user), selectinload(Inspection.execution)
             ).order_by(order_time.desc(), Inspection.id.desc())).all()
             exports = []
             for row in rows:

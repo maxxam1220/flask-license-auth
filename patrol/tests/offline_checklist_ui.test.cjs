@@ -103,3 +103,31 @@ test('forced offline empty submit cannot bypass button state and keeps form avai
   assert.equal((await ui.core.getState()).pending, 0); assert.equal(ui.uploads.length, 0);
   assert.equal(ui.form.querySelector('[data-offline-checklist]').hidden, false);
 });
+
+for (const defaultChecked of [false, true]) test(`saved prepared-online checklist stays disabled when navigation remains on a ${defaultChecked ? 'server-returned draft' : 'fresh form'}`, async t => {
+  const ui = await setup(t);
+  const choice = ui.form.querySelector('[name="checklist"]'), button = ui.form.querySelector('button');
+  choice.defaultChecked = defaultChecked;
+  choice.checked = true; choice.dispatchEvent(new ui.win.Event('change', { bubbles: true }));
+  ui.form.dispatchEvent(new ui.win.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(async () => ui.uploads.length === 1 && (await ui.core.getState()).pending === 0 && ui.form.dataset.submitting !== 'true', 'saved form settled');
+  assert.equal(choice.checked, false);
+  assert.equal(button.disabled, true, 'a saved and reset form must still require a fresh selection');
+  assert.equal(ui.form.querySelector('.checklist-count').textContent, '0 / 2');
+});
+
+test('failed local save preserves a server-returned checklist draft for review', async t => {
+  const ui = await setup(t);
+  const choice = ui.form.querySelector('[name="checklist"]'), button = ui.form.querySelector('button');
+  choice.defaultChecked = true; choice.checked = true;
+  choice.dispatchEvent(new ui.win.Event('change', { bubbles: true }));
+  ui.manifest.points[0].revision = 'changed-point';
+  await ui.core.prepare();
+  ui.form.dispatchEvent(new ui.win.Event('submit', { bubbles: true, cancelable: true }));
+  await waitFor(() => ui.win.document.querySelector('[data-offline-form-error]') && ui.form.dataset.submitting !== 'true', 'failed form settled');
+  assert.equal((await ui.core.getState()).pending, 0);
+  assert.equal(ui.uploads.length, 0);
+  assert.equal(choice.checked, true);
+  assert.equal(button.disabled, false);
+  assert.equal(ui.form.querySelector('.checklist-count').textContent, '1 / 2');
+});

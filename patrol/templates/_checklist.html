@@ -19,7 +19,7 @@
     <label class="checklist-option"><input type="checkbox" name="checklist" value="{{ item.id }}" autocomplete="off" {% if item.id in selected %}checked{% endif %}><span>{% if item.get('source_code') %}<small class="checklist-source-code">{{ item.source_code }}</small>{% endif %}{{ checklist_text(item.label) }}</span></label>
   {% endfor %}
   </div>
-  <p id="inspection-checklist-count" class="checklist-count" role="status" aria-live="polite">{{ checklist_copy.count|replace('{count}',selected|length|string)|replace('{total}',catalog['items']|length|string) }}</p>
+  <p id="inspection-checklist-count" class="checklist-count" role="status" aria-live="polite" aria-atomic="true">{{ checklist_copy.count|replace('{count}',selected|length|string)|replace('{total}',catalog['items']|length|string) }}</p>
 </fieldset>
 {% endif %}
 {%- endmacro %}
@@ -27,7 +27,7 @@
 {% if snapshot %}
 {% set selected = snapshot.get('selected',[]) %}
 <details class="checklist-snapshot" {% if expanded %}open{% endif %}>
-  <summary><span><strong>{{ checklist_copy.get(kind,checklist_copy.inspection) }}</strong><small>{{ checklist_text(snapshot.title) }}</small></span><span class="checklist-summary-count">{{ selected|length }} / {{ snapshot['items']|length }}</span></summary>
+  <summary><span><strong>{{ checklist_copy.get(kind,checklist_copy.inspection) }}</strong><small>{{ checklist_text(snapshot.title) }}</small></span><span class="checklist-summary-count"><span class="sr-only">{{ checklist_copy.count|replace('{count}',selected|length|string)|replace('{total}',snapshot['items']|length|string) }}</span><span aria-hidden="true">{{ selected|length }} / {{ snapshot['items']|length }}</span></span></summary>
   <ul class="checklist-results">
   {% for item in snapshot['items'] %}{% set checked = item.id in selected %}
     <li class="{{ 'is-checked' if checked else 'is-unchecked' }}"><span class="checklist-result-mark" aria-hidden="true">{{ '✓' if checked else '–' }}</span><span class="checklist-result-label">{% if item.get('source_code') %}<small class="checklist-source-code">{{ item.source_code }}</small>{% endif %}{{ checklist_text(item.label) }}</span><span class="checklist-result-status">{{ checklist_copy.selected if checked else checklist_copy.unselected }}</span></li>

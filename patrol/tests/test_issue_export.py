@@ -151,6 +151,17 @@ def test_legacy_resolution_without_events_is_retained():
     assert '最近一次結案未附照片' in all_text(workbook['照片與處理歷程'])
 
 
+@pytest.mark.parametrize('actor', ['處理人員' * 25, 'Nguyễn Thị ' * 9, 'Pelaksana kebersihan ' * 5])
+def test_long_resolution_actor_names_expand_merged_history_row(actor):
+    workbook, _ = read([case(events=(ExportEvent('resolved', actor, NOW, '處理完成'),), status='resolved')])
+    detail = workbook['照片與處理歷程']
+    heading = next(cell for row in detail for cell in row if cell.value == '1. 結案　' + actor)
+    assert heading.alignment.wrap_text is True
+    assert detail.row_dimensions[heading.row].height >= len(exporter._wrapped_lines(heading.value, 62)) * 20
+    assert detail.row_dimensions[heading.row].height > 25
+    assert detail.cell(heading.row + 1, 1).value == '處理完成'
+
+
 def test_limits_fail_before_decoding_and_never_silently_truncate(monkeypatch):
     with pytest.raises(ExportLimitError, match='100'):
         build_issue_workbook(case(inspection_id=i) for i in range(1, 102))

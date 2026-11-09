@@ -283,11 +283,14 @@ def _detail(ws, issue, index, events, resolution, streams, start_row):
         row = _text_block(ws, row, 1, 13, '尚無處理歷程。', 110)
     for sequence, (_, event) in enumerate(events, 1):
         row += 1
-        _merged(ws, row, 1, 8, f'{sequence}. {ACTION_LABELS[event.action]}　{event.actor_name}')
+        event_heading = f'{sequence}. {ACTION_LABELS[event.action]}　{event.actor_name}'
+        _merged(ws, row, 1, 8, event_heading)
         _merged(ws, row, 9, 13, event.created_at)
         for col in range(1, 14):
             ws.cell(row, col).fill = PALE
-        ws.row_dimensions[row].height = 25
+        # Excel does not auto-fit merged cells. Long Vietnamese/Indonesian
+        # names and historical display names must not disappear under the note.
+        ws.row_dimensions[row].height = max(25, len(_wrapped_lines(event_heading, 62)) * 20)
         row = _text_block(ws, row + 1, 1, 13, event.note, 110)
         if event is latest and event.photos:
             _link(_merged(ws, row, 1, 13, f'本次 {len(event.photos)} 張照片見上方「改善後」'), ws.title, f'H{photo_row}')

@@ -23,7 +23,8 @@ function setup(defaults = [false, false]) {
   choices.forEach(choice => { choice.form = form; });
   form.elements = [...choices, ...buttons];
   const status = {}, jump = { dataset: { checklistPrompt: 'Select at least one' } };
-  const group = { dataset: { checklistCountFormat: '{count} / {total}' }, classList: classes(),
+  const group = { dataset: { checklistCountFormat: '{count} / {total}' }, classList: classes(), attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; }, removeAttribute(name) { delete this.attributes[name]; },
     querySelectorAll: () => choices, querySelector: selector => selector === '.checklist-count' ? status : choices[0], scrollIntoView() {} };
   const document = { readyState: 'complete', querySelectorAll: () => [form], addEventListener(name, handler) { (docEvents[name] ||= []).push(handler); } };
   const window = { addEventListener(name, handler) { (winEvents[name] ||= []).push(handler); } };
@@ -47,8 +48,10 @@ test('both submit buttons require an explicit item; zero-item submit is stopped 
   assert.equal(emptySubmit.prevented, true);
   assert.equal(emptySubmit.stopped, true);
   assert.equal(ui.choices[0].focused, true);
+  assert.equal(ui.group.attributes['aria-invalid'], 'true');
   ui.choices[1].checked = true; ui.change(ui.choices[1]);
   assert.ok(ui.buttons.every(button => !button.disabled));
+  assert.equal(ui.group.attributes['aria-invalid'], undefined);
   assert.deepEqual(Array.from(ui.api.selected(ui.form)), ['item-1']);
   assert.equal(ui.jump.textContent, '1 / 2');
   assert.equal(ui.submit().prevented, undefined);
@@ -84,6 +87,22 @@ test('fresh pages honor server error-draft selection instead of browser restored
   ui.pageshow(false); ui.flush();
   assert.deepEqual(Array.from(ui.api.selected(ui.form)), ['item-0']);
   assert.ok(ui.buttons.every(button => !button.disabled));
+});
+
+test('a user selection made before slow page resources finish loading is not erased by pageshow', () => {
+  const ui = setup();
+  ui.choices[0].checked = true; ui.change(ui.choices[0]);
+  ui.pageshow(false); ui.flush();
+  assert.deepEqual(Array.from(ui.api.selected(ui.form)), ['item-0']);
+  assert.ok(ui.buttons.every(button => !button.disabled));
+});
+
+test('unchecking a server-returned draft before pageshow is not silently checked again', () => {
+  const ui = setup([true, false]);
+  ui.choices[0].checked = false; ui.change(ui.choices[0]);
+  ui.pageshow(false); ui.flush();
+  assert.deepEqual(Array.from(ui.api.selected(ui.form)), []);
+  assert.ok(ui.buttons.every(button => button.disabled));
 });
 
 test('reset updates both confirmation buttons after native checkbox reset', () => {

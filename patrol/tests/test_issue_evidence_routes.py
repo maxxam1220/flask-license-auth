@@ -11,7 +11,7 @@ import app as patrol
 import issue_export
 from issues import open_issue_for
 from models import (AuditLog, Inspection, InspectionIssue, InspectionPhoto, IssueEvent,
-                    IssueEventPhoto, Point, User, db)
+                    IssueEventPhoto, PatrolExecution, Point, User, db)
 from test_app import application  # noqa: F401
 from test_engineering_point_scope import teams, rendered  # noqa: F401
 from test_features import png
@@ -219,6 +219,72 @@ def test_resolution_photo_urls_follow_current_point_team_and_private_headers(evi
     assert t.clients['general'].get(path).status_code == 404
     assert t.clients['engineering'].get(path).data == photo.data
     assert t.clients['manager'].get(path).data == photo.data
+
+
+@pytest.mark.parametrize('change', ['manager-to-general', 'general-to-engineering', 'general-to-executor'])
+def test_resolution_photos_recheck_changed_user_role_on_existing_session(evidence, change):
+    t = evidence
+    kind = 'engineering' if change == 'manager-to-general' else 'general'
+    actor = 'manager' if change == 'manager-to-general' else 'general'
+    row = t.records[kind]
+    assert resolve(t.clients['manager'], row).status_code == 302
+    first, = events_for(row)
+    path = f'/issue-photos/{first.photos[0].id}'
+    assert t.clients[actor].get(path).status_code == 200
+    user = t.users[actor]
+    if change == 'manager-to-general':
+        user.general_manager_title = False
+    elif change == 'general-to-engineering':
+        user.engineering_inspector_title = True
+    else:
+        user.role = 'executor'
+    # Deliberately retain the old browser session: each request must recheck
+    # authority even if a legacy role change did not revoke the session.
+    db.session.commit()
+    response = t.clients[actor].get(path)
+    assert response.status_code in (403, 404)
+    assert response.mimetype != 'image/jpeg'
+
+
+def test_issue_export_batches_corresponding_execution_checklists(evidence):
+    from checklist_catalog import validate_checklist
+    from checklist_records import encode_checklist
+    t = evidence
+    for number in range(5):
+        point = Point(code=f'EXPORT-CHECKLIST-{number}', name='4M女廁所-甲', floor=14,
+            category='general', inspection_team='general', workflow_mode='two_stage', frequency='daily',
+            active=True, schedule_start=date(2026, 1, 1), created_at=datetime(2026, 1, 1))
+        db.session.add(point)
+        db.session.flush()
+        first = PatrolExecution(point_id=point.id, user_id=t.users['executor'].id,
+            binding_id=t.bindings['executor'].id, created_at=datetime(2026, 11, 8, 2),
+            period_key='2026-11-08', frequency='daily', slot='any', category='general',
+            point_code=point.code, point_name=point.name, point_floor=point.floor, user_name='Executor',
+            checklist_data=encode_checklist(validate_checklist(point, ['toilet.soap'])))
+        db.session.add(first)
+        db.session.flush()
+        row = Inspection(point_id=point.id, user_id=t.users['general'].id, binding_id=t.bindings['general'].id,
+            created_at=datetime(2026, 11, 8, 3), period_key='2026-11-08', frequency='daily', slot='any',
+            category='general', workflow_mode='two_stage', execution_id=first.id,
+            personal_day=date(2026, 11, 8), point_code=point.code, point_name=point.name, point_floor=14,
+            user_name='Inspector', is_abnormal=True,
+            checklist_data=encode_checklist(validate_checklist(point, ['toilet.floor'])))
+        open_issue_for(row)
+        db.session.add(row)
+    db.session.commit()
+    db.session.expire_all()
+    statements = []
+    def record_sql(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+    event.listen(db.engine, 'before_cursor_execute', record_sql)
+    try:
+        _, workbook = workbook_response(t.clients['manager'], '?status=all&inspection_team=general')
+    finally:
+        event.remove(db.engine, 'before_cursor_execute', record_sql)
+    assert sum('patrol_executions.checklist_data' in sql for sql in statements) == 1
+    detail = workbook['照片與處理歷程']
+    values = [cell.value for row in detail for cell in row]
+    assert values.count('☑ 洗手乳充足') == 5 and values.count('☑ 地面清潔') == 5
 
 
 def test_export_embeds_before_after_photos_history_and_private_download_headers(evidence):

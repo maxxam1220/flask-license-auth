@@ -86,5 +86,6 @@
   "查看最新綁定": {"id":"Lihat status perangkat terbaru", "vi":"Xem trạng thái liên kết mới nhất"},
   "Retry · 返回此點重新確認": {"id":"Retry · Kembali ke titik ini dan periksa lagi", "vi":"Retry · Quay lại điểm này để xác nhận lại"},
   "返回此點重新確認": {"id":"Kembali ke titik ini dan periksa lagi", "vi":"Quay lại điểm này để xác nhận lại"},
-  "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。": {"id":"Unggahan terlalu besar. Absen belum disimpan. Pilih ulang maksimal 3 foto, masing-masing tidak lebih dari 8 MB.", "vi":"Nội dung tải lên quá lớn. Lần điểm danh này chưa được lưu. Hãy chọn lại tối đa 3 ảnh, mỗi ảnh không quá 8 MB."}
+  "上傳內容太大，這次打卡未儲存。請重新選取照片，最多 3 張，每張不超過 8 MB。": {"id":"Unggahan terlalu besar. Absen belum disimpan. Pilih ulang maksimal 3 foto, masing-masing tidak lebih dari 8 MB.", "vi":"Nội dung tải lên quá lớn. Lần điểm danh này chưa được lưu. Hãy chọn lại tối đa 3 ảnh, mỗi ảnh không quá 8 MB."},
+  "點位名稱、樓層、編號或分類已更新，或點檢項目已調整。請重新核對現場位置與本次項目，再確認打卡。": {"id": "Data lokasi atau daftar periksa telah berubah. Periksa kembali lokasi dan pekerjaan kali ini sebelum mengonfirmasi check-in.", "vi": "Thông tin điểm hoặc danh sách kiểm tra đã thay đổi. Hãy kiểm tra lại vị trí và các mục của lần này trước khi xác nhận."}
 }

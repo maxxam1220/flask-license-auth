@@ -164,10 +164,12 @@
         end.setCustomValidity('');
         if (!begin.value || !end.value) return;
         if (begin.value > end.value) end.setCustomValidity(t('結束日期不能早於開始日期。'));
-        else if (end.valueAsNumber - begin.valueAsNumber > 366 * 86400000) end.setCustomValidity(t('一次最多查詢 367 天，請縮小日期範圍。'));
+        else if (!form.hasAttribute('data-date-range-unlimited') && end.valueAsNumber - begin.valueAsNumber > 366 * 86400000) end.setCustomValidity(t('一次最多查詢 367 天，請縮小日期範圍。'));
       };
       begin.addEventListener('input', validateRange);
       end.addEventListener('input', validateRange);
+      begin.addEventListener('change', validateRange);
+      end.addEventListener('change', validateRange);
       validateRange();
     });
 

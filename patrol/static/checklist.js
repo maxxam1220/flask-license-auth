@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const leavingSubmitted = new WeakSet();
+  const editedForms = new WeakSet();
   const checklistFor = form => form?.querySelector('[data-checklist]');
   const choicesFor = group => Array.from(group?.querySelectorAll('input[type="checkbox"][name="checklist"]') || []);
   const submittersFor = form => Array.from(form.elements).filter(item => item instanceof HTMLButtonElement && item.type === 'submit');
@@ -12,9 +13,10 @@
     const count = choices.filter(item => item.checked).length;
     for (const choice of choices) choice.closest('.checklist-option')?.classList.toggle('is-checked', choice.checked);
     const status = group.querySelector('.checklist-count');
-    if (status) status.textContent = (group.dataset.checklistCountFormat || '{count} / {total}').replace('{count}', String(count)).replace('{total}', String(choices.length));
+    const countText = (group.dataset.checklistCountFormat || '{count} / {total}').replace('{count}', String(count)).replace('{total}', String(choices.length));
+    if (status && status.textContent !== countText) status.textContent = countText;
     form.closest('.checkin-card')?.querySelectorAll('[data-checklist-prompt]').forEach(link => { link.textContent = count ? status?.textContent || String(count) : link.dataset.checklistPrompt; });
-    if (count) group.classList.remove('is-invalid');
+    if (count) { group.classList.remove('is-invalid'); group.removeAttribute('aria-invalid'); }
     if (form.dataset.submitting !== 'true' && form.dataset.offlineSaving !== 'true') {
       for (const button of submittersFor(form)) {
         if (!count && !button.disabled) { button.dataset.checklistDisabled = 'true'; button.disabled = true; }
@@ -25,7 +27,10 @@
   function refreshAll() { document.querySelectorAll('form').forEach(refresh); }
   function onChange(event) {
     const choice = event.target;
-    if (choice instanceof HTMLInputElement && choice.name === 'checklist' && choice.closest('[data-checklist]')) refresh(choice.form);
+    if (choice instanceof HTMLInputElement && choice.name === 'checklist' && choice.form && choice.closest('[data-checklist]')) {
+      editedForms.add(choice.form);
+      refresh(choice.form);
+    }
   }
   document.addEventListener('change', onChange);
   document.addEventListener('input', onChange);
@@ -37,8 +42,9 @@
     if (!group || choicesFor(group).some(item => item.checked)) return;
     event.preventDefault(); event.stopImmediatePropagation();
     group.classList.add('is-invalid');
+    group.setAttribute('aria-invalid', 'true');
     group.querySelector('input')?.focus();
-    group.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    group.scrollIntoView({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ? 'auto' : 'smooth' });
     refresh(form);
   }, true);
   document.addEventListener('reset', event => { if (event.target instanceof HTMLFormElement) setTimeout(() => refresh(event.target), 0); });
@@ -54,7 +60,9 @@
       for (const choice of choicesFor(group)) {
         // A restored submission must be reviewed anew; a normal back-navigation keeps an unsent draft.
         if (event.persisted && leavingSubmitted.has(form)) choice.checked = false;
-        else if (!event.persisted) choice.checked = choice.defaultChecked;
+        // A slow image/resource can delay pageshow until after the user has already
+        // interacted. Only undo browser restoration when this form is untouched.
+        else if (!event.persisted && !editedForms.has(form)) choice.checked = choice.defaultChecked;
       }
       leavingSubmitted.delete(form);
     });
