@@ -88,6 +88,8 @@
 }
 @media (max-width: 420px) {
   .point-filter-toolbar .filter-form > label { grid-column: 1 / -1; }
+  .point-filter-toolbar .point-scope-filter nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .point-filter-toolbar .point-scope-link { min-width: 0; padding-inline: 4px; font-size: max(14px, .8125rem); white-space: nowrap; }
   .management-page-heading { grid-template-columns: minmax(0, 1fr); }
   .management-page-heading > .button { grid-column: 1; grid-row: 3; justify-self: start; }
 }

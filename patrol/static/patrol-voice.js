@@ -54,6 +54,10 @@
       player.src = source;
       return player;
     }
+    // A reused element can receive a queued event after its source changes.
+    // Inspect the element's current media state as well as the run token;
+    // the event's handler itself may already belong to the new source.
+    const currentMedia = audio => typeof audio.currentSrc !== 'string' || audio.currentSrc === audio.src;
     function cancel(clear = false) { stop(); if (clear) lastResult = null; status = !enabled ? 'off' : supported ? 'ready' : 'unavailable'; emit(); }
     function prepare() {
       if (disposed || !enabled || !supported || !visible()) return false;
@@ -68,7 +72,9 @@
       const finish = () => { if (current()) { stop(); emit(); } };
       // No attendance message, lastResult or success state is created here.
       // play() must run synchronously inside the real click/submit handler.
-      audio.onplaying = null; audio.onended = finish; audio.onerror = finish;
+      audio.onplaying = null;
+      audio.onended = () => { if (currentMedia(audio) && audio.ended !== false) finish(); };
+      audio.onerror = () => { if (currentMedia(audio) && (!('error' in audio) || audio.error)) finish(); };
       try {
         const promise = audio.play();
         if (promise && typeof promise.then === 'function') promise.then(() => {}, finish);
@@ -98,13 +104,13 @@
         timer = later(() => failed(), 20000);
         emit();
       };
-      audio.onplaying = playing;
+      audio.onplaying = () => { if (currentMedia(audio) && audio.paused !== true) playing(); };
       audio.onended = () => {
-        if (!current()) return;
+        if (!current() || !currentMedia(audio) || audio.ended === false) return;
         if (!started) { failed(); return; }
         stop(); status = 'played'; emit();
       };
-      audio.onerror = () => failed();
+      audio.onerror = () => { if (currentMedia(audio) && (!('error' in audio) || audio.error)) failed(); };
       status = 'waiting'; emit();
       // Preserve the manual replay gesture; never await fetch before play().
       try {
@@ -232,13 +238,22 @@
     let scanArrival = takeScan();
     root.PatrolVoice = { ...core, armScan, clearScan, armResult, clearResult, takeResult, takeScan: () => { const value = scanArrival; scanArrival = false; return value; } };
     doc.addEventListener('click', event => {
+      // Capture the gesture before a sync handler disables its busy button or
+      // stops bubbling. Never prepare from an already-disabled action.
+      const button = event.target.closest?.('button');
+      if (!event.defaultPrevented && button?.hasAttribute('data-offline-sync') && !button.disabled) core.prepare();
+    }, true);
+    doc.addEventListener('click', event => {
       const button = event.target.closest?.('button'); if (!button) return;
       if (button.hasAttribute('data-voice-toggle')) { core.setEnabled(!core.state().enabled); if (core.state().enabled) core.prepare(); }
       if (button.hasAttribute('data-voice-replay')) core.replay();
-      if (button.hasAttribute('data-offline-sync') && !button.disabled) core.prepare();
       if (button.hasAttribute('data-qr-start')) { core.cancel(true); clearScan(); }
     });
     doc.addEventListener('submit', event => {
+      // A repeated submit may still reach this capture listener before the
+      // save controller rejects it. Keep the accepted result/voice intact.
+      if (event.defaultPrevented || event.target.dataset?.submitting === 'true' || event.target.dataset?.offlineSaving === 'true') return;
+      if (event.target.id === 'inspection-form' && event.target.dataset?.offlineStored === 'true') return;
       if (event.target.id === 'inspection-form') { core.cancel(true); core.prepare(); armScan(event.target.action, 'confirm'); }
       if (event.target.id === 'offline-checkin') { core.cancel(true); core.prepare(); }
       if (new URL(event.target.action || '/', root.location.origin).pathname === '/logout') { core.cancel(true); clearScan(); clearResult(); }

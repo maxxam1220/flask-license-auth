@@ -882,5 +882,9 @@
   "瀏覽器限制自動播放，請點一下播放結果。": {
     "id": "Browser membatasi pemutaran otomatis. Ketuk untuk mendengarkan hasil.",
     "vi": "Trình duyệt chặn phát tự động. Hãy chạm để nghe kết quả."
+  },
+  "本筆未完成": {
+    "id": "Check-in ini belum selesai",
+    "vi": "Lượt điểm danh này chưa hoàn tất"
   }
 }

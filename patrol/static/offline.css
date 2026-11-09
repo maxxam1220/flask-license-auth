@@ -64,6 +64,10 @@ html[data-offline-locale-pending] .offline-shell { visibility: hidden; }
 .offline-submit-progress [role="status"] { flex: 1 1 210px; min-width: 0; font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
 .offline-submit-progress .button { flex: none; min-height: 44px; font-size: 14px; }
 .offline-submit-progress[hidden] { display: none !important; }
+.offline-submit-progress[data-result-state="pending"],
+.offline-saved[data-result-state="pending"] { border-color: #dfc48d; background: #fff9ec; color: #76521e; }
+.offline-submit-progress[data-result-state="blocked"],
+.offline-saved[data-result-state="blocked"] { border-color: #d5a098; background: #fff3f0; color: #873f35; }
 .offline-panel { min-width: 0; padding: 24px; margin-bottom: 18px; border: 1px solid #dce5dd; border-radius: 15px; background: #fff; box-shadow: 0 3px 14px #153e2410; }
 .offline-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; margin-bottom: 10px; }
 .offline-panel h2 { font-size: 22px; line-height: 1.4; }
@@ -112,6 +116,16 @@ html[data-offline-locale-pending] .offline-shell { visibility: hidden; }
 .offline-saved-heading .offline-saved-icon { flex: none; padding: 10px; margin: 0; }
 .offline-saved-icon .icon { width: 30px; height: 30px; }
 .offline-saved p { margin: 10px auto 0; max-width: 650px; color: #5c705c; line-height: 1.7; }
+.offline-saved[data-result-state="pending"] p { color: #76521e; }
+.offline-saved[data-result-state="blocked"] p { color: #873f35; }
+.offline-saved-icon > span { display: flex; }
+.offline-saved .offline-result-saved, .offline-saved .offline-result-blocked { display: none; }
+.offline-saved[data-result-state="saved"] .offline-result-pending,
+.offline-saved[data-result-state="blocked"] .offline-result-pending { display: none; }
+.offline-saved[data-result-state="saved"] .offline-result-saved,
+.offline-saved[data-result-state="blocked"] .offline-result-blocked { display: flex; }
+.offline-saved[data-result-state="pending"] .offline-saved-icon { color: #76521e; background: #fff0d0; }
+.offline-saved[data-result-state="blocked"] .offline-saved-icon { color: #873f35; background: #f8ddd7; }
 .offline-saved .scan-trigger-next { max-width: 500px; margin-inline: auto; }
 .offline-queue-panel { scroll-margin-top: 90px; }
 .offline-readiness { scroll-margin-top: 90px; }

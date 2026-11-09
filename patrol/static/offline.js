@@ -534,9 +534,10 @@
     const query = new URLSearchParams(location.search);
     let selectedToken = query.get('point') || safePath(location.pathname)?.slice(3), savedClientId = query.get('queued'),
       pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
-      navigationAllowed = false, pageActive = true, pageEpoch = 0, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, updatingLocale = false,
+      navigationAllowed = false, pageActive = true, pageEpoch = 0, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, uiSyncing = false, updatingLocale = false,
       checklistUIKey = '', checklistLocale = '';
     let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null;
+    const savedResultPanels = new Map();
     const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
     const uiPreferencesFromIdentity = identity => ({ ui_language: identity.ui_language,
       simple_executor_ui: identity.role === 'executor' && identity.simple_executor_ui === true });
@@ -586,6 +587,7 @@
     let voiceSequence = 0, scanVoicePending = root.PatrolVoice?.takeScan?.() === true;
     const voice = (kind, id, auto = true) => { try { root.PatrolVoice?.report(kind, { id, auto }); } catch (_) { /* Optional feedback never interrupts capture. */ } };
     const voiceFailure = () => voice('not_saved', `failure:${Date.now()}:${++voiceSequence}`);
+    const isBlocked = row => row?.status === 'blocked' || row?.retryable === false;
     const voiceArrival = async (kind, id, destination, owner, skip) => {
       // Feedback starts only after a durable local save / server ACK. Keep the
       // current document alive briefly so iOS can use its prepared audio player.
@@ -677,6 +679,9 @@
       if (one('report-fields')) { one('report-fields').hidden = !point || point.stage !== 'inspect'; for (const field of one('report-fields').querySelectorAll('input,textarea')) field.disabled = point?.stage !== 'inspect'; }
     }
     function render(state) {
+      for (const [panel, owner] of savedResultPanels) {
+        if (state.locked || state.owner !== owner) { panel.remove(); savedResultPanels.delete(panel); }
+      }
       const oldIdentity = latestState?.identity;
       if (latestState && latestState.owner !== state.owner) {
         if (latestState.owner) { document.dispatchEvent(new CustomEvent('patrol:voice-owner-changed')); scanVoicePending = false; }
@@ -735,7 +740,7 @@
         !state.sync?.running && (state.sync?.errorCode || state.sync?.failed > 0) ? 'error' : 'online');
       text('queue-summary', state.sync?.running ? t('正在處理 {processed}/{total} 筆 · 已確認 {saved} 筆 · {seconds} 秒', { processed: state.sync.processed, total: state.sync.total, saved: state.sync.saved, seconds: state.sync.elapsed }) :
         state.blocked ? t('{pending} 筆待補傳，其中 {blocked} 筆需處理', { pending: state.pending, blocked: state.blocked }) : t('{pending} 筆待補傳', { pending: state.pending }));
-      if (one('sync')) one('sync').disabled = state.locked || !state.pending || state.sync?.running;
+      if (one('sync')) one('sync').disabled = uiSyncing || state.locked || !state.pending || state.sync?.running;
       if (one('cancel-sync')) one('cancel-sync').hidden = !state.sync?.running;
       if (one('prepare')) one('prepare').disabled = state.supported === false || preparing || !state.online || state.sync?.running;
       if (one('login')) {
@@ -750,9 +755,13 @@
       if (state.identity && !state.locked) {
         const arrival = root.PatrolVoice?.takeResult?.(state.identity.id);
         if (arrival) {
-          const key = arrival.id.replace(/^(local|ack):/, '');
-          const exists = arrival.kind === 'offline_stored' ? state.queue.some(row => row.client_id === key && !row.stale_owner) : state.receipts.some(row => row.client_id === key);
-          if (exists) voice(arrival.kind, arrival.id);
+          const key = arrival.id.replace(/^(local|ack|blocked):/, '');
+          const queued = state.queue.find(row => row.client_id === key && !row.stale_owner);
+          const receipt = state.receipts.find(row => row.client_id === key);
+          // The queue can be rejected or acknowledged by another tab between
+          // leaving the form and opening this shell. Speak its current outcome.
+          if (receipt) voice(['offline_stored', 'not_saved'].includes(arrival.kind) ? 'sync_confirmed' : arrival.kind, `ack:${key}`);
+          else if (queued) voice(isBlocked(queued) ? 'not_saved' : 'offline_stored', `${isBlocked(queued) ? 'blocked' : 'local'}:${key}`);
         }
       }
       if (savedClientId && one('saved')) {
@@ -760,17 +769,20 @@
         const receipt = state.receipts.find(row => row.client_id === savedClientId);
         one('saved').hidden = !queued && !receipt;
         if (queued || receipt) {
+          const blocked = !receipt && isBlocked(queued);
+          one('saved').dataset.resultState = receipt ? 'saved' : blocked ? 'blocked' : 'pending';
           const previousVoice = root.PatrolVoice?.state().lastResult;
           // Another tab can acknowledge this UUID without a local sync click.
           // Keep replay consistent with its receipt, without auto-speaking or
           // replacing a newer result belonging to another point/action.
-          if (!previousVoice || previousVoice.id === `local:${savedClientId}` || previousVoice.id === `ack:${savedClientId}`) {
-            voice(receipt ? 'sync_confirmed' : 'offline_stored', `${receipt ? 'ack' : 'local'}:${savedClientId}`, false);
+          if (!previousVoice || ['local', 'ack', 'blocked'].some(prefix => previousVoice.id === `${prefix}:${savedClientId}`)) {
+            voice(receipt ? 'sync_confirmed' : blocked ? 'not_saved' : 'offline_stored', `${receipt ? 'ack' : blocked ? 'blocked' : 'local'}:${savedClientId}`, false);
           }
           const record = queued || receipt;
           const title = document.getElementById('offline-saved-title');
-          if (title) title.textContent = receipt ? t('已同步完成') : t('已暫存在這支手機');
+          if (title) title.textContent = receipt ? t('已同步完成') : blocked ? t('本筆未完成') : t('已暫存在這支手機');
           text('saved-message', receipt ? t('{code} · {slot} 已收到伺服器確認，可以繼續下一點。', { code: record.code, slot: slotText(record.slot) }) :
+            blocked ? `${record.code} · ${slotText(record.slot)} · ${t(record.error || '本筆未完成')}` :
             t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: record.code, slot: slotText(record.slot) }));
         }
       }
@@ -878,7 +890,9 @@
           showNotice('本筆已暫存在手機。請連線登入原帳號後，到同步查看。', 'offline');
           return;
         }
-        if (one('saved')) one('saved').hidden = false;
+        if (one('saved')) { one('saved').hidden = false; one('saved').dataset.resultState = 'pending'; }
+        const savedTitle = document.getElementById('offline-saved-title');
+        if (savedTitle) savedTitle.textContent = t('已暫存在這支手機');
         voice('offline_stored', `local:${row.client_id}`);
         text('saved-message', t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) }));
         await showPoint(); one('saved')?.scrollIntoView({ block: 'nearest' });
@@ -896,14 +910,21 @@
       finally { preparing = false; if (latestState) render(latestState); button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
     });
     one('sync')?.addEventListener('click', async () => {
-      localNotice = null; const owner = latestState?.owner, before = new Set((latestState?.receipts || []).map(row => row.client_id));
+      // Claim before the first await; a second click must not narrate the
+      // core's still-running snapshot as a completed synchronization.
+      if (uiSyncing || latestState?.sync?.running) return;
+      uiSyncing = true; one('sync').disabled = true;
+      localNotice = null; const owner = latestState?.owner, syncPageEpoch = pageEpoch, before = new Set((latestState?.receipts || []).map(row => row.client_id));
       try {
         const state = await core.sync();
-        if (state.owner !== owner || state.locked) return;
+        if (state.owner !== owner || state.locked || !pageActive || syncPageEpoch !== pageEpoch) return;
         const fresh = state.receipts.filter(row => !before.has(row.client_id));
         if (fresh.length) voice(state.pending ? 'sync_partial' : 'sync_confirmed', `sync:${fresh.map(row => row.client_id).join(',').slice(0,145)}`);
-        else if (state.pending) voice('offline_stored', `retry:${Date.now()}:${++voiceSequence}`);
-      } catch (error) { reportError(error); voiceFailure(); }
+        else if (state.pending) voice(!state.online || state.blocked || state.sync?.cancelled || state.sync?.failed || state.sync?.errorCode ? 'not_saved' : 'offline_stored', `retry:${Date.now()}:${++voiceSequence}`);
+      } catch (error) {
+        if (pageActive && syncPageEpoch === pageEpoch && latestState?.owner === owner) { reportError(error); voiceFailure(); }
+      }
+      finally { uiSyncing = false; if (latestState) render(latestState); }
     });
     one('cancel-sync')?.addEventListener('click', () => core.cancelSync());
     one('close-point')?.addEventListener('click', () => {
@@ -932,6 +953,9 @@
     document.addEventListener('submit', async event => {
       const normal = event.target;
       if (!(normal instanceof HTMLFormElement) || normal.id !== 'inspection-form') return;
+      // A confirmed/local-saved form may remain visible after blocked
+      // navigation or BFCache restore. Only its result link remains actionable.
+      if (normal.dataset.offlineStored === 'true') { event.preventDefault(); event.stopImmediatePropagation(); return; }
       // Unprepared online forms retain the original server-rendered submission.
       if (!latestState?.prepared && navigator.onLine !== false) return;
       event.preventDefault(); event.stopImmediatePropagation();
@@ -944,7 +968,7 @@
       const controls = [...normal.elements].filter(el => ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) && el.type !== 'hidden');
       const originalControls = controls.map(control => ({ control, disabled: control.disabled }));
       const captureOwner = latestState?.owner, capturePageEpoch = pageEpoch;
-      let durableEntry, resultSkip, navigationAttempted = false, resultAbandoned = false;
+      let durableEntry, confirmedState, resultDestination, resultSkip, navigationAttempted = false, resultAbandoned = false;
       delete normal.dataset.offlineStored;
       normal.dataset.offlineSaving = 'true'; normal.dataset.submitting = 'true'; normal.setAttribute('aria-busy', 'true');
       for (const button of buttons) { button.disabled = true; button.textContent = t('正在保存／送出…'); }
@@ -955,6 +979,12 @@
       cancel.type = 'button'; cancel.className = 'button button-secondary button-small'; cancel.dataset.offlineCancelSubmit = '';
       cancel.textContent = t('取消上傳，保留待傳'); cancel.disabled = true;
       cancel.addEventListener('click', () => {
+        if (normal.dataset.offlineStored === 'true' && normal.dataset.offlineSaving !== 'true') {
+          const sameOwner = latestState?.owner === captureOwner && !latestState?.locked;
+          core.allowNavigation();
+          try { location.assign(sameOwner && resultDestination ? resultDestination : '/offline'); } catch (_) {}
+          return;
+        }
         if (resultSkip) {
           try { root.PatrolVoice?.cancel?.(); } catch (_) {}
           resultSkip(); return;
@@ -970,12 +1000,14 @@
         try { root.PatrolVoice?.cancel?.(); root.PatrolVoice?.clearResult?.(); } catch (_) {}
         resultSkip?.();
       };
-      const finishSaved = async (kind, id, destination) => {
+      const finishSaved = async (kind, id, destination, reason = '') => {
         if (navigationAttempted) return;
-        if (resultAbandoned || !pageActive || pageEpoch !== capturePageEpoch) { navigationAttempted = true; return; }
+        resultDestination = destination;
         normalProgress.result = true;
-        progress.textContent = t(kind === 'offline_stored' ? '已暫存在這支手機' : '已同步完成');
+        panel.dataset.resultState = kind === 'not_saved' ? 'blocked' : kind === 'offline_stored' ? 'pending' : 'saved';
+        progress.textContent = kind === 'not_saved' ? `${t('本筆未完成')}${reason ? ' · ' + t(reason) : ''}` : t(kind === 'offline_stored' ? '已暫存在這支手機' : '已同步完成');
         cancel.textContent = t('查看結果'); cancel.disabled = false;
+        if (resultAbandoned || !pageActive || pageEpoch !== capturePageEpoch) { navigationAttempted = true; return; }
         const skip = new Promise(resolve => { resultSkip = resolve; });
         try { await voiceArrival(kind, id, destination, captureOwner, skip); }
         finally {
@@ -990,6 +1022,17 @@
           // the durable-save catch and route or announce the same record twice.
           try { location.assign(sameOwner ? destination : '/offline'); } catch (_) {}
         }
+      };
+      const showSavedOutcome = (entry, state) => {
+        const fallback = '/offline?queued=' + encodeURIComponent(entry.client_id);
+        const receipt = state?.owner === captureOwner && state.receipts.find(item => item.client_id === entry.client_id);
+        const row = state?.owner === captureOwner && state.queue.find(item => item.client_id === entry.client_id);
+        if (receipt) {
+          const url = receipt.ack?.receipt_url;
+          const destination = typeof url === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(url) ? url : fallback;
+          return finishSaved(receipt.stage === 'execute' ? 'saved_execute' : receipt.stage === 'visit' ? 'saved_visit' : 'saved_inspect', `ack:${entry.client_id}`, destination);
+        }
+        return finishSaved(isBlocked(row) ? 'not_saved' : 'offline_stored', `${isBlocked(row) ? 'blocked' : 'local'}:${entry.client_id}`, fallback, row?.error);
       };
       try {
         const input = { token, note: value('note'), is_abnormal: Boolean(normal.elements.namedItem('is_abnormal')?.checked), checklist: new FormData(normal).getAll('checklist'),
@@ -1006,24 +1049,20 @@
         normal.querySelectorAll('input[type="checkbox"][name="checklist"]').forEach(choice => { choice.checked = false; });
         normalProgress.saving = false;
         if (latestState?.owner !== captureOwner) { await finishSaved('offline_stored', `local:${entry.client_id}`, '/offline'); return; }
-        if (navigator.onLine !== false) await core.sync({ client_id: entry.client_id });
-        const updated = await core.getState(), receipt = updated.receipts.find(item => item.client_id === entry.client_id);
+        if (navigator.onLine !== false) confirmedState = await core.sync({ client_id: entry.client_id });
+        const updated = confirmedState = await core.getState();
         if (updated.owner !== captureOwner) { await finishSaved('offline_stored', `local:${entry.client_id}`, '/offline'); return; }
-        const receiptURL = receipt?.ack?.receipt_url;
-        if (typeof receiptURL === 'string' && /^\/(?:checkins|executions)\/[0-9]+(?:\/success)?(?:\?[^#]*)?$/.test(receiptURL)) {
-          await finishSaved(receipt.stage === 'execute' ? 'saved_execute' : receipt.stage === 'visit' ? 'saved_visit' : 'saved_inspect', `ack:${entry.client_id}`, receiptURL);
-        } else {
-          const destination = '/offline?queued=' + encodeURIComponent(entry.client_id);
-          await finishSaved('offline_stored', `local:${entry.client_id}`, destination);
-        }
+        await showSavedOutcome(entry, updated);
       } catch (error) {
-        if (durableEntry) { const destination = '/offline?queued=' + encodeURIComponent(durableEntry.client_id); await finishSaved('offline_stored', `local:${durableEntry.client_id}`, destination); return; }
+        if (durableEntry) { await showSavedOutcome(durableEntry, confirmedState || latestState); return; }
         let notice = normal.parentElement.querySelector('[data-offline-form-error]');
         if (!notice) { notice = document.createElement('p'); notice.dataset.offlineFormError = ''; notice.className = 'flash flash-error'; notice.setAttribute('role', 'alert'); notice.tabIndex = -1; normal.before(notice); }
         notice.textContent = t(error.message || '無法保存，原本的備註與照片仍保留在表單中。'); notice.focus();
         voiceFailure();
       } finally {
-        normalProgress = null; panel.remove();
+        normalProgress = null;
+        if (!durableEntry || latestState?.owner !== captureOwner || latestState?.locked) panel.remove();
+        else savedResultPanels.set(panel, captureOwner);
         delete normal.dataset.offlineSaving; delete normal.dataset.submitting; normal.removeAttribute('aria-busy');
         for (const item of saved) { item.button.disabled = item.disabled; item.button.innerHTML = item.content; }
         for (const item of originalControls) item.control.disabled = item.disabled;
@@ -1031,6 +1070,13 @@
         // browser keeps this page open, restore checklist gating after the
         // busy-state controls so an empty selection never looks ready again.
         root.PatrolChecklist?.refresh(normal);
+        if (durableEntry) {
+          // The old form represents an immutable saved UUID. Retain a visible
+          // result entry if navigation failed; SCAN remains available because
+          // submitting/offlineSaving have both been cleared above.
+          for (const item of saved) item.button.disabled = true;
+          for (const item of originalControls) item.control.disabled = true;
+        }
       }
     }, true);
     document.addEventListener('click', event => {
