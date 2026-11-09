@@ -1,0 +1,12 @@
+{
+  "工務": {"id": "Teknik", "vi": "Kỹ thuật"},
+  "總務與工務": {"id": "Urusan umum dan teknik", "vi": "Tổng vụ và kỹ thuật"},
+  "總務／工務": {"id": "Urusan umum / teknik", "vi": "Tổng vụ / kỹ thuật"},
+  "巡檢負責單位": {"id": "Tim inspeksi", "vi": "Đơn vị kiểm tra"},
+  "全部負責單位": {"id": "Semua tim", "vi": "Tất cả đơn vị"},
+  "點位頻率正在切換，請重新開啟此點確認。": {"id": "Jadwal inspeksi titik ini sedang diperbarui. Buka kembali titik ini untuk memeriksa pengaturannya.", "vi": "Tần suất kiểm tra của điểm này đang được cập nhật. Vui lòng mở lại điểm này để kiểm tra."},
+  "此點已有預定生效的頻率調整，請於生效後再編輯或停用；現有打卡與 QR Code 不受影響。": {"id": "Perubahan jadwal inspeksi titik ini sudah dijadwalkan. Edit atau nonaktifkan titik setelah perubahan berlaku. Catatan dan kode QR yang ada tetap dapat digunakan.", "vi": "Điểm này đã có thay đổi tần suất được lên lịch. Vui lòng chờ thay đổi có hiệu lực rồi mới chỉnh sửa hoặc ngừng sử dụng điểm. Bản ghi và mã QR hiện tại không bị ảnh hưởng."},
+  "巡檢負責單位選項不正確。": {"id": "Pilihan tim inspeksi tidak valid.", "vi": "Lựa chọn đơn vị kiểm tra không hợp lệ."},
+  "工務負責單位僅適用於總務作業分類的點位。": {"id": "Tim teknik hanya dapat ditetapkan untuk titik dalam kategori urusan umum.", "vi": "Chỉ có thể giao đơn vị kỹ thuật phụ trách các điểm thuộc nhóm công việc tổng vụ."},
+  "點位排程更新需要管理員確認，請稍後重試；本次未新增打卡，手機暫存仍保留。": {"id": "Pembaruan jadwal titik perlu dikonfirmasi administrator. Coba lagi nanti. Belum ada catatan check-in baru; data sementara di ponsel tetap tersimpan.", "vi": "Việc cập nhật lịch của điểm cần được quản trị viên xác nhận. Vui lòng thử lại sau. Lần này chưa ghi nhận lượt chấm công mới; dữ liệu tạm trên điện thoại vẫn được giữ lại."}
+}

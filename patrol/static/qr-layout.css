@@ -7,6 +7,7 @@
 .print-page .qr-print-page { display: contents; }
 .print-page .qr-label { min-width: 0; border: 3px solid #000; }
 .print-page .qr-label-general { border-color: #c00000; }
+.print-page .qr-label-engineering { border-color: #155f9c; }
 .print-page .qr-label-header > span:first-child { font-size: 1.25rem; font-weight: 700; color: #000; }
 .print-page .qr-print-help { color: var(--muted); font-size: max(14px, .875rem); margin-top: .4rem; line-height: 1.65; }
 .print-page .qr-label h2, .print-page .qr-label > p { overflow-wrap: anywhere; }

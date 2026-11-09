@@ -16,6 +16,12 @@ EXECUTION_SLOT_RULE = ("(frequency IN ('daily','weekly','monthly','irregular') A
                        "(frequency = 'daily2' AND slot IN ('am','pm'))")
 ENGINEERING_TITLE_RULE = ("NOT engineering_inspector_title OR (role = 'inspector' AND patrol_category IS NOT NULL "
                           "AND patrol_category = 'general' AND NOT general_manager_title)")
+POINT_INSPECTION_TEAM_RULE = ("inspection_team = 'general' OR "
+                              "(inspection_team = 'engineering' AND category = 'general')")
+POINT_PENDING_FREQUENCY_RULE = ("(pending_frequency IS NULL AND frequency_effective_date IS NULL) OR "
+    "(pending_frequency IS NOT NULL AND frequency_effective_date IS NOT NULL AND "
+    "(pending_frequency = 'daily' OR pending_frequency = 'daily2' OR pending_frequency = 'weekly' "
+    "OR pending_frequency = 'monthly' OR pending_frequency = 'irregular'))")
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 
@@ -52,7 +58,7 @@ class User(db.Model):
     # NULL means unassigned; no patrol scope is inferred from names or roles.
     patrol_category = db.Column(db.String(20), db.CheckConstraint(
         "patrol_category IN ('safety', 'general')", name="patrol_user_category_allowed"), nullable=True)
-    # Display title for a general inspector. Access checks use role and patrol_category.
+    # General inspector titles also determine current point-team scope.
     general_manager_title = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     engineering_inspector_title = db.Column(db.Boolean, db.CheckConstraint(
         ENGINEERING_TITLE_RULE, name="patrol_engineering_inspector_title"),
@@ -82,6 +88,13 @@ class Point(db.Model):
     floor = db.Column(db.Integer, nullable=False)
     frequency = db.Column(db.String(10), nullable=False, default="daily")
     category = db.Column(db.String(20), nullable=False, default="uncategorized", server_default="uncategorized")
+    # Current responsibility, independent of immutable historical category snapshots.
+    inspection_team = db.Column(db.String(20), db.CheckConstraint(
+        POINT_INSPECTION_TEAM_RULE, name="patrol_point_inspection_team"),
+        nullable=False, default="general", server_default="general")
+    pending_frequency = db.Column(db.String(10), nullable=True)
+    frequency_effective_date = db.Column(db.Date, db.CheckConstraint(
+        POINT_PENDING_FREQUENCY_RULE, name="patrol_point_pending_frequency"), nullable=True)
     workflow_mode = db.Column(db.String(10), db.CheckConstraint(POINT_WORKFLOW_RULE, name="patrol_point_workflow"),
                               nullable=False, default="standard", server_default="standard")
     active = db.Column(db.Boolean, nullable=False, default=True)

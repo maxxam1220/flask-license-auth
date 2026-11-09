@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% from '_snapshots.html' import point_code, point_name, record_floor with context %}
-{% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge %}
+{% from '_ui.html' import icon, frequency, empty, slot_label, open_issue_badge, inspection_team_filter %}
 {% set title='巡檢總覽' %}
 {% from '_scanner.html' import scanner_button %}
 {% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='dashboard-layout.css') }}" media="screen">{% endblock %}
@@ -58,6 +58,7 @@
   <a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor','')) }}" class="{{ 'selected' if not selected_category }}" aria-current="{{ 'page' if not selected_category else 'false' }}">全部分類</a>
   {% for value,label in category_options %}<a href="{{ url_for('dashboard', view=view, date=selected_date, floor=request.args.get('floor',''), category=value) }}" class="{{ 'selected' if selected_category == value }}" aria-current="{{ 'page' if selected_category == value else 'false' }}">{{ label }}</a>{% endfor %}
 </nav>{% endif %}
+{% if can_filter_inspection_team %}<form method="get" class="inspection-team-toolbar" aria-label="篩選巡檢負責單位"><input type="hidden" name="view" value="{{ view }}"><input type="hidden" name="date" value="{{ selected_date }}"><input type="hidden" name="floor" value="{{ selected_floor }}">{% if is_patrol_admin %}<input type="hidden" name="category" value="{{ selected_category }}">{% endif %}{{ inspection_team_filter(selected_inspection_team, true) }}<button class="button button-secondary button-small">套用篩選</button></form>{% endif %}
 {% set period_unit = {'daily':'日', 'weekly':'週', 'monthly':'月'}[view] %}
 <div class="toolbar dashboard-period">
   <div class="period-view"><div class="segmented" aria-label="巡檢週期" role="navigation">
@@ -65,6 +66,7 @@
   </div>{% if not current_period %}<a class="text-link period-today" href="{{ url_for('dashboard', view=view, floor=selected_floor or none, category=selected_category or none) }}">回到{{ '今天' if view == 'daily' else '本' ~ period_unit }}</a>{% endif %}</div>
   <form method="get" class="date-filter" aria-label="切換巡檢期間">
     <input type="hidden" name="view" value="{{ view }}"><input type="hidden" name="floor" value="{{ selected_floor }}">{% if is_patrol_admin %}<input type="hidden" name="category" value="{{ selected_category }}">{% endif %}
+    {% if can_filter_inspection_team and selected_inspection_team %}<input type="hidden" name="inspection_team" value="{{ selected_inspection_team }}">{% endif %}
     {% if previous_period %}<a class="period-step" data-period-step="prev" aria-label="{{ '前一天' if view == 'daily' else '上一週' if view == 'weekly' else '上個月' }}" title="{{ '前一天' if view == 'daily' else '上一週' if view == 'weekly' else '上個月' }}" href="{{ url_for('dashboard', view=view, date=previous_period, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('back') }}</a>{% endif %}
     <label for="dashboard-date" class="sr-only">查詢日期</label><input id="dashboard-date" name="date" type="date" value="{{ selected_date }}" min="2000-01-01" max="2100-12-31" required>
     {% if following_period %}<a class="period-step" data-period-step="next" aria-label="{{ '後一天' if view == 'daily' else '下一週' if view == 'weekly' else '下個月' }}" title="{{ '後一天' if view == 'daily' else '下一週' if view == 'weekly' else '下個月' }}" href="{{ url_for('dashboard', view=view, date=following_period, floor=selected_floor or none, category=selected_category or none) }}">{{ icon('arrow') }}</a>{% endif %}
@@ -120,7 +122,7 @@
   </div>
   <h3>{{ card.point.name }}</h3>
   {{ point_issues(card.point.id, card.open_issue_count) }}
-  <div class="point-meta">{% if card.point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif card.point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段</span>{% endif %}{{ icon('building') }}{{ floor_label(card.point.floor) }}<span>·</span>{{ frequency(card.point.frequency) }}{% if is_patrol_admin %}<span>·</span>{{ category_label(card.point.category) }}{% endif %}</div>
+  <div class="point-meta">{% if card.point.workflow_mode == 'two_stage' %}<span class="badge badge-stage">兩階段</span>{% elif card.point.workflow_mode == 'spot' %}<span class="badge badge-neutral">單段</span>{% endif %}{{ icon('building') }}{{ floor_label(card.point.floor) }}<span>·</span>{{ frequency(card.point.frequency) }}{% if can_filter_inspection_team %}<span>·</span>{{ point_team_label(card.point) }}{% endif %}</div>
   {% if card.point.workflow_mode == 'two_stage' %}
   <div class="workflow-slots" aria-label="各次作業進度">{% for slot in card.slots %}<div class="workflow-slot" data-round="{{ slot.key }}">
     <span class="workflow-slot-label">{{ slot.label if card.point.frequency == 'daily2' else '本月' if card.point.frequency == 'monthly' else '本週' if card.point.frequency == 'weekly' else '本日' }}</span>
@@ -148,10 +150,10 @@
   </section>{% endif %}
 {% endmacro %}
 {% if current_user.role != 'executor' %}
-  {{ activity_panel(recent, 'inspection', '最近完成', '全廠最近的巡檢動態' if is_patrol_admin else '總務全組最近的巡檢與直接簽到' if can_view_general_team else '你的最近巡檢動態') }}
+  {{ activity_panel(recent, 'inspection', '最近完成', '全廠最近的巡檢動態' if is_patrol_admin else '負責範圍內的巡檢與直接簽到' if can_view_general_team else '你的最近巡檢動態') }}
 {% endif %}
 {% if current_user.role == 'executor' or can_view_general_team %}
-  {{ activity_panel(recent_executions, 'execution', '最近執行簽到', '總務全組的第一階段簽到' if can_view_general_team else '你的第一階段簽到') }}
+  {{ activity_panel(recent_executions, 'execution', '最近執行簽到', '負責範圍內的第一階段簽到' if can_view_general_team else '你的第一階段簽到') }}
 {% endif %}
 {% endif %}
 {% endblock %}

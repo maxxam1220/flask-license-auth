@@ -39,10 +39,12 @@ from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from missed import period_bounds
 from images import PhotoValidationError, process_uploads
-from patrol_access import can_access_category, can_read_inspection, can_view_execution_records, can_view_general_team, patrol_scope
+from patrol_access import (apply_point_scope, can_access_category, can_access_point, can_access_point_team,
+                           can_read_inspection, can_view_execution_records, can_view_general_team,
+                           inspection_team_scope, patrol_scope)
 from ready_patrol import ready_patrol_points
 from daily_rounds import daily2_anytime, next_daily2_slot
-from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts, open_issue_for, transition_issue
+from issues import IssueActionError, issue_state, issue_version, open_issue_condition, open_issue_counts as count_open_issues, open_issue_for, transition_issue
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
@@ -85,6 +87,8 @@ def hash_device_token(token):
 def checkin_location_revision(point):
     """Identify the actual location shown on the confirmation form."""
     location = (str(point.id), point.code, point.name, str(point.floor), point.category, point.workflow_mode)
+    if getattr(point, "inspection_team", "general") == "engineering":
+        location += ("engineering",)
     return hashlib.sha256("\x00".join(location).encode("utf-8")).hexdigest()
 
 
@@ -93,6 +97,8 @@ def management_state(item):
     if isinstance(item, Point):
         values = (item.id, item.code, item.name, item.floor, item.category, item.frequency,
                   item.workflow_mode, item.active, item.qr_token, item.deleted_at.isoformat() if item.deleted_at else None)
+        if item.inspection_team == "engineering":
+            values += ("engineering",)
     else:
         values = (item.id, item.display_name, item.role, item.patrol_category, item.active, item.auth_version)
         if item.general_manager_title:
@@ -153,11 +159,11 @@ def normalise_return_to(value, user):
         executor = bool(user and user.role == "executor")
         if parsed.path == "/issues" and (not user or executor):
             return None
-        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=9)
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=10)
         if len({key for key, _ in pairs}) != len(pairs):
             return None
-        allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency", "stage", "page"}
-                   if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page"})
+        allowed = ({"date_from", "date_to", "floor", "user_id", "category", "abnormal", "frequency", "stage", "page", "inspection_team"}
+                   if parsed.path == "/records" else {"status", "floor", "category", "point_id", "page", "inspection_team"})
         values = {}
         for key, item in pairs:
             if key not in allowed or any(ord(char) < 32 or ord(char) == 127 for char in item):
@@ -173,6 +179,8 @@ def normalise_return_to(value, user):
                 return None
             elif key == "category" and item not in dict(CATEGORY_OPTIONS):
                 return None
+            elif key == "inspection_team" and item not in ("general", "engineering"):
+                return None
             elif key == "abnormal" and item not in ("0", "1"):
                 return None
             elif key == "stage" and item not in ("execution", "inspection"):
@@ -186,6 +194,9 @@ def normalise_return_to(value, user):
                     return None
                 item = str(int(item))
             if key == "user_id" and (not user or (user.role != "admin" and not can_view_general_team(user))):
+                continue
+            if key == "inspection_team" and not (user and (user.role == "admin" or
+                    (can_view_general_team(user) and user.general_manager_title and not user.engineering_inspector_title))):
                 continue
             if key == "category" and user and user.role != "admin":
                 item = patrol_scope(user)
@@ -312,7 +323,7 @@ def create_app(config=None):
         code, name, floor = record.point_code, record.point_name, record.point_floor
         if not code or not name or floor is None:
             current = record.point
-            if current and can_access_category(g.user, current.category):
+            if current and can_access_point(g.user, current):
                 code = code or current.code
                 name = name or current.name
                 floor = current.floor if floor is None else floor
@@ -332,7 +343,61 @@ def create_app(config=None):
                 "password_min_length": PASSWORD_MIN_LENGTH, "password_max_length": PASSWORD_MAX_LENGTH,
                 "floor_options": FLOOR_OPTIONS, "category_options": CATEGORY_OPTIONS,
                 "floor_label": floor_label, "category_label": category_label,
+                "point_team_label": point_team_label, "point_team_key": point_team_key,
+                "selected_inspection_team": selected_inspection_team(),
+                "can_filter_inspection_team": can_filter_inspection_team(user),
+                "viewer_team_label": ("總務與工務" if can_filter_inspection_team(user) else
+                                      "工務" if inspection_team_scope(user) == "engineering" else "總務"),
                 "slot_label": slot_label, "frequency_label": frequency_label, "issue_state": issue_state}
+
+    def can_filter_inspection_team(user):
+        return bool(user and (user.role == "admin" or (can_view_general_team(user)
+                    and user.general_manager_title and not user.engineering_inspector_title)))
+
+    def selected_inspection_team():
+        if not can_filter_inspection_team(g.get("user")):
+            return ""
+        if request.args.get("category") in ("safety", "uncategorized") and g.user.role == "admin":
+            return ""
+        value = request.args.get("inspection_team", "")
+        # Validate at report entry rather than in the error page's context processor.
+        return value if value in ("general", "engineering") else ""
+
+    def scoped_query(query, model=Point):
+        return apply_point_scope(query, g.user, model, selected_inspection_team())
+
+    def point_team_key(item):
+        get = item.get if isinstance(item, dict) else lambda key, default=None: getattr(item, key, default)
+        category = get("category", "uncategorized")
+        if category != "general":
+            return category
+        team = get("inspection_team")
+        if team is None:
+            point = get("point")
+            if point is None and get("point_id"):
+                point = db.session.get(Point, get("point_id"))
+            team = getattr(point, "inspection_team", "general")
+        return "engineering" if team == "engineering" else "general"
+
+    def point_team_label(item):
+        key = point_team_key(item)
+        return "工務" if key == "engineering" else category_label(key)
+
+    def open_issue_counts(point_ids=None, user_id=None, category=None):
+        return count_open_issues(point_ids, user_id, category, actor=g.get("user"),
+                                 inspection_team=selected_inspection_team())
+
+    @app.url_defaults
+    def preserve_inspection_team(endpoint, values):
+        if endpoint in {"dashboard", "ready", "dashboard_ready", "records", "export_records", "missed",
+                        "missed_export", "issues", "points", "print_qr", "create_point", "update_point",
+                        "restore_point", "delete_point", "rotate_point_qr"} and request:
+            if values.get("category") in ("safety", "uncategorized"):
+                values.pop("inspection_team", None)
+                return
+            team = selected_inspection_team()
+            if team and "inspection_team" not in values:
+                values["inspection_team"] = team
 
     @before_render_template.connect_via(app)
     def configure_scanner(sender, template, context, **extra):
@@ -351,6 +416,17 @@ def create_app(config=None):
     def load_user_and_protect():
         g.user = None
         g.patrol_voice_result = None
+        # Activate a scheduled frequency before any page or submission can use
+        # the prior day's current rule. This transaction precedes user work.
+        if request.endpoint not in ("static", "offline_worker", "offline_page", "healthz"):
+            from point_assignment_revision import activate_due_point_frequencies
+            try:
+                activate_due_point_frequencies(now_utc())
+            except ValueError:
+                # Keep management/diagnostic pages available, while refusing to
+                # show or submit an obsolete work schedule.
+                g.frequency_update_error = True
+                app.logger.error("Scheduled point frequency requires administrator review.")
         # PostgreSQL Integer primary keys cannot represent arbitrary URL integers.
         for name, value in (request.view_args or {}).items():
             if name.endswith("_id") and not 1 <= value <= 2147483647:
@@ -370,6 +446,10 @@ def create_app(config=None):
                     session["ui_language"] = language
             else:
                 session["ui_language"] = get_locale()
+        if g.get("frequency_update_error") and request.endpoint in (
+                "dashboard", "ready", "dashboard_ready", "checkin", "confirm_checkin",
+                "offline_prepare", "offline_sync"):
+            abort(503, description="點位排程更新需要管理員確認，請稍後重試；本次未新增打卡，手機暫存仍保留。")
         # An expired protected submission has no authority to write. Recover its
         # safe GET confirmation page before checking the now-missing CSRF secret;
         # the sign-in form itself retains its normal CSRF protection.
@@ -577,7 +657,7 @@ def create_app(config=None):
             value = session.get("after_binding", "")
         match = QR_RETURN_PATH.fullmatch(value or "")
         point = db.session.scalar(select(Point).where(Point.qr_token == match.group(1))) if match else None
-        if (point and point.deleted_at is None and can_access_category(g.user, point.category)
+        if (point and point.deleted_at is None and can_access_point(g.user, point)
                 and (g.user.role != "executor" or executor_can_scan(point))
                 and point.active and point.schedule_start <= local_dt(now_utc()).date()):
             target = url_for("checkin", token=point.qr_token)
@@ -604,12 +684,17 @@ def create_app(config=None):
             abort(400, description="樓層選項不正確。")
         if category and category not in dict(CATEGORY_OPTIONS):
             abort(400, description="分類選項不正確。")
+        if request.args.get("inspection_team", "") not in ("", "general", "engineering"):
+            abort(400, description="巡檢負責單位選項不正確。")
         scope = patrol_scope(g.user)
+        if scope is None and not category and selected_inspection_team():
+            category = "general"
         return floor, category if scope is None else scope
 
     def private_records(query, category):
         """Use the category at submission. Only general inspectors have team-wide reads."""
         scope = patrol_scope(g.user)
+        query = scoped_query(query, Inspection)
         if scope is None:
             return query.where(Inspection.category == category) if category else query
         if not scope:
@@ -631,6 +716,12 @@ def create_app(config=None):
         if scope is not None:
             query = query.where(db.or_(Point.category == scope, Point.schedules.any(PointSchedule.category == scope),
                               select(Inspection.id).where(Inspection.point_id == Point.id, Inspection.category == scope).exists()))
+        # Category is evaluated from each historical schedule below. A point
+        # now in safety can still have general history, whose current team
+        # must remain consistent with the record/photo authorization checks.
+        team = selected_inspection_team() or inspection_team_scope(g.user)
+        if team is not None:
+            query = query.where(Point.inspection_team == team if team else db.false())
         points = db.session.scalars(query).all()
         if scope is None:
             return points
@@ -639,7 +730,7 @@ def create_app(config=None):
         return [p if p.category == scope else SimpleNamespace(
             id=p.id, code=f"#{p.id}", name="歷史巡檢點", floor=p.floor, category=p.category,
             frequency=p.frequency, workflow_mode=p.workflow_mode, active=p.active, created_at=p.created_at, schedule_start=p.schedule_start,
-            schedules=p.schedules) for p in points]
+            schedules=p.schedules, inspection_team=p.inspection_team, deleted_at=p.deleted_at) for p in points]
 
     def point_order():
         return db.case({value: index for index, (value, _) in enumerate(FLOOR_OPTIONS)}, value=Point.floor), Point.code
@@ -787,7 +878,7 @@ def create_app(config=None):
                 query = query.where(Point.category == category)
             if floor:
                 query = query.where(Point.floor == int(floor))
-            points = db.session.scalars(query.options(selectinload(Point.schedules)).order_by(*point_order())).all()
+            points = db.session.scalars(scoped_query(query).options(selectinload(Point.schedules)).order_by(*point_order())).all()
         ready_points = ready_patrol_points(points, g.user, local_now, floor, category)
         if simple_executor:
             visits = [point for point in points if point.frequency == "irregular"
@@ -853,8 +944,7 @@ def create_app(config=None):
                 order_by=(Inspection.created_at.desc(), Inspection.id.desc())).label("personal")
         ).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies),
                 Inspection.legacy_unscheduled.is_(False))
-        if scope is not None:
-            completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
+        completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
         ranked = completion_query.subquery()
         wanted = ranked.c.first == 1
         if g.user.role == "inspector":
@@ -872,7 +962,7 @@ def create_app(config=None):
             progress_query = select(PatrolExecution.point_id, PatrolExecution.frequency, PatrolExecution.slot,
                                     PatrolExecution.created_at).where(PatrolExecution.period_key == period_day.isoformat(),
                                         PatrolExecution.frequency.in_(frequencies), PatrolExecution.category == "general")
-            executed_at = {(pid, freq, slot): timestamp for pid, freq, slot, timestamp in db.session.execute(progress_query)}
+            executed_at = {(pid, freq, slot): timestamp for pid, freq, slot, timestamp in db.session.execute(scoped_query(progress_query, PatrolExecution))}
         cards, floors = [], [{"floor": f, "label": label, "total": 0, "done": 0} for f, label in FLOOR_OPTIONS]
         irregular_points = []
         floor_counts = {item["floor"]: item for item in floors}
@@ -891,7 +981,7 @@ def create_app(config=None):
                     and (not category_filter or category_filter == category)
                     and (not floor_filter or int(floor_filter) == scheduled_floor)):
                 irregular_points.append(SimpleNamespace(id=point.id, code=scheduled_code, name=scheduled_name, floor=scheduled_floor,
-                    category=category, frequency=frequency, workflow_mode=mode, legacy_unscheduled=legacy_unscheduled))
+                    category=category, frequency=frequency, workflow_mode=mode, legacy_unscheduled=legacy_unscheduled, inspection_team=point.inspection_team))
             planned_slots = {}
             for plan, slot, _ in slot_plans(point, reference_day, schedule_timeline(point), view=view):
                 key = (plan["frequency"], plan["category"], plan["floor"], plan["workflow_mode"])
@@ -954,7 +1044,7 @@ def create_app(config=None):
                 display_snapshot = snapshot if not use_schedule_label else None
                 displayed_point = SimpleNamespace(id=point.id, code=display_snapshot.point_code if display_snapshot else scheduled_code,
                                                  name=display_snapshot.point_name if display_snapshot else scheduled_name,
-                                                 floor=group_floor, frequency=group_frequency, category=group_category, workflow_mode=group_mode)
+                                                 floor=group_floor, frequency=group_frequency, category=group_category, workflow_mode=group_mode, inspection_team=point.inspection_team)
                 group_total = sum(slot["due"] for slot in slots)
                 group_done = sum(slot["status"] == "done" for slot in slots)
                 if group_floor is not None:
@@ -979,7 +1069,7 @@ def create_app(config=None):
                 executions = executions.where(PatrolExecution.user_id == g.user.id)
             if floor_filter:
                 executions = executions.where(PatrolExecution.point_floor == int(floor_filter))
-            recent_executions = db.session.scalars(executions.order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
+            recent_executions = db.session.scalars(scoped_query(executions, PatrolExecution).order_by(PatrolExecution.created_at.desc(), PatrolExecution.id.desc()).limit(6)).all()
         current_binding, approved_elsewhere = binding_overview()
         # A boundary week can begin or end outside the date picker's range.
         first_date, last_date = date(2000, 1, 1), date(2100, 12, 31)
@@ -1005,9 +1095,12 @@ def create_app(config=None):
         scope = patrol_scope(g.user)
         if scope is not None:
             query = query.where(Point.category == scope if scope else db.false())
+        query = apply_point_scope(query, g.user)
         if lock:
             query = query.with_for_update().execution_options(populate_existing=True)
         point = db.session.scalar(query)
+        if point and point.pending_frequency and point.frequency_effective_date <= local_dt(now_utc()).date():
+            abort(409, description="點位頻率正在切換，請重新開啟此點確認。")
         if not point or (g.user.role == "executor" and not executor_can_scan(point)):
             abort(404, description=("此點不開放執行人員簽到，或 QR Code 已更新。" if g.user.role == "executor"
                                     else "巡檢點不存在，或這張 QR Code 已被更新。"))
@@ -1395,7 +1488,8 @@ def create_app(config=None):
     @login_required
     def execution_success(execution_id):
         record = db.get_or_404(PatrolExecution, execution_id)
-        if not can_access_category(g.user, record.category):
+        if (not can_access_category(g.user, record.category) or
+                (record.category == "general" and not can_access_point_team(g.user, record.point))):
             abort(404)
         if (g.user.role != "admin" and not can_view_general_team(g.user)
                 and (g.user.role != "executor" or record.user_id != g.user.id)):
@@ -1427,7 +1521,8 @@ def create_app(config=None):
                                open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0))
 
     def require_inspection_access(record):
-        if not can_access_category(g.user, record.category):
+        if (not can_access_category(g.user, record.category) or
+                (record.category == "general" and not can_access_point_team(g.user, record.point))):
             abort(404)
         if not can_read_inspection(g.user, record):
             abort(403)
@@ -1501,7 +1596,7 @@ def create_app(config=None):
         if point_id:
             selected_id = parse_id(point_id)
             point = db.get_or_404(Point, selected_id)
-            if can_access_category(g.user, point.category):
+            if can_access_point(g.user, point):
                 selected_point = point
             else:
                 # A former point owner can filter their own historical case,
@@ -1704,7 +1799,7 @@ def create_app(config=None):
         # Missing legacy snapshots can need the related point and author while
         # rendering or exporting. Fetch only the fallback fields in this query.
         query = select(model).options(
-            joinedload(model.point).load_only(Point.code, Point.name, Point.floor, Point.category),
+            joinedload(model.point).load_only(Point.code, Point.name, Point.floor, Point.category, Point.inspection_team),
             joinedload(model.user).load_only(User.display_name),
         ).where(model.created_at >= start_time, model.created_at < end_time)
         floor, category = scope_filters()
@@ -1714,6 +1809,7 @@ def create_app(config=None):
         if stage == "inspection":
             query = private_records(query, category)
         else:
+            query = scoped_query(query, PatrolExecution)
             if category:
                 query = query.where(PatrolExecution.category == category)
             if executor:
@@ -1778,9 +1874,9 @@ def create_app(config=None):
         elif can_view_general_team(g.user):
             # Include former or inactive contributors without exposing a current
             # name from another team. Use one recent saved name per author.
-            ranked = select(model.user_id, model.user_name, db.func.row_number().over(
+            ranked = scoped_query(select(model.user_id, model.user_name, db.func.row_number().over(
                 partition_by=model.user_id, order_by=(model.created_at.desc(), model.id.desc())).label("position")
-            ).where(model.category == "general").subquery()
+            ).where(model.category == "general"), model).subquery()
             users = [SimpleNamespace(id=user_id, display_name=name or f"人員 {user_id}")
                      for user_id, name in db.session.execute(select(ranked.c.user_id, ranked.c.user_name)
                          .where(ranked.c.position == 1).order_by(ranked.c.user_name, ranked.c.user_id))]
@@ -1792,9 +1888,9 @@ def create_app(config=None):
                 name = None
                 if can_view_general_team(g.user):
                     other = Inspection if stage == "execution" else PatrolExecution
-                    name = db.session.scalar(select(other.user_name).where(
+                    name = db.session.scalar(scoped_query(select(other.user_name).where(
                         other.category == "general", other.user_id == selected_id, other.user_name != ""
-                    ).order_by(other.created_at.desc(), other.id.desc()).limit(1))
+                    ), other).order_by(other.created_at.desc(), other.id.desc()).limit(1))
                 users.append(SimpleNamespace(id=selected_id, display_name=name or f"人員 {selected_id}"))
         storage = {}
         if g.user.role == "admin":
@@ -1843,7 +1939,7 @@ def create_app(config=None):
                 state = execution_review_status(row.frequency, row.period_key, row.slot, reviewed, instant)
                 writer.writerow([csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                                  format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                                 category_label(row.category), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]] + offline_fields(row))
+                                 point_team_label(row), slot_label(row.slot), EXECUTION_STATUS_LABELS[state]] + offline_fields(row))
         elif g.user.role == "executor":
             writer.writerow(["簽到人員", "樓層", "點位編號", "點位名稱", "簽到時間（台北）"] + offline_header)
             for row in db.session.scalars(query.execution_options(yield_per=500)):
@@ -1859,7 +1955,7 @@ def create_app(config=None):
                 point = report_point_location(row)
                 fields = [csv_text(reporter_name(row)), point.floor, csv_text(point.code), csv_text(point.name),
                           format_localtime(row.created_at), frequency_label(row.frequency), row.period_key,
-                          category_label(row.category), slot_label(row.slot), "是" if row.is_abnormal else "否", csv_text(row.note), len(row.photos),
+                          point_team_label(row), slot_label(row.slot), "是" if row.is_abnormal else "否", csv_text(row.note), len(row.photos),
                           {"open": "未結案", "resolved": "已結案", "": ""}[issue_state(row)],
                           csv_text(row.issue.resolved_by_name) if row.issue else "", format_localtime(row.issue.resolved_at) if row.issue and row.issue.resolved_at else "",
                           csv_text(row.issue.resolution_note) if row.issue else ""]
@@ -1922,17 +2018,19 @@ def create_app(config=None):
                                   Inspection.workflow_mode).distinct().where(Inspection.period_key >= first_period.isoformat(),
                                       Inspection.period_key <= end.isoformat(), Inspection.legacy_unscheduled.is_(False),
                                       Inspection.frequency != "irregular")
-        if scope is not None:
-            completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
+        completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
         completions = db.session.execute(completion_query).all()
         executions = []
         if scope in (None, "general") and category in ("", "general"):
-            executions = db.session.execute(select(PatrolExecution.point_id, PatrolExecution.frequency,
+            executions = db.session.execute(scoped_query(select(PatrolExecution.point_id, PatrolExecution.frequency,
                 PatrolExecution.period_key, PatrolExecution.slot).where(PatrolExecution.period_key >= first_period.isoformat(),
-                    PatrolExecution.period_key <= end.isoformat(), PatrolExecution.category == "general")).all()
+                    PatrolExecution.period_key <= end.isoformat(), PatrolExecution.category == "general"), PatrolExecution)).all()
         rows = calculate_missed(points, completions, begin, end, instant,
                                 category=category, floor=int(floor) if floor else None, frequency=frequency,
                                 executions=executions, two_stage_only=g.user.role == "executor")
+        teams = {point.id: point.inspection_team for point in points}
+        for row in rows:
+            row["inspection_team"] = teams.get(row["point_id"], "general")
         return rows, filters
 
     @app.get("/missed")
@@ -1945,6 +2043,7 @@ def create_app(config=None):
             group = tuple(row[key] for key in ("point_id", "code", "name", "floor", "category", "frequency"))
             if group not in summaries:
                 summaries[group] = {key: row[key] for key in ("point_id", "code", "name", "floor", "category", "frequency")}
+                summaries[group]["inspection_team"] = row["inspection_team"]
                 summaries[group]["missed_count"] = 0
             summaries[group]["missed_count"] += 1
         point_summaries = sorted(summaries.values(), key=lambda row: (-row["missed_count"], FLOOR_ORDER.get(row["floor"], 99), row["code"]))
@@ -1967,7 +2066,7 @@ def create_app(config=None):
         writer.writerow(["應完成日期", "巡檢期間", "分類", "樓層", "點位編號", "點位名稱", "巡檢頻率", "次數", "到期時間（台北）", "漏打次數"]
                         + (["缺少階段"] if has_stages else []))
         for row in rows:
-            writer.writerow([row["due_date"].isoformat(), row["period_label"], category_label(row["category"]),
+            writer.writerow([row["due_date"].isoformat(), row["period_label"], point_team_label(row),
                 floor_label(row["floor"]), csv_text(row["code"]), csv_text(row["name"]), frequency_label(row["frequency"]),
                 slot_label(row["slot"]), format_localtime(row["deadline"]), 1] + ([row["missing_stage_label"]] if has_stages else []))
         response = make_response("\ufeff" + output.getvalue())
@@ -1982,7 +2081,7 @@ def create_app(config=None):
         selected_list = request.args.get("list", "current")
         if selected_list not in ("current", "deleted"):
             abort(400, description="點位清單不正確。")
-        query = select(Point)
+        query = scoped_query(select(Point))
         if floor:
             query = query.where(Point.floor == int(floor))
         if category:
@@ -1994,6 +2093,32 @@ def create_app(config=None):
                                official_general_codes=dict(general_codes.values()),
                                selected_list=selected_list, deleted_count=deleted_count,
                                open_issue_counts=open_issue_counts())
+
+    @app.route("/admin/points/revision-20261109", methods=["GET", "POST"])
+    @admin_required
+    def point_assignment_revision():
+        from point_assignment_revision import revise_point_assignments, revision_plan_digest
+        effective = date(2026, 11, 10)
+        if request.method == "POST":
+            lock_current_admin()
+            expected = request.form.get("expected_plan", "")
+            if not re.fullmatch(r"[a-f0-9]{64}", expected):
+                abort(400, description="請先開啟點位調整預覽，再套用修改。")
+            try:
+                result = revise_point_assignments(apply=True, instant=now_utc(),
+                    effective_date=effective, expected_plan=expected)
+            except ValueError as error:
+                return render_template("point_assignment_revision.html", plan=None,
+                                       revision_error=str(error), expected_plan=""), 409
+            return render_template("point_assignment_revision.html",
+                plan={**result, "already_applied": True}, revision_error=None, expected_plan="")
+        try:
+            plan = revise_point_assignments(instant=now_utc(), effective_date=effective)
+        except ValueError as error:
+            return render_template("point_assignment_revision.html", plan=None,
+                                   revision_error=str(error), expected_plan="")
+        return render_template("point_assignment_revision.html", plan=plan,
+                               revision_error=None, expected_plan=revision_plan_digest(plan))
 
     def point_values(point=None):
         raw_code = request.form.get("code", "").strip()
@@ -2030,7 +2155,10 @@ def create_app(config=None):
             allowed.add("standard")
         if mode not in allowed:
             abort(400, description="打卡方式與分類不符。總務請選直接巡檢或先執行再巡檢。")
-        return {"code": code, "name": name, "floor": int(floor), "frequency": frequency, "category": category, "workflow_mode": mode}
+        team = request.form.get("inspection_team", point.inspection_team if point and category == "general" else "general")
+        if team not in ("general", "engineering") or (team == "engineering" and category != "general"):
+            abort(400, description="工務負責單位僅適用於總務作業分類的點位。")
+        return {"code": code, "name": name, "floor": int(floor), "frequency": frequency, "category": category, "workflow_mode": mode, "inspection_team": team}
 
     def protect_pending_execution(point):
         if point.workflow_mode == "two_stage":
@@ -2088,6 +2216,8 @@ def create_app(config=None):
                                   .with_for_update().execution_options(populate_existing=True))
         if not point:
             abort(404, description="點位不存在或清單狀態已變更，請重新整理。")
+        if point.pending_frequency and request.endpoint in ("update_point", "delete_point", "restore_point"):
+            abort(409, description="此點已有預定生效的頻率調整，請於生效後再編輯或停用；現有打卡與 QR Code 不受影響。")
         return point
 
     def save_point(point, action):
@@ -2129,7 +2259,7 @@ def create_app(config=None):
             return conflict
         values = point_values(point)
         active = request.form.get("active", "") in ("on", "1", "true", "yes")
-        if not active or any(getattr(point, key) != values[key] for key in values):
+        if not active or any(getattr(point, key) != values[key] for key in values if key != "inspection_team"):
             protect_pending_execution(point)
         instant = now_utc()
         protect_started_daily_rounds(point, values, instant)
@@ -2236,7 +2366,7 @@ def create_app(config=None):
     @app.get("/admin/points/print")
     @admin_required
     def print_qr():
-        query = select(Point).where(Point.active.is_(True), Point.deleted_at.is_(None))
+        query = scoped_query(select(Point).where(Point.active.is_(True), Point.deleted_at.is_(None)))
         floor, category = scope_filters()
         if floor:
             query = query.where(Point.floor == int(floor))
@@ -2320,7 +2450,8 @@ def create_app(config=None):
             abort(400, description="不能停用自己或移除自己的系統管理員權限。")
         previous = account_role_choice(user) or user.role
         previous_preferences = (user.ui_language, user.simple_executor_ui)
-        if user.role != choice.role or user.patrol_category != choice.category or user.active != active:
+        if (user.role != choice.role or user.patrol_category != choice.category or user.active != active
+                or user.general_manager_title != choice.manager_title or user.engineering_inspector_title != choice.engineering_title):
             user.auth_version += 1
         user.display_name, user.role, user.patrol_category, user.active = name, choice.role, choice.category, active
         user.general_manager_title = choice.manager_title
@@ -2364,6 +2495,7 @@ def create_app(config=None):
     @app.errorhandler(409)
     @app.errorhandler(413)
     @app.errorhandler(429)
+    @app.errorhandler(503)
     def show_error(error):
         # Bare HTTP exceptions carry English framework text; the template
         # supplies a localized fallback while preserving our route messages.
@@ -2409,6 +2541,17 @@ def create_app(config=None):
             result = import_general_catalog(apply=True)
             click.echo(f"General catalogue: new={result['created']} existing={result['existing']} already_imported={result['already_imported']}")
         click.echo("Patrol tables are ready. Existing tables and records were preserved.")
+
+    @app.cli.command("revise-general-points")
+    @click.option("--apply", "apply_changes", is_flag=True, help="Apply the verified revision; default is preview only.")
+    @click.option("--effective-date", default="2026-11-10", help="Taipei date when changed frequencies take effect.")
+    def revise_general_points(apply_changes, effective_date):
+        from point_assignment_revision import revise_point_assignments
+        try:
+            result = revise_point_assignments(apply=apply_changes, instant=now_utc(), effective_date=effective_date)
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+        click.echo(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
     @app.cli.command("create-admin")
     @click.option("--username", prompt=True)

@@ -1,4 +1,4 @@
-"""Personnel form choices. A display title never grants access to a route."""
+"""Personnel choices; inspector titles select point teams, never admin routes."""
 from typing import NamedTuple
 
 

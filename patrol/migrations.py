@@ -14,10 +14,10 @@ from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstrain
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
 from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
-                    ENGINEERING_TITLE_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
+                    ENGINEERING_TITLE_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 14
+LATEST_VERSION = 15
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -126,6 +126,9 @@ def _upgrade_locked(connection) -> int:
         if current < 14:
             _add_missing_columns(connection, User.__tablename__,
                                  [User.__table__.c.ui_language, User.__table__.c.simple_executor_ui])
+        if current < 15:
+            _add_missing_columns(connection, Point.__tablename__, [Point.__table__.c.inspection_team,
+                Point.__table__.c.pending_frequency, Point.__table__.c.frequency_effective_date])
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -438,7 +441,7 @@ def _validate_current(connection):
     _validate_offline_submissions(inspector)
     for table_name, required in {
         User.__tablename__: ("general_manager_title", "engineering_inspector_title", "ui_language", "simple_executor_ui"),
-        "patrol_points": ("category", "workflow_mode"),
+        "patrol_points": ("category", "workflow_mode", "inspection_team"),
         "patrol_point_schedules": ("category", "workflow_mode", "legacy_unscheduled"),
         "patrol_inspections": ("category", "slot", "note", "is_abnormal", "workflow_mode", "legacy_slot_repeat", "legacy_unscheduled",
                                "executor_visit"),
@@ -469,6 +472,21 @@ def _validate_current(connection):
     normalize_title = lambda value: re.sub(r"::text|[()\s]", "", str(value).lower())
     if normalize_title(title_checks.get("patrol_engineering_inspector_title", "")) != normalize_title(ENGINEERING_TITLE_RULE):
         raise SchemaMigrationError("The engineering inspector display title constraint is missing or invalid.")
+    team_column = next(column for column in inspector.get_columns(Point.__tablename__) if column["name"] == "inspection_team")
+    team_checks = {check["name"]: check["sqltext"] for check in inspector.get_check_constraints(Point.__tablename__)}
+    if (not isinstance(team_column["type"], db.String) or getattr(team_column["type"], "length", None) != 20
+            or str(team_column["default"]).replace("::character varying", "") != "'general'"
+            or normalize_title(team_checks.get("patrol_point_inspection_team", "")) != normalize_title(POINT_INSPECTION_TEAM_RULE)):
+        raise SchemaMigrationError("The point inspection_team column or responsibility constraint is invalid.")
+    point_columns = {column["name"]: column for column in inspector.get_columns(Point.__tablename__)}
+    for name, expected_type in (("pending_frequency", db.String), ("frequency_effective_date", db.Date)):
+        column = point_columns.get(name)
+        if (not column or not column["nullable"] or column["default"] is not None
+                or not isinstance(column["type"], expected_type)
+                or (name == "pending_frequency" and getattr(column["type"], "length", None) != 10)):
+            raise SchemaMigrationError("The scheduled frequency columns are missing or invalid.")
+    if normalize_title(team_checks.get("patrol_point_pending_frequency", "")) != normalize_title(POINT_PENDING_FREQUENCY_RULE):
+        raise SchemaMigrationError("The scheduled frequency pairing constraint is missing or invalid.")
     revoked_columns = {column["name"]: column["type"] for column in inspector.get_columns(revoked)}
     if (inspector.get_pk_constraint(revoked)["constrained_columns"] != ["token_hash"]
             or getattr(revoked_columns["token_hash"], "length", None) != 64

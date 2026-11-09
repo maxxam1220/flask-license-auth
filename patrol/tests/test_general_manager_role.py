@@ -1,9 +1,9 @@
-"""The general manager title uses the same patrol scope and attendance rules as a general inspector."""
+"""General managers see both operational teams without system-admin powers."""
 import pytest
 
 from receipt_urls import without_voice_feedback
 
-from models import AuditLog, Inspection, InspectionPhoto, IssueEvent, PatrolExecution, User, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionPhoto, IssueEvent, PatrolExecution, Point, User, db
 from test_app import PASSWORD, application, login, record, seeded  # noqa: F401
 from test_classification_management import form_revision
 from test_features import png
@@ -37,9 +37,13 @@ def test_create_named_general_inspector_and_reject_admin_self_demotion(applicati
     assert staff.get("/admin/users").status_code == 403
 
 
-def test_title_edits_keep_existing_login_and_attendance_but_invalidate_older_admin_forms(application):
+def test_scope_edits_keep_binding_and_attendance_but_revoke_old_login_and_forms(application):
     _, staff, _, admin, _, spot, _ = team(application)
     inspector = db.session.scalar(db.select(User).where(User.username == "inspect"))
+    inspector.set_password(PASSWORD)
+    db.session.commit()
+    binding = db.session.scalar(db.select(DeviceBinding).where(DeviceBinding.user_id == inspector.id))
+    original_binding = (binding.id, binding.token_hash, binding.status)
     old_version = inspector.auth_version
     submitted = payload(staff, spot)
     first_receipt = staff.post(spot + "/confirm", data=submitted)
@@ -47,12 +51,18 @@ def test_title_edits_keep_existing_login_and_attendance_but_invalidate_older_adm
     old_revision = form_revision(admin, "/admin/users", f"/admin/users/{inspector.id}/update")
     assert assign(admin, inspector, "general_manager", revision=old_revision).status_code == 302
     assert assign(admin, inspector, "general", revision=old_revision).status_code == 409
-    assert inspector.general_manager_title and inspector.auth_version == old_version
+    assert inspector.general_manager_title and inspector.auth_version == old_version + 1
+    assert staff.get("/dashboard").location.startswith("/login")
+    assert login(staff, "inspect").status_code == 302
     assert "總務管理員" in staff.get("/dashboard").text
-    assert without_voice_feedback(staff.post(spot + "/confirm", data=submitted).location) == without_voice_feedback(first_receipt.location)
+    assert staff.post(spot + "/confirm", data=submitted).status_code == 409
+    assert staff.get(first_receipt.location).status_code == 200
     assert db.session.query(Inspection).count() == 1
+    assert (binding.id, binding.token_hash, binding.status) == original_binding
     assert assign(admin, inspector, "general").status_code == 302
-    assert not inspector.general_manager_title and inspector.auth_version == old_version
+    assert not inspector.general_manager_title and inspector.auth_version == old_version + 2
+    assert staff.get("/dashboard").location.startswith("/login")
+    assert login(staff, "inspect").status_code == 302
     assert "總務巡檢員" in staff.get("/dashboard").text
     edits = db.session.scalars(db.select(AuditLog.detail).where(AuditLog.action == "user_updated")
                                .order_by(AuditLog.id)).all()
@@ -64,10 +74,23 @@ def test_title_edits_keep_existing_login_and_attendance_but_invalidate_older_adm
 
 
 @pytest.mark.parametrize("title", ["general_manager", "engineering"])
-def test_both_titles_share_general_handoffs_and_report_access(application, seeded, title):
+def test_both_roles_preserve_handoffs_and_team_reports_within_assigned_points(application, seeded, title):
     executor, lead, inspector, admin, pair, _, _ = team(application)
     user = db.session.scalar(db.select(User).where(User.username == "inspect"))
+    user.set_password(PASSWORD)
+    peer = db.session.scalar(db.select(User).where(User.username == "peer"))
+    peer.set_password(PASSWORD)
+    db.session.commit()
     assert assign(admin, user, title).status_code == 302
+    assert lead.get("/dashboard").location.startswith("/login")
+    if title == "engineering":
+        point = db.session.scalar(db.select(Point).where(Point.qr_token == pair[3:]))
+        point.inspection_team = "engineering"
+        db.session.commit()
+        assert assign(admin, peer, "engineering").status_code == 302
+        assert inspector.get("/dashboard").location.startswith("/login")
+        assert login(inspector, "peer").status_code == 302
+    assert login(lead, "inspect").status_code == 302
     safety = seeded["daily"]
     foreign = record(seeded["inspector"], safety)
     foreign.photos.append(InspectionPhoto(data=b"safety-photo", size_bytes=12, width=1, height=1))

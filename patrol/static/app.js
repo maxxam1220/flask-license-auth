@@ -182,6 +182,11 @@
           const general = form.elements.namedItem('category')?.value === 'general';
           workflow.hidden = !general;
           select.disabled = !general;
+          const teamControl = form.querySelector('[data-inspection-team-control]');
+          if (teamControl) {
+            teamControl.hidden = !general;
+            teamControl.querySelector('select').disabled = !general;
+          }
           const frequency = form.elements.namedItem('frequency');
           for (const option of frequency.querySelectorAll('[data-general-frequency]')) {
             option.hidden = option.disabled = !general;

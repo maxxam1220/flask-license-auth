@@ -53,6 +53,14 @@
 .point-card-bottom { border-top-color: #dce5de; }
 
 /* Unscheduled locations use the same fixed reading order on every row. */
+.inspection-team-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: .6rem; margin: 0 0 .9rem; }
+.inspection-team-toolbar .inspection-team-filter { min-width: min(100%, 12rem); max-width: 100%; }
+.inspection-team-toolbar select { min-height: 44px; }
+.inspection-team-toolbar .button { min-height: 44px; }
+@media (max-width: 480px) {
+  .inspection-team-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .inspection-team-toolbar .inspection-team-filter { min-width: 0; }
+}
 .spot-point-list li {
   display: grid;
   grid-template-columns: minmax(6rem, 1fr) minmax(0, 2.2fr) 3rem minmax(7rem, auto);

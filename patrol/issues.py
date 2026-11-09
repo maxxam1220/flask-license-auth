@@ -4,7 +4,7 @@ import re
 from sqlalchemy import and_, or_, select
 
 from models import Inspection, InspectionIssue, IssueEvent, Point, db
-from patrol_access import can_access_category, patrol_scope
+from patrol_access import apply_point_scope, can_access_category, can_access_point_team, patrol_scope
 
 
 class IssueActionError(ValueError):
@@ -23,11 +23,13 @@ def issue_state(record):
     return record.issue.status if record.issue else ("open" if record.is_abnormal else "")
 
 
-def open_issue_counts(point_ids=None, user_id=None, category=None):
+def open_issue_counts(point_ids=None, user_id=None, category=None, *, actor=None, inspection_team=""):
     """Return counts only; never expose another inspector's record or note."""
     query = (select(Inspection.point_id, db.func.count(Inspection.id))
              .outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
              .where(open_issue_condition()).group_by(Inspection.point_id))
+    if actor is not None:
+        query = apply_point_scope(query, actor, Inspection, inspection_team)
     if point_ids is not None:
         if not point_ids:
             return {}
@@ -68,10 +70,13 @@ def transition_issue(inspection_id, target_status, actor, expected_event_id, not
     point_id, owner_id, category = owner
     if not can_access_category(actor, category):
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
+    # Do not use the QR lookup: a disabled point still needs issue resolution.
+    point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update()
+                              .execution_options(populate_existing=True))
+    if category == "general" and not can_access_point_team(actor, point):
+        raise IssueActionError("找不到指定的巡檢紀錄。", 404)
     if actor.role != "admin" and owner_id != actor.id:
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
-    # Do not use the QR lookup: a disabled point still needs issue resolution.
-    db.session.scalar(select(Point).where(Point.id == point_id).with_for_update())
     record = db.session.scalar(select(Inspection).where(Inspection.id == inspection_id).with_for_update()
                                .execution_options(populate_existing=True))
     if record is None:

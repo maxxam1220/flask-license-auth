@@ -6,7 +6,7 @@ from sqlalchemy import select
 from daily_rounds import daily2_anytime, next_daily2_slot
 from missed import period_bounds, schedule_timeline, slot_plans
 from models import Inspection, PatrolExecution, db
-from patrol_access import can_access_category
+from patrol_access import can_access_point
 
 
 def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
@@ -18,7 +18,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
     candidates = {}
     for point in points:
         # historical_points() can include a former team's redacted point.
-        if not can_access_category(user, point.category) or (category_filter and point.category != category_filter):
+        if not can_access_point(user, point) or (category_filter and point.category != category_filter):
             continue
         if not point.active or point.deleted_at is not None or point.schedule_start > today:
             continue

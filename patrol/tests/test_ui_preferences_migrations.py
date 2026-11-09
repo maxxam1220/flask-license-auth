@@ -46,7 +46,7 @@ def test_additive_preferences_preserve_all_existing_rows_and_old_worker_writes(e
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == LATEST_VERSION == 14
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert not any(statement.lstrip().upper().startswith(("DROP TABLE", "DELETE ", "UPDATE ")) for statement in statements)
@@ -64,7 +64,7 @@ def test_additive_preferences_preserve_all_existing_rows_and_old_worker_writes(e
         # An old worker can change a role; the presentation gate still requires an executor.
         old_users = v13.tables["patrol_users"]
         connection.execute(old_users.update().where(old_users.c.id == 2).values(role="inspector"))
-    assert upgrade_schema(engine) == 14
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         assert connection.execute(select(User.id, User.ui_language, User.simple_executor_ui).where(User.id.in_((2, 4)))
                                   .order_by(User.id)).all() == [(2, "id", True), (4, "zh-Hant", False)]

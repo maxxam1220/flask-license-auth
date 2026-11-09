@@ -15,6 +15,7 @@ def test_new_inspector_skips_own_execution_for_ready_and_confirmation(applicatio
     executor, _, peer, _, url, *_ = team(application)
     point = db.session.scalar(db.select(Point).where(Point.qr_token == url[3:]))
     point.created_at = datetime(2026, 1, 1)
+    db.session.commit()  # Persist fixture state before request-owned activation transactions.
     own = db.session.scalar(db.select(User).where(User.username == "exec"))
     other = db.session.scalar(db.select(User).where(User.username == "peer"))
     old_form = payload(executor, url)

@@ -119,3 +119,5 @@
   .table-scroll .binding-identity-cell + .binding-identity-cell { padding-top: .55rem; }
   .table-scroll .binding-identity-cell strong { color: var(--ink); }
 }
+.point-revision-entry { margin: -.2rem 0 .85rem; }
+.point-revision-entry .text-link { display: inline-flex; min-height: 44px; align-items: center; gap: .3rem; }

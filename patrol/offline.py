@@ -22,7 +22,7 @@ from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, process_up
 from issues import open_issue_for
 from i18n import client_catalog, t, translate
 from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
-from patrol_access import can_access_category
+from patrol_access import can_access_point, inspection_team_scope
 
 
 def iso(value):
@@ -55,6 +55,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         return dict(id=user.id, name=user.display_name, role=user.role, category=user.patrol_category,
                     binding_id=binding.id, auth_version=user.auth_version, role_label=role_label(user),
                     ui_language=user.ui_language,
+                    inspection_team=inspection_team_scope(user),
                     simple_executor_ui=bool(user.role == 'executor' and user.simple_executor_ui))
 
     def actor(lock=False):
@@ -72,7 +73,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         return user, binding, None
 
     def stage_for(user, point):
-        if not can_access_category(user, point.category):
+        if not can_access_point(user, point):
             return None
         if user.role == "executor":
             if not executor_can_scan(point):
@@ -173,6 +174,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             rows.append(dict(id=point.id, token=point.qr_token, revision=point_revision(point), code=point.code, name=point.name,
                              name_i18n={language: translate(point.name, language) for language in ("id", "vi")},
                              floor=floor_label(point.floor), frequency=point.frequency, workflow_mode=point.workflow_mode,
+                             inspection_team=point.inspection_team,
                              stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed,
                              grant=signer.dumps(grant)))
         return jsonify(ok=True, version=1, owner=owner(user, binding), identity=identity(user, binding),
@@ -263,6 +265,11 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             db.session.execute(db.update(Point).where(Point.id == point_id).values(id=Point.id))
         point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update()
                                   .execution_options(populate_existing=True))
+        # Waiting for the point lock can cross midnight. Recheck the server
+        # clock after acquiring it instead of using the earlier grant-check time.
+        if point and point.pending_frequency and point.frequency_effective_date <= local_dt(now()).date():
+            db.session.rollback()
+            return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         if (not point or not point.active or point.deleted_at is not None
                 or settings(point) != grant["settings"] or point.qr_token != entry["token"]
                 or point.schedule_start > day):
@@ -300,6 +307,11 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         received = now()
         if received >= sync_until:
             return fail("expired", "已超過補傳期限；暫存仍保留，請聯絡管理員。")
+        # Photo processing can also cross the scheduled cutover while this
+        # transaction holds the point lock and prevents activation elsewhere.
+        if point.pending_frequency and point.frequency_effective_date <= local_dt(received).date():
+            db.session.rollback()
+            return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         row = OfflineSubmission(user_id=user.id, binding_id=binding.id, client_id=entry["client_id"],
                                 payload_hash=payload_hash, observed_at=naive_utc(observed), received_at=naive_utc(received))
         if stage == "execute":

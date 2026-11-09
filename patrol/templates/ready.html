@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% from '_ui.html' import empty %}
+{% from '_ui.html' import empty, inspection_team_filter %}
 {% from '_scanner.html' import scanner_button %}
 {% set executing = current_user.role == 'executor' %}
 {% set title = '今日待簽到' if executing else '今日待巡' %}
@@ -25,12 +25,13 @@
     {% for value,label in category_options %}<option value="{{ value }}"{% if value == selected_category %} selected{% endif %}>{{ label }}</option>{% endfor %}
   </select></label>
   {% endif %}
+  {{ inspection_team_filter(selected_inspection_team, can_filter_inspection_team) }}
   <label>{{ t('樓層') }}<select name="floor">
     <option value="">{{ t('全部樓層') }}</option>
     {% for value,label in floor_options %}<option value="{{ value }}"{% if value|string == selected_floor %} selected{% endif %}>{{ label }}</option>{% endfor %}
   </select></label>
   <button type="submit" class="button button-primary">{{ t('套用篩選') }}</button>
-  {% if selected_floor or (is_patrol_admin and selected_category) %}<a class="text-link" href="{{ url_for('ready') }}">{{ t('重設') }}</a>{% endif %}
+  {% if selected_floor or (is_patrol_admin and selected_category) or selected_inspection_team %}<a class="text-link" href="{{ url_for('ready', inspection_team='') }}">{{ t('重設') }}</a>{% endif %}
 </form>
 {% include '_today_ready.html' %}
 {% else %}

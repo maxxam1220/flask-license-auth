@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261107-v13';
+const CACHE = 'patrol-offline-shell-20261109-v14';
 const AUDIO_VERSION = 'patrol-v1', AUDIO_ROOT = '/static/audio/' + AUDIO_VERSION + '/';
 // Keep the fixed paths compatible with already-open pages and pending drafts.
 // A new revision still requires a complete, verified download before activation.

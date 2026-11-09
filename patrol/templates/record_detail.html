@@ -22,7 +22,7 @@
     <div><span>{{ '手機記錄時間' if record.offline_submission else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
     {% if record.offline_submission %}<div><span>離線補傳收件</span><strong>{{ record.offline_submission.received_at|localtime }}</strong></div>{% endif %}
     <div><span>樓層</span><strong>{{ record_floor(record) }}</strong></div>
-    {% if is_patrol_admin %}<div><span>巡檢分類</span><strong>{{ category_label(record.category) }}</strong></div>{% endif %}
+    {% if can_filter_inspection_team %}<div><span>負責單位</span><strong>{{ point_team_label(record) }}</strong></div>{% endif %}
     {% if record.workflow_mode == 'spot' %}<div><span>作業方式</span><strong>單段巡檢</strong></div>{% endif %}
     <div><span>巡檢頻率</span><strong>{{ frequency(record.frequency) }}</strong></div>
     {% if long_period %}

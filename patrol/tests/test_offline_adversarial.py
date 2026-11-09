@@ -107,7 +107,7 @@ def test_valid_peer_grant_and_receipt_cannot_be_transplanted_to_another_identity
     assert db.session.query(Inspection).count() == db.session.query(OfflineSubmission).count() == 1
 
 
-@pytest.mark.parametrize("mutation", ["role", "category", "password", "binding", "logout", "title-only"])
+@pytest.mark.parametrize("mutation", ["role", "category", "password", "binding", "logout", "engineering-team"])
 def test_postgres_sync_rechecks_identity_after_waiting_for_account_lock(postgres_app, monkeypatch, mutation):
     instant = datetime(2026, 11, 6, 1, tzinfo=timezone.utc)
     monkeypatch.setattr(patrol, "now_utc", lambda: instant)
@@ -147,18 +147,17 @@ def test_postgres_sync_rechecks_identity_after_waiting_for_account_lock(postgres
                         connection.execute(db.insert(RevokedSession).values(token_hash=digest, user_id=user_id,
                             auth_version=version, revoked_at=patrol.naive_utc(instant)))
                     else:
+                        # This is now an access-scope change. Deliberately omit
+                        # the normal admin auth_version bump to prove the fresh
+                        # account/point permission check still rejects the grant.
                         connection.execute(db.update(User).where(User.id == user_id).values(engineering_inspector_title=True))
                     transaction.commit()
                     response = pending.result(timeout=15)
                 finally:
                     if transaction.is_active:
                         transaction.rollback()
-        if mutation == "title-only":
-            assert response.status_code == 200, response.text
-        else:
-            assert_error(response, status=403)
+        assert_error(response, status=403)
         with postgres_app.app_context():
-            expected = int(mutation == "title-only")
-            assert db.session.query(Inspection).count() == db.session.query(OfflineSubmission).count() == expected
+            assert db.session.query(Inspection).count() == db.session.query(OfflineSubmission).count() == 0
     finally:
         event.remove(engine, "before_cursor_execute", observe_lock)
