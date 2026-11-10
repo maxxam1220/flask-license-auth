@@ -107,6 +107,7 @@ def test_full_executor_rescan_does_not_describe_direct_visit_as_completed_inspec
     executor, _, _, _, _, url, _ = three_day_team
     point = db.session.scalar(db.select(Point).where(Point.qr_token == url[3:]))
     application.config["EXECUTOR_VISIT_CODES"] = frozenset({point.code})
+    point.schedules[0].point_code = point.code
     db.session.commit()
     saved = executor.post(url + "/confirm", data=payload(executor, url))
     assert saved.status_code == 302

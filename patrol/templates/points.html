@@ -32,8 +32,9 @@
   <a class="{{ 'selected' if not show_deleted }}" aria-current="{{ 'page' if not show_deleted else 'false' }}" href="{{ url_for('points', category=selected_category, floor=selected_floor) }}">現有點位</a>
   <a class="{{ 'selected' if show_deleted }}" aria-current="{{ 'page' if show_deleted else 'false' }}" href="{{ url_for('points', list='deleted', category=selected_category, floor=selected_floor) }}">已刪除（{{ deleted_count }}）</a>
 </nav>
-{% if not show_deleted %}<p class="point-revision-entry"><a class="text-link" href="{{ url_for('point_assignment_revision') }}">總務／工務點位調整 {{ icon('arrow') }}</a></p>{% endif %}
-{% if show_deleted %}<div class="archive-guide">{{ icon('info') }}<p>已刪除點位保留編號、巡檢紀錄與異常案件。還原後會回到現有清單並維持停用；重新啟用後，請列印新 QR 標籤。</p></div>{% endif %}
+<nav class="point-revision-entry form-actions" aria-label="點位批次調整"><a class="text-link" href="{{ url_for('general_point_numbering') }}">重排總務編號 {{ icon('arrow') }}</a>{% if not show_deleted %}<a class="text-link" href="{{ url_for('point_assignment_revision') }}">總務／工務點位調整 {{ icon('arrow') }}</a>{% endif %}</nav>
+{% if general_numbering_enabled %}<div class="assignment-note">{{ icon('info') }}<p>G 編號已啟用自動排列：新增、停用、刪除、還原或重新啟用時，會依樓層重排。保留廁所編號與職安點位；編號有變更的標籤請重印。</p></div>{% endif %}
+{% if show_deleted %}<div class="archive-guide">{{ icon('info') }}<p>已刪除點位保留{{ '巡檢紀錄與異常案件；G 編號會自動重排' if general_numbering_enabled else '編號、巡檢紀錄與異常案件' }}。還原後會回到現有清單並維持停用；重新啟用後，請列印新 QR 標籤。</p></div>{% endif %}
 <section class="panel filter-panel point-filter-toolbar">
   <div class="point-scope-filter"><span id="point-scope-label">巡檢分類</span><nav aria-labelledby="point-scope-label">
     {% for value,label in [('', '全部')] + category_options|list %}<a class="point-scope-link" aria-current="{{ 'page' if (selected_category or '') == value else 'false' }}" href="{{ url_for('points', list='deleted' if show_deleted else none, floor=selected_floor or none, category=value or none) }}">{{ label }}</a>{% endfor %}
@@ -51,7 +52,7 @@
     {{ inspection_team_choices(selected_inspection_team) }}
     {{ workflow_choices() }}
     <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>請使用樓層代碼加編號，或依總務清冊保留原編號與大小寫。</small></label>
+    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>請使用樓層代碼加編號，或依總務清冊保留原編號與大小寫。{% if general_numbering_enabled %}總務 G 編號儲存後會自動重排，以儲存結果為準。{% endif %}</small></label>
     <label>地點名稱<input name="name" required maxlength="100" placeholder="例如：機房入口"></label>
     <label>巡檢頻率{{ frequency_select('daily') }}<small>每日兩次可於當天任意時間完成，不限間隔。</small></label>
   </div>
@@ -89,14 +90,14 @@
       {{ inspection_team_choices(point.inspection_team) }}
       {{ workflow_choices(point) }}
       <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if point.floor == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"></label>
+      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false">{% if general_numbering_enabled and point.category == 'general' %}<small>G 編號依樓層與啟用狀態自動排列；廁所等自帶編號保持原樣。</small>{% endif %}</label>
       <label>地點名稱<input name="name" required maxlength="100" value="{{ point.name }}"></label>
       <label>巡檢頻率{{ frequency_select(point.frequency) }}{% if point.pending_frequency and point.frequency_effective_date %}<small>{{ point.frequency_effective_date|localdate }} 起改為{{ frequency(point.pending_frequency) }}；生效前保留目前次數，避免影響今日紀錄。</small>{% endif %}</label>
     </div>
     <div class="form-actions"><label class="checkbox-label"><input type="checkbox" name="active" value="on" {% if point.active %}checked{% endif %}>啟用此巡檢點</label><button class="button button-primary button-small">儲存變更</button></div>
   </form>
   <div class="danger-zone"><div><strong>更換 QR Code</strong><small>舊標籤連結會立即失效，需重新列印並更換現場標籤。</small></div><form action="{{ url_for('rotate_point_qr', point_id=point.id, floor=selected_floor, category=selected_category) }}" method="post" data-confirm="{{ point.code }} 的舊 QR Code 將立即失效，現場標籤需要重新列印及更換。" data-confirm-title="更換點位 QR Code" data-confirm-label="確認更換" data-confirm-danger="true">{{ csrf() }}{{ management_revision(point) }}<button class="button button-danger button-small">更換 QR Code</button></form></div>
-  <div class="danger-zone"><div><strong>刪除點位</strong><small>會移至已刪除清單，舊 QR 失效；編號、紀錄及異常案件保留。</small></div><form method="post" action="{{ url_for('delete_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="刪除 {{ point.code }}「{{ point.name }}」後，舊 QR 立即失效。編號、歷史巡檢與異常案件會保留；日後可由已刪除清單還原。" data-confirm-title="刪除巡檢點" data-confirm-label="確認刪除" data-confirm-danger="true">{{ csrf() }}{{ management_revision(point) }}<button class="button button-danger button-small">刪除點位</button></form></div>
+  <div class="danger-zone"><div><strong>刪除點位</strong><small>會移至已刪除清單，舊 QR 失效；{{ '紀錄及異常案件保留，G 編號會自動重排' if general_numbering_enabled and point.category == 'general' else '編號、紀錄及異常案件保留' }}。</small></div><form method="post" action="{{ url_for('delete_point', point_id=point.id, floor=selected_floor, category=selected_category) }}" data-confirm="刪除 {{ point.code }}「{{ point.name }}」後，舊 QR 立即失效。{{ '歷史巡檢與異常案件保留，G 編號會自動重排' if general_numbering_enabled and point.category == 'general' else '編號、歷史巡檢與異常案件會保留' }}；日後可由已刪除清單還原。" data-confirm-title="刪除巡檢點" data-confirm-label="確認刪除" data-confirm-danger="true">{{ csrf() }}{{ management_revision(point) }}<button class="button button-danger button-small">刪除點位</button></form></div>
   </details>{% endif %}
 </article>{% else %}{{ empty('沒有符合的已刪除點位' if show_deleted else '這個篩選條件沒有點位','可調整分類或樓層查看其他已刪除點位。' if show_deleted else '可調整分類或樓層，或點選「新增巡檢點」建立位置。','pin') }}{% endfor %}</div>
 {% endblock %}

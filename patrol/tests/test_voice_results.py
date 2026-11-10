@@ -54,6 +54,7 @@ def token_from(response):
 def direct_visit(application, a):
     point = a.direct_point
     application.config["EXECUTOR_VISIT_CODES"] = frozenset({point.code})
+    point.schedules[0].point_code = point.code
     point.frequency = point.schedules[0].frequency = "irregular"
     db.session.commit()
     return a.executor, a.direct

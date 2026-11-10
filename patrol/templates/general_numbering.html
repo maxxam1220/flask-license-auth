@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% from '_ui.html' import icon, csrf %}
+{% set title='重排總務編號' %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='report-layout.css') }}" media="screen">
+<link rel="stylesheet" href="{{ url_for('static', filename='management-list.css') }}" media="screen">
+{% endblock %}
+{% block body_class %}report-page{% endblock %}
+{% block content %}
+<div class="record-back-links"><a class="back-link" href="{{ url_for('points', category='general', inspection_team='') }}">{{ icon('back') }}返回巡檢點管理</a></div>
+<div class="page-heading"><div><h1>重排總務編號</h1><p>依樓層順序整理 G 編號，方便現場核對與列印標籤。</p></div></div>
+
+{% if error %}<div class="flash flash-warning" role="alert">{{ icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+
+<section class="panel" aria-labelledby="numbering-rules-heading">
+  <div class="section-heading"><h2 id="numbering-rules-heading">編號規則</h2>{% if plan and plan.enabled %}<span class="badge badge-done">自動編號已啟用</span>{% endif %}</div>
+  <ul class="revision-summary">
+    <li>保留樓層前綴；啟用點由 <strong>G001</strong> 連續排列，停用與已刪除點由 <strong>G100</strong> 連續排列。</li>
+    <li>範圍為總務作業分類的 G 編號，包含由工務巡檢的點位；<strong>廁所原編號與職安點位不變</strong>。</li>
+    <li>啟用後，新增、停用、刪除、還原或重新啟用點位時，會依樓層自動重排 G 編號，其他點位的編號也可能調整。</li>
+    <li>重排不更換 QR 網址，啟用點的原 QR 仍可掃描；<strong>編號變更後請重印標籤</strong>，讓現場編號與系統一致。</li>
+    <li>原有簽到、巡檢與異常紀錄保留。</li>
+  </ul>
+</section>
+
+{% if plan and not error %}
+{% if plan.blockers %}
+<section class="panel spaced" aria-labelledby="numbering-blockers-heading">
+  <div class="section-heading"><div><h2 id="numbering-blockers-heading">目前尚無法套用</h2><p>請先確認以下點位，再重新取得預覽。目前未修改任何編號。</p></div></div>
+  <ul>{% for item in plan.blockers %}<li>{% if item is mapping %}{% if item.code %}<strong>{{ item.code }}</strong>：{% endif %}{{ item.message }}{% else %}{{ item }}{% endif %}</li>{% endfor %}</ul>
+  <a class="button button-secondary" href="{{ url_for('general_point_numbering') }}">重新取得預覽</a>
+</section>
+{% endif %}
+<section class="panel binding-list-panel spaced" aria-labelledby="numbering-preview-heading">
+  <div class="section-heading"><div><h2 id="numbering-preview-heading">{{ '編號調整預覽' if plan.changed else '編號已連續排列' }}</h2><p>{% if plan.changed %}本次有 {{ plan.changed }} 個點位需要更新編號，請核對新舊對照。{% elif plan.enabled %}目前沒有需要重排的點位，可直接列印最新標籤。{% else %}目前不需變更編號；套用後將啟用後續自動編號。{% endif %}</p></div>{% if plan.changed %}<span class="count-label">{{ plan.changed }} 個點位</span>{% endif %}</div>
+  {% if plan.changes %}
+  <div class="table-scroll"><table>
+    <thead><tr><th scope="col">樓層</th><th scope="col">地點</th><th scope="col">狀態</th><th scope="col">原編號</th><th scope="col">新編號</th></tr></thead>
+    <tbody>{% for item in plan.changes %}<tr>
+      <td data-label="樓層">{{ floor_label(item.floor) }}</td>
+      <td data-label="地點"><strong>{{ item.name }}</strong></td>
+      <td data-label="狀態"><span class="badge {{ 'badge-done' if item.active and not item.deleted else 'badge-revoked' }}">{{ '已刪除' if item.deleted else '啟用中' if item.active else '已停用' }}</span></td>
+      <td data-label="原編號"><span class="point-code">{{ item.code }}</span></td>
+      <td data-label="新編號"><strong class="point-code">{{ item.new_code }}</strong></td>
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+  {% if (plan.changed or not plan.enabled) and expected_plan and not plan.blockers %}
+  <form action="{{ url_for('general_point_numbering') }}" method="post" class="form-actions spaced">
+    {{ csrf() }}<input type="hidden" name="expected_plan" value="{{ expected_plan }}">
+    <a class="text-link" href="{{ url_for('points', category='general', inspection_team='') }}">返回點位管理</a>
+    <button type="submit" class="button button-primary">{{ icon('check') }}套用編號重排</button>
+  </form>
+  {% elif not plan.changed and plan.enabled %}
+  <div class="form-actions"><a class="text-link" href="{{ url_for('points', category='general', inspection_team='') }}">查看總務與工務點位</a><a class="button button-primary" href="{{ url_for('print_qr', category='general', inspection_team='') }}">{{ icon('print') }}列印最新 QR 標籤</a></div>
+  {% endif %}
+</section>
+{% else %}
+<section class="panel spaced"><div class="section-heading"><div><h2>請重新取得編號預覽</h2><p>目前未套用任何修改。重新載入後，再核對最新點位與編號。</p></div></div><div class="form-actions"><a class="text-link" href="{{ url_for('points', category='general', inspection_team='') }}">返回點位管理</a><a class="button button-secondary" href="{{ url_for('general_point_numbering') }}">重新取得預覽</a></div></section>
+{% endif %}
+{% endblock %}

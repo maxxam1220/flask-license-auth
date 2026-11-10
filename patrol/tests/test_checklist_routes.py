@@ -24,6 +24,7 @@ def toilet(context, *, direct=False):
         point.code = "AB2-W01"
         point.frequency = "irregular"
         point.schedules[0].frequency = "irregular"
+        point.schedules[0].point_code = point.code
     db.session.commit()
     return point
 

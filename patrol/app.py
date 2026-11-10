@@ -38,6 +38,8 @@ from login_client import classify_login_client
 from login_history import login_records_page
 from general_workflow import (EXECUTION_STATUS_LABELS, execution_deadline, execution_in_slot, execution_review_status,
                               new_execution, personal_inspection_in_slot)
+from general_numbering import (apply_general_numbering, lock_general_numbering,
+                               numbering_enabled, preview_general_numbering)
 from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
 from missed import period_bounds
@@ -654,20 +656,28 @@ def create_app(config=None):
         return value
 
     def registered_visit_owners():
-        # One lookup per request, including a dashboard listing all seven points.
+        # Original schedule ownership is stable across later code renumbering.
+        # Resolve once per request, including a dashboard listing all seven points.
         cache_key = "patrol.registered_visit_owners"
         if cache_key not in request.environ:
             first = select(db.func.min(PointSchedule.id)).where(PointSchedule.category == "general",
                 PointSchedule.point_code.in_(app.config["EXECUTOR_VISIT_CODES"])).group_by(PointSchedule.point_code)
             rows = db.session.execute(select(PointSchedule.point_code, PointSchedule.point_id).where(PointSchedule.id.in_(first)))
-            request.environ[cache_key] = dict(rows.all())
+            owners = dict(rows.all())
+            # Compatibility for original catalogue points created before schedule
+            # snapshots existed. A point with ANY history must prove ownership
+            # through the original code; a reused current code never grants access.
+            unregistered = app.config["EXECUTOR_VISIT_CODES"] - owners.keys()
+            if unregistered:
+                owners.update(db.session.execute(select(Point.code, Point.id).where(
+                    Point.category == "general", Point.code.in_(unregistered), ~Point.schedules.any())).all())
+            request.environ[cache_key] = owners
         return request.environ[cache_key]
 
     def executor_can_scan(point):
         return point.category == "general" and (point.workflow_mode == "two_stage" or
                 (point.workflow_mode == "spot" and point.frequency in ("irregular", "three_day") and
-                 point.code in app.config["EXECUTOR_VISIT_CODES"] and
-                 registered_visit_owners().get(point.code, point.id) == point.id))
+                 point.id in registered_visit_owners().values()))
 
     def binding_destination():
         """Keep a scanned point through approval, without trusting a return URL."""
@@ -2247,8 +2257,48 @@ def create_app(config=None):
         query = deleted if selected_list == "deleted" else query.where(Point.deleted_at.is_(None))
         return render_template("points.html", points=db.session.scalars(query.order_by(*point_order())).all(), selected_floor=floor, selected_category=category,
                                official_general_codes=dict(general_codes.values()),
+                               general_numbering_enabled=numbering_enabled(),
                                selected_list=selected_list, deleted_count=deleted_count,
                                open_issue_counts=open_issue_counts())
+
+    @app.route("/admin/points/general-numbering", methods=["GET", "POST"])
+    @admin_required
+    def general_point_numbering():
+        if request.method == "POST":
+            lock_current_admin()
+            expected = request.form.get("expected_plan", "")
+            if not re.fullmatch(r"[a-f0-9]{64}", expected):
+                abort(400, description="請先開啟編號重排預覽，再套用修改。")
+            try:
+                result = apply_general_numbering(now_utc(), g.user.id, expected_plan=expected)
+                db.session.commit()
+            except ValueError as error:
+                db.session.rollback()
+                return render_template("general_numbering.html", plan=None, error=str(error), expected_plan=""), 409
+            flash(f"總務 G 編號已重排，共更新 {len(result['changes'])} 個點位；已啟用自動連號。原 QR 連結保留，請列印最新標籤。", "success")
+            return redirect(url_for("general_point_numbering"))
+        try:
+            plan = preview_general_numbering(now_utc())
+        except ValueError as error:
+            return render_template("general_numbering.html", plan=None, error=str(error), expected_plan=""), 409
+        return render_template("general_numbering.html", plan=plan, error=None, expected_plan=plan["state_digest"])
+
+    def lock_point_management():
+        lock_current_admin()
+        # Take the shared numbering lock before any Point row lock. Multiple
+        # admin edits can otherwise each hold a row that a whole-list reorder needs.
+        lock_general_numbering()
+
+    def maintain_general_numbering():
+        if not numbering_enabled():
+            return
+        try:
+            result = apply_general_numbering(now_utc(), g.user.id)
+        except ValueError as error:
+            db.session.rollback()
+            abort(409, description=str(error))
+        if result["changes"]:
+            flash(f"已同步重排 {len(result['changes'])} 個總務 G 編號，請列印更新後的標籤。QR 連結保留。", "success")
 
     @app.route("/admin/points/revision-20261109", methods=["GET", "POST"])
     @admin_required
@@ -2290,9 +2340,10 @@ def create_app(config=None):
             if category != "general" or int(floor) != known_entry[1]:
                 abort(400, description="清冊中的點位編號須使用原來的總務分類與樓層。")
             if code in app.config["EXECUTOR_VISIT_CODES"] and (point is None or point.code != code):
-                # These codes grant executor access. Only the original point can
-                # recover a reserved code after an administrator renames it.
-                if point is None or point.id != registered_visit_owners().get(code):
+                # Once the original owner's ID is frozen in schedule history,
+                # a label can be reused without transferring its visit permission.
+                # An unregistered reserved label cannot create a new authorized ID.
+                if code not in registered_visit_owners():
                     abort(409, description="此編號保留給原有的直接簽到點。其他點位請使用新的編號。")
         elif point and category == point.category == "general" and raw_code == point.code and int(floor) == point.floor:
             code = point.code
@@ -2380,6 +2431,7 @@ def create_app(config=None):
         audit(action, point.code)
         try:
             db.session.flush()
+            maintain_general_numbering()
             destination = point_list_url(changed=point)
             db.session.commit()
         except IntegrityError:
@@ -2399,7 +2451,7 @@ def create_app(config=None):
     @app.post("/admin/points/create")
     @admin_required
     def create_point():
-        lock_current_admin()
+        lock_point_management()
         instant = now_utc()
         point = Point(**point_values(), active=True, schedule_start=local_dt(instant).date(), created_at=naive_utc(instant))
         db.session.add(point)
@@ -2409,7 +2461,7 @@ def create_app(config=None):
     @app.post("/admin/points/<int:point_id>/update")
     @admin_required
     def update_point(point_id):
-        lock_current_admin()
+        lock_point_management()
         point = managed_point(point_id)
         if conflict := check_management_state(point, point_list_url()):
             return conflict
@@ -2450,7 +2502,7 @@ def create_app(config=None):
     @app.post("/admin/points/<int:point_id>/rotate-qr")
     @admin_required
     def rotate_point_qr(point_id):
-        lock_current_admin()
+        lock_point_management()
         point = managed_point(point_id)
         destination = point_list_url(changed=point)
         if conflict := check_management_state(point, destination):
@@ -2464,7 +2516,7 @@ def create_app(config=None):
     @app.post("/admin/points/<int:point_id>/delete")
     @admin_required
     def delete_point(point_id):
-        lock_current_admin()
+        lock_point_management()
         point = managed_point(point_id)
         destination = point_list_url()
         if conflict := check_management_state(point, destination):
@@ -2478,6 +2530,8 @@ def create_app(config=None):
         point.schedules.append(PointSchedule(effective_date=local_dt(instant).date(), frequency=point.frequency, retired_at=naive_utc(instant),
             category=point.category, workflow_mode=point.workflow_mode, active=False, floor=point.floor, point_code=point.code, point_name=point.name))
         audit("point_deleted", point.code)
+        db.session.flush()
+        maintain_general_numbering()
         db.session.commit()
         flash("點位已移至已刪除，舊 QR Code 已失效；歷史紀錄仍保留。", "success")
         return redirect(destination)
@@ -2485,13 +2539,15 @@ def create_app(config=None):
     @app.post("/admin/points/<int:point_id>/restore")
     @admin_required
     def restore_point(point_id):
-        lock_current_admin()
+        lock_point_management()
         point = managed_point(point_id, deleted=True)
         destination = point_list_url(deleted=True)
         if conflict := check_management_state(point, destination):
             return conflict
         point.deleted_at, point.active = None, False
         audit("point_restored", point.code)
+        db.session.flush()
+        maintain_general_numbering()
         db.session.commit()
         flash("點位已還原為停用。請至現有點位啟用，再列印新的 QR Code。", "success")
         return redirect(destination)
