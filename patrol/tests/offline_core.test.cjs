@@ -572,3 +572,83 @@ test('locale preference refresh preserves the queued grant and never leaks the p
   const other = await h.core.getState(); assert.equal(other.identity.ui_language, 'id'); assert.equal(other.pending, 0); assert.equal(other.receipts.length, 0);
   assert.equal((await rows(h.dbName, 'queue')).length, 1);
 });
+
+test('renumbering and reusing a display code never transfers a pending check-in to another QR token', async t => {
+  const h = await prepared(t);
+  const old = await h.core.enqueue(input);
+  const original = h.state.manifest.points[0];
+  h.state.manifest.points = [
+    { ...original, code: '1F-G005', grant: 'refreshed-grant', revision: 'renumbered-revision' },
+    { ...original, id: 2, token: 'other-point', name: 'Different location', grant: 'other-grant', revision: 'other-revision' }
+  ];
+  await h.core.prepare();
+  assert.equal((await h.core.getPoint('test-point')).code, '1F-G005');
+  assert.deepEqual((await h.core.getPoint('test-point')).availableSlots, ['pm']);
+  assert.deepEqual((await h.core.getPoint('other-point')).availableSlots, ['am', 'pm']);
+  const [queued] = await rows(h.dbName, 'queue');
+  assert.equal(queued.code, '1F-G01'); assert.equal(queued.grant, 'signed-grant');
+  assert.equal(queued.client_id, old.client_id); assert.equal(queued.token, 'test-point');
+  await h.core.sync();
+  assert.equal(h.state.uploads[0].entry.token, 'test-point');
+  assert.equal(h.state.uploads[0].entry.grant, 'signed-grant');
+  assert.equal(h.state.uploads[0].entry.client_id, old.client_id);
+  assert.equal('code' in h.state.uploads[0].entry, false);
+  assert.deepEqual((await h.core.getPoint('other-point')).availableSlots, ['am', 'pm']);
+});
+
+test('renumbered daily point keeps receipt quota while the point receiving its former code remains available', async t => {
+  const h = harness(); t.after(() => h.core.close());
+  h.state.manifest.points[0] = { ...h.state.manifest.points[0], frequency: 'daily', slots: ['any'] };
+  await h.core.prepare(); await h.core.enqueue(input); await h.core.sync();
+  const original = h.state.manifest.points[0];
+  h.state.manifest.points = [
+    { ...original, code: '1F-G005' },
+    { ...original, id: 2, token: 'other-point', name: 'Different location', grant: 'other-grant' }
+  ];
+  await h.core.prepare();
+  await assert.rejects(h.core.enqueue(input), { code: 'quota' });
+  const other = await h.core.enqueue({ token: 'other-point' });
+  assert.equal(other.code, '1F-G01'); assert.equal(other.token, 'other-point');
+  assert.equal((await rows(h.dbName, 'receipts'))[0].token, 'test-point');
+});
+
+test('scan routing retains original token after renumbering and never accepts a bare display code', async t => {
+  const h = await prepared(t);
+  h.state.manifest.points[0].code = '1F-G005'; await h.core.prepare();
+  assert.equal(await h.core.route('/c/test-point'), '/c/test-point');
+  h.state.navigator.onLine = false;
+  assert.equal(await h.core.route('/c/test-point'), '/offline?point=test-point');
+  assert.equal((await h.core.getPoint('test-point')).code, '1F-G005');
+  assert.equal(await h.core.getPoint('1F-G005'), null);
+  await assert.rejects(h.core.route('1F-G005'), { code: 'point' });
+});
+
+test('removing an inactive point from refreshed preparation leaves its pending data separate from reused code', async t => {
+  const h = await prepared(t); const original = h.state.manifest.points[0];
+  const saved = await h.core.enqueue(input);
+  h.state.manifest.points = [{ ...original, id: 2, token: 'replacement-point', name: 'Different location', grant: 'replacement-grant' }];
+  await h.core.prepare();
+  assert.equal(await h.core.getPoint('test-point'), null);
+  assert.equal((await h.core.getState()).queue[0].client_id, saved.client_id);
+  await assert.rejects(h.core.enqueue(input), { code: 'point' });
+  h.state.sync = entry => response({ ok: false, code: 'point_inactive', message: '點位已停用', retryable: false }, 409);
+  await h.core.sync();
+  const blocked = (await h.core.getState()).queue[0];
+  assert.equal(blocked.token, 'test-point'); assert.equal(blocked.status, 'blocked');
+  assert.deepEqual((await h.core.getPoint('replacement-point')).availableSlots, ['am', 'pm']);
+});
+
+test('manual sync retries a formerly blocked renumbered entry with unchanged UUID, grant and evidence', async t => {
+  const h = await prepared(t);
+  const saved = await h.core.enqueue({ ...input, photos: [new File(['evidence'], 'photo.jpg', { type: 'image/jpeg' })] });
+  h.state.sync = () => response({ ok: false, code: 'point_changed', message: '點位已更新', retryable: false }, 409);
+  const refused = await h.core.sync();
+  assert.equal(refused.pending, 1); assert.equal(refused.blocked, 1); assert.equal(refused.queue[0].retryable, false);
+  h.state.manifest.points[0].code = '1F-G005'; await h.core.prepare();
+  h.state.sync = submitted => response({ ok: true, status: 'saved', client_id: submitted.client_id });
+  const retried = await h.core.sync();
+  assert.equal(retried.pending, 0); assert.equal(retried.blocked, 0); assert.equal(retried.receipts[0].client_id, saved.client_id);
+  assert.equal(h.state.uploads.length, 2);
+  assert.deepEqual(h.state.uploads[1].entry, h.state.uploads[0].entry);
+  assert.equal(await h.state.uploads[1].init.body.get('photos').text(), 'evidence');
+});

@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta, timezone
 import hashlib
 import hmac
 import json
+from types import SimpleNamespace
 from uuid import UUID
 
 from flask import g, jsonify, render_template, request, send_from_directory, url_for
@@ -23,7 +24,7 @@ from general_workflow import execution_in_slot, new_execution, personal_inspecti
 from images import MAX_INPUT_BYTES, MAX_PHOTOS, PhotoValidationError, photo_storage_used, process_uploads
 from issues import open_issue_for
 from i18n import client_catalog, t, translate
-from models import DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
+from models import AuditLog, DeviceBinding, Inspection, InspectionPhoto, OfflineSubmission, PatrolExecution, Point, db
 from patrol_access import can_access_point, inspection_team_scope
 
 
@@ -89,6 +90,61 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         return dict(id=point.id, token=point.qr_token, revision=point_revision(point),
                     frequency=point.frequency, workflow_mode=point.workflow_mode,
                     start=point.schedule_start.isoformat())
+
+    def settings_match(point, signed, issued):
+        current = settings(point)
+        if current == signed:
+            return True
+        if (not isinstance(signed, dict) or point.category != "general"
+                or {k: v for k, v in current.items() if k != "revision"}
+                != {k: v for k, v in signed.items() if k != "revision"}):
+            return False
+        revision = signed.get("revision")
+        if not isinstance(revision, str) or len(revision) != 64 or not revision.isascii():
+            return False
+        # A grant issued before an automatic display-code change still belongs
+        # to the same immutable Point.id and QR token. Only reconstruct codes
+        # from this server's numbering audit; never trust a code from the phone
+        # or an unrelated point's schedule. Current name/floor/team/checklist
+        # and every attendance setting must still match the signed grant.
+        from general_numbering import NUMBERING_ACTION
+        # The audit carries the admin operation's start time, not its commit
+        # time. Preparation may read the previous committed code while that
+        # operation waits for a lock, including across midnight. Cover the
+        # preceding local day rather than imposing a short timing race window.
+        audit_start = datetime.combine(local_dt(issued).date() - timedelta(days=1), time.min, timezone_local)
+        audits = db.session.scalars(select(AuditLog.detail).where(
+            AuditLog.action == NUMBERING_ACTION,
+            AuditLog.created_at >= naive_utc(audit_start),
+            AuditLog.created_at <= naive_utc(now())).order_by(AuditLog.id.desc()).limit(257)).all()
+        if len(audits) > 256:
+            return False  # Bound exceptional/corrupt audit history; retain entry.
+        snapshot = SimpleNamespace(**{column.name: getattr(point, column.name)
+                                      for column in Point.__table__.columns})
+        for detail in audits:
+            if not isinstance(detail, str) or len(detail) > 1_048_576:
+                return False
+            try:
+                audit_plan = json.loads(detail)
+            except (ValueError, TypeError, RecursionError):
+                return False
+            changes = audit_plan.get("changes") if isinstance(audit_plan, dict) else None
+            if not isinstance(changes, list) or any(not isinstance(change, dict) for change in changes):
+                return False
+            matches = [change for change in changes if change.get("id") == point.id]
+            if not matches:
+                continue
+            if len(matches) != 1:
+                return False
+            change = matches[0]
+            if (change.get("new_code") != snapshot.code or not isinstance(change.get("code"), str)
+                    or change.get("name") != point.name or change.get("floor") != point.floor
+                    or change.get("active") is not True or change.get("deleted") is not False):
+                return False  # A manual edit or disable breaks the audit chain.
+            snapshot.code = change["code"]
+            if hmac.compare_digest(point_revision(snapshot), revision):
+                return True
+        return False
 
     def consumed(user, point, day, key, slot, stage):
         if stage == "execute":
@@ -277,7 +333,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             db.session.rollback()
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         if (not point or not point.active or point.deleted_at is not None
-                or settings(point) != grant["settings"] or point.qr_token != entry["token"]
+                or not settings_match(point, grant["settings"], issued) or point.qr_token != entry["token"]
                 or point.schedule_start > day):
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         stage = stage_for(user, point)
