@@ -156,3 +156,49 @@ test('form draft detection includes checked choices, with no automatic select-al
   assert.deepEqual(validateChecklist(definition(), ['dining.a2']), ['dining.a2']);
   assert.equal(validChecklistDefinition(undefined), false); assert.equal(validChecklistDefinition(null), true);
 });
+
+for (const stage of ['execute', 'inspect']) {
+  test(`retiring the food checklist preserves pending ${stage} evidence while new capture needs no choices`, async t => {
+    const h = fixture(t, stage); await h.core.prepare();
+    const first = await h.core.enqueue(input);
+    const [original] = await storeRows(h.dbName, 'queue');
+    h.state.manifest.points[0].checklist = null;
+    h.state.manifest.points[0].revision = 'no-food-checklist';
+    h.state.manifest.points[0].grant = 'no-food-checklist-grant';
+    await h.core.prepare();
+    const [retained] = await storeRows(h.dbName, 'queue');
+    assert.deepEqual(retained, original);
+    const current = await h.core.getPoint(input.token);
+    assert.equal(current.checklist, null);
+    assert.deepEqual(current.availableSlots, ['pm']);
+    await assert.rejects(h.core.enqueue(input), { code: 'checklist' });
+    const next = await h.core.enqueue({ token: input.token });
+    assert.equal(next.slot, 'pm');
+    const pending = (await storeRows(h.dbName, 'queue')).find(row => row.client_id === next.client_id);
+    assert.deepEqual(pending.checklist, []);
+    assert.equal(pending.checklist_snapshot, null);
+    await h.core.sync();
+    const oldUpload = h.state.uploads.find(row => row.entry.client_id === first.client_id);
+    const newUpload = h.state.uploads.find(row => row.entry.client_id === next.client_id);
+    assert.equal(oldUpload.entry.grant, 'original-grant');
+    assert.deepEqual(oldUpload.entry.checklist, ['dining.a1']);
+    assert.equal(newUpload.entry.grant, 'no-food-checklist-grant');
+    assert.deepEqual(newUpload.entry.checklist, []);
+    const receipts = (await h.core.getState()).receipts;
+    assert.deepEqual(receipts.find(row => row.client_id === first.client_id).checklist_snapshot, original.checklist_snapshot);
+    assert.equal(receipts.find(row => row.client_id === next.client_id).checklist_snapshot, null);
+  });
+}
+
+test('retiring a food checklist does not silently submit an open form from its previous definition', async t => {
+  const h = fixture(t); await h.core.prepare();
+  const p = await h.core.getPoint(input.token);
+  const expected = { user_id: p.identity.id, auth_version: p.identity.auth_version, day: p.day, stage: p.stage,
+    frequency: p.frequency, workflow_mode: p.workflow_mode, period_key: p.period_key, revision: p.revision, slot: 'am' };
+  h.state.manifest.points[0].checklist = null;
+  h.state.manifest.points[0].revision = 'no-food-checklist';
+  await h.core.prepare();
+  await assert.rejects(h.core.enqueue({ ...input, expected }), { code: 'stale' });
+  assert.equal((await h.core.getState()).pending, 0);
+  assert.equal((await h.core.enqueue({ token: input.token })).slot, 'am');
+});

@@ -91,12 +91,17 @@ def hash_device_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def checkin_location_revision(point):
-    """Identify the actual location shown on the confirmation form."""
+def checkin_location_revision(point, *, checklist_digest=None):
+    """Identify the location and server-owned checklist shown at confirmation.
+
+    The optional digest reconstructs an exact retired offline definition; it
+    never comes from a request or changes the point's current checklist.
+    """
     location = (str(point.id), point.code, point.name, str(point.floor), point.category, point.workflow_mode)
     if getattr(point, "inspection_team", "general") == "engineering":
         location += ("engineering",)
-    if revision := checklist_revision(point):
+    revision = checklist_revision(point) if checklist_digest is None else checklist_digest
+    if revision:
         location += ("checklist", revision)
     return hashlib.sha256("\x00".join(location).encode("utf-8")).hexdigest()
 

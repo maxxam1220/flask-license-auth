@@ -18,8 +18,6 @@ def point(name="1F女廁所", *, category="general", floor=1, code="FUTURE-POINT
 @pytest.mark.parametrize("name,floor,key,count", [
     ("1F女廁所", 1, "toilet_v1", 7), ("1.2客梯廁所", -2, "toilet_v1", 7),
     ("新增無障礙廁", 5, "toilet_v1", 7), ("  新設廁所  ", 3, "toilet_v1", 7),
-    ("員工餐廳", 14, "dining_v1", 5), ("餐廳", 14, "dining_v1", 5),
-    ("廚房", 14, "kitchen_v1", 5),
 ])
 def test_existing_and_future_general_points_receive_correct_profile(name, floor, key, count):
     definition = catalog.checklist_for_point(point(name, floor=floor))
@@ -41,12 +39,31 @@ def test_same_name_points_outside_general_never_receive_or_accept_checklist(cate
 
 
 @pytest.mark.parametrize("target", [None, point("停車場"), point("廚餘室"), point("廚房", floor=4),
-    point("餐廳", floor=4), point("員工餐廳", floor="14"), point(None), point(123),
+    point("餐廳", floor=4), point("員工餐廳", floor="14"), point("員工餐廳", floor=14),
+    point("餐廳", floor=14), point("廚房", floor=14), point(None), point(123),
     SimpleNamespace(category="general")])
 def test_unrelated_or_incomplete_points_have_no_checklist(target):
     assert catalog.checklist_for_point(target) is None
     assert catalog.checklist_revision(target) == ""
     assert catalog.validate_checklist(target, []) is None
+
+
+@pytest.mark.parametrize("name,key,item", [
+    ("員工餐廳", "dining_v1", "dining.a1"), ("餐廳", "dining_v1", "dining.a1"),
+    ("廚房", "kitchen_v1", "kitchen.b1"),
+])
+def test_retired_food_definitions_only_validate_previously_signed_snapshots(name, key, item):
+    target = point(name, floor=14)
+    assert catalog.checklist_for_point(target) is None
+    historical = catalog.retired_checklist_for_point(target)
+    assert historical["key"] == key and len(historical["items"]) == 5
+    assert catalog.validate_checklist_definition(historical, [item])["selected"] == [item]
+    assert "selected" not in historical
+    with pytest.raises(ValueError, match="沒有適用的點檢項目"):
+        catalog.validate_checklist(target, [item])
+    for alternative in (point(name, category="safety", floor=14), point(name, floor=4),
+                        point("4M女廁所", floor=14), None):
+        assert catalog.retired_checklist_for_point(alternative) is None
 
 
 @pytest.mark.parametrize("key,expected_ids,expected_codes", [
@@ -125,31 +142,31 @@ def test_even_unrelated_points_require_an_explicit_list(selected):
 
 
 def test_returned_payloads_are_detached_and_json_serializable():
-    target = point("員工餐廳", floor=14)
+    target = point("4M女廁所", floor=14)
     original = catalog.checklist_for_point(target)
     modified = catalog.checklist_for_point(target)
     modified["title"]["vi"] = "changed"
     modified["items"][0]["label"]["id"] = "changed"
     modified["items"].clear()
     assert catalog.checklist_for_point(target) == original
-    snapshot = catalog.validate_checklist(target, ["dining.a3"])
+    snapshot = catalog.validate_checklist(target, ["toilet.soap"])
     assert json.loads(json.dumps(snapshot, ensure_ascii=False)) == snapshot
     snapshot["items"][0]["label"]["zh-Hant"] = "changed snapshot"
     assert catalog.checklist_for_point(target) == original
 
 
 def test_revision_is_deterministic_content_hash_and_tracks_changed_definition(monkeypatch):
-    target = point("餐廳", floor=14)
+    target = point("4M女廁所", floor=14)
     definition = catalog.checklist_for_point(target)
     expected = hashlib.sha256(json.dumps(definition, ensure_ascii=False, sort_keys=True,
                                          separators=(",", ":")).encode("utf-8")).hexdigest()
     assert catalog.checklist_revision(target) == expected
-    assert catalog.checklist_revision(point("員工餐廳", floor=14, code="OTHER")) == expected
+    assert catalog.checklist_revision(point("4M男廁所", floor=14, code="OTHER")) == expected
     assert catalog.checklist_revision(point("廚房", floor=14)) != expected
-    snapshot = catalog.validate_checklist(target, ["dining.a1"])
+    snapshot = catalog.validate_checklist(target, ["toilet.mirror"])
     old_label = snapshot["items"][0]["label"]["vi"]
     translations = deepcopy(catalog._translations())
-    translations["洗手槽(廚餘)"]["vi"] = "Nhãn đã cập nhật"
+    translations["鏡面乾淨"]["vi"] = "Nhãn đã cập nhật"
     monkeypatch.setattr(catalog, "_translations", lambda: translations)
     assert catalog.checklist_revision(target) != expected
     assert snapshot["items"][0]["label"]["vi"] == old_label

@@ -16,7 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from account_roles import role_label
-from checklist_catalog import checklist_for_point, validate_checklist
+from checklist_catalog import (checklist_for_point, retired_checklist_for_point,
+                               validate_checklist, validate_checklist_definition)
 from checklist_records import encode_checklist
 from daily_rounds import daily2_anytime
 from domain import floor_label
@@ -92,16 +93,35 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                     start=point.schedule_start.isoformat())
 
     def settings_match(point, signed, issued):
+        """Return the exact matched settings and any signed retired definition."""
         current = settings(point)
         if current == signed:
-            return True
+            return True, None
         if (not isinstance(signed, dict) or point.category != "general"
                 or {k: v for k, v in current.items() if k != "revision"}
                 != {k: v for k, v in signed.items() if k != "revision"}):
-            return False
+            return False, None
         revision = signed.get("revision")
         if not isinstance(revision, str) or len(revision) != 64 or not revision.isascii():
-            return False
+            return False, None
+        retired = retired_checklist_for_point(point)
+        retired_digest = (hashlib.sha256(json.dumps(retired, ensure_ascii=False,
+            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest() if retired else None)
+
+        def match_revision(snapshot):
+            if hmac.compare_digest(point_revision(snapshot), revision):
+                return True, None
+            if retired_digest and hmac.compare_digest(
+                    point_revision(snapshot, checklist_digest=retired_digest), revision):
+                # This exact old definition was included in the server-signed
+                # grant. Keep its selected answers when uploading an old draft;
+                # a new grant cannot attach arbitrary retired checklist items.
+                return True, retired
+            return False, None
+
+        matched = match_revision(point)
+        if matched[0]:
+            return matched
         # A grant issued before an automatic display-code change still belongs
         # to the same immutable Point.id and QR token. Only reconstruct codes
         # from this server's numbering audit; never trust a code from the phone
@@ -118,33 +138,34 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             AuditLog.created_at >= naive_utc(audit_start),
             AuditLog.created_at <= naive_utc(now())).order_by(AuditLog.id.desc()).limit(257)).all()
         if len(audits) > 256:
-            return False  # Bound exceptional/corrupt audit history; retain entry.
+            return False, None  # Bound exceptional/corrupt audit history; retain entry.
         snapshot = SimpleNamespace(**{column.name: getattr(point, column.name)
                                       for column in Point.__table__.columns})
         for detail in audits:
             if not isinstance(detail, str) or len(detail) > 1_048_576:
-                return False
+                return False, None
             try:
                 audit_plan = json.loads(detail)
             except (ValueError, TypeError, RecursionError):
-                return False
+                return False, None
             changes = audit_plan.get("changes") if isinstance(audit_plan, dict) else None
             if not isinstance(changes, list) or any(not isinstance(change, dict) for change in changes):
-                return False
+                return False, None
             matches = [change for change in changes if change.get("id") == point.id]
             if not matches:
                 continue
             if len(matches) != 1:
-                return False
+                return False, None
             change = matches[0]
             if (change.get("new_code") != snapshot.code or not isinstance(change.get("code"), str)
                     or change.get("name") != point.name or change.get("floor") != point.floor
                     or change.get("active") is not True or change.get("deleted") is not False):
-                return False  # A manual edit or disable breaks the audit chain.
+                return False, None  # A manual edit or disable breaks the audit chain.
             snapshot.code = change["code"]
-            if hmac.compare_digest(point_revision(snapshot), revision):
-                return True
-        return False
+            matched = match_revision(snapshot)
+            if matched[0]:
+                return matched
+        return False, None
 
     def consumed(user, point, day, key, slot, stage):
         if stage == "execute":
@@ -332,8 +353,10 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         if point and point.pending_frequency and point.frequency_effective_date <= local_dt(now()).date():
             db.session.rollback()
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
+        matched_settings, retired_checklist = (settings_match(point, grant["settings"], issued)
+            if point and point.active and point.deleted_at is None else (False, None))
         if (not point or not point.active or point.deleted_at is not None
-                or not settings_match(point, grant["settings"], issued) or point.qr_token != entry["token"]
+                or not matched_settings or point.qr_token != entry["token"]
                 or point.schedule_start > day):
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         stage = stage_for(user, point)
@@ -347,7 +370,10 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         if consumed(user, point, day, key, slot, stage):
             return fail("duplicate", "這個日期／次數已有紀錄，這筆暫存尚未合併或刪除。請核對原紀錄。")
         try:
-            checklist_data = encode_checklist(validate_checklist(point, entry.get("checklist", [])))
+            selected = entry.get("checklist", [])
+            snapshot = (validate_checklist_definition(retired_checklist, selected) if retired_checklist
+                        else validate_checklist(point, selected))
+            checklist_data = encode_checklist(snapshot)
         except ValueError:
             return fail("invalid_checklist", "點檢項目未勾選或已變更，暫存仍保留。請先核對紀錄；需要重新打卡時，請確認移除這筆暫存後到現場重新掃描。")
         first = execution_in_slot(point, key, slot) if point.workflow_mode == "two_stage" else None

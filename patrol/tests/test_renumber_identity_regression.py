@@ -108,8 +108,6 @@ def test_two_signed_rounds_remain_distinct_and_cannot_be_replayed_after_renumber
 
 
 @pytest.mark.parametrize("name,profile,item", [
-    ("員工餐廳", "dining_v1", "dining.a1"),
-    ("廚房", "kitchen_v1", "kitchen.b1"),
     ("4M男廁所-甲", "toilet_v1", "toilet.soap"),
 ])
 def test_renumber_preserves_required_checklist_and_rejects_stale_confirmation(

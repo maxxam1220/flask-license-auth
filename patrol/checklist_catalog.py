@@ -105,11 +105,8 @@ def checklist_for_point(point):
     name = name.strip()
     if "廁" in name:
         return checklist_definition("toilet_v1")
-    if getattr(point, "floor", None) == 14:
-        if name in ("員工餐廳", "餐廳"):
-            return checklist_definition("dining_v1")
-        if name == "廚房":
-            return checklist_definition("kitchen_v1")
+    # Dining/kitchen checklists are retired from new check-ins. Keep their
+    # definitions above so original records and offline snapshots remain readable.
     return None
 
 
@@ -122,11 +119,31 @@ def checklist_revision(point):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def retired_checklist_for_point(point):
+    """Historical food checklist, only for validating previously signed drafts."""
+    if (point is None or getattr(point, "category", None) != "general"
+            or getattr(point, "floor", None) != 14):
+        return None
+    name = getattr(point, "name", "")
+    if not isinstance(name, str):
+        return None
+    name = name.strip()
+    if name in ("員工餐廳", "餐廳"):
+        return checklist_definition("dining_v1")
+    if name == "廚房":
+        return checklist_definition("kitchen_v1")
+    return None
+
+
 def validate_checklist(point, selected):
     """Require at least one checked item; this is not a per-item pass/fail form."""
+    return validate_checklist_definition(checklist_for_point(point), selected)
+
+
+def validate_checklist_definition(definition, selected):
+    """Validate answers against a trusted current or historical definition."""
     if not isinstance(selected, list) or any(not isinstance(value, str) for value in selected):
         raise ChecklistValidationError("點檢項目資料不正確，請重新確認。")
-    definition = checklist_for_point(point)
     if definition is None:
         if selected:
             raise ChecklistValidationError("此巡檢點沒有適用的點檢項目，請重新開啟此點。")
