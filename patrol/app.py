@@ -2341,6 +2341,9 @@ def create_app(config=None):
         code = known_entry[0] if known_entry else raw_code.upper()
         if floor not in {str(value) for value, _ in FLOOR_OPTIONS}:
             abort(400, description="請選擇有效樓層。")
+        toilet_code = (re.fullmatch(r"([A-Z])(B[12]|[1-5]F|[145]M)(M)?-([MW])([0-9]{2})",
+                                   raw_code, flags=re.IGNORECASE | re.ASCII)
+                       if category == "general" and "廁" in name else None)
         if known_entry:
             if category != "general" or int(floor) != known_entry[1]:
                 abort(400, description="清冊中的點位編號須使用原來的總務分類與樓層。")
@@ -2352,9 +2355,19 @@ def create_app(config=None):
                     abort(409, description="此編號保留給原有的直接簽到點。其他點位請使用新的編號。")
         elif point and category == point.category == "general" and raw_code == point.code and int(floor) == point.floor:
             code = point.code
+        elif toilet_code and toilet_code[2].upper() == floor_label(int(floor)):
+            # Building/zone letters precede the floor in toilet labels. Keep
+            # the historical lowercase m suffix distinct from mezzanine floors.
+            code = (toilet_code[1].upper() + toilet_code[2].upper()
+                    + ("m" if toilet_code[3] else "") + "-" + toilet_code[4].upper() + toilet_code[5])
+            duplicate = select(Point.id).where(db.func.lower(Point.code) == code.lower())
+            if point is not None:
+                duplicate = duplicate.where(Point.id != point.id)
+            if db.session.scalar(duplicate.limit(1)) is not None:
+                abort(400, description="點位編號已被使用（含已刪除點位）。請使用不同編號，或至已刪除清單還原。")
         elif (not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code)
               or not code.startswith(floor_label(int(floor)) + "-")):
-            abort(400, description="點位編號請使用如 1F-A01、B1-A01 或 1M-A01 的格式，並與樓層一致。")
+            abort(400, description="點位編號請與樓層一致，例如 B1-A01；總務廁所可用 AB1-M01、BB1-M02 等專用編號。")
         frequencies = ("daily", "daily2", "three_day", "weekly", "monthly", "irregular") if category == "general" else ("daily", "daily2", "three_day", "weekly")
         if not valid_label(name) or frequency not in frequencies:
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")

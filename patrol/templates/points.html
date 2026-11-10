@@ -52,7 +52,7 @@
     {{ inspection_team_choices(selected_inspection_team) }}
     {{ workflow_choices() }}
     <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if selected_floor|string == value|string %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B2-A01、1M-A01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>請使用樓層代碼加編號，或依總務清冊保留原編號與大小寫。{% if general_numbering_enabled %}總務 G 編號儲存後會自動重排，以儲存結果為準。{% endif %}</small></label>
+    <label>點位編號<input name="code" required maxlength="23" placeholder="例如：B1-A01、AB1-M01" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號、廁所專用編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>一般點使用樓層代碼加編號；總務廁所可用 AB1-M01、BB1-M02，編碼樓層須與所選樓層一致。清冊原編號與大小寫保留。{% if general_numbering_enabled %}總務 G 編號儲存後會自動重排，以儲存結果為準。{% endif %}</small></label>
     <label>地點名稱<input name="name" required maxlength="100" placeholder="例如：機房入口"></label>
     <label>巡檢頻率{{ frequency_select('daily') }}<small>每日兩次可於當天任意時間完成，不限間隔。</small></label>
   </div>
@@ -90,7 +90,7 @@
       {{ inspection_team_choices(point.inspection_team) }}
       {{ workflow_choices(point) }}
       <label>樓層<select name="floor" required>{% for value,label in floor_options %}<option value="{{ value }}" {% if point.floor == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號或總務清冊原始編號" autocapitalize="off" spellcheck="false">{% if general_numbering_enabled and point.category == 'general' %}<small>G 編號依樓層與啟用狀態自動排列；廁所等自帶編號保持原樣。</small>{% endif %}</label>
+      <label>點位編號<input name="code" required maxlength="23" value="{{ point.code }}" pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?" title="樓層編號、廁所專用編號或總務清冊原始編號" autocapitalize="off" spellcheck="false"><small>總務廁所可使用 AB1-M01 等專用編號，編碼樓層須與所選樓層一致。{% if general_numbering_enabled and point.category == 'general' %}G 編號依樓層與啟用狀態自動排列；廁所等自帶編號保持原樣。{% endif %}</small></label>
       <label>地點名稱<input name="name" required maxlength="100" value="{{ point.name }}"></label>
       <label>巡檢頻率{{ frequency_select(point.frequency) }}{% if point.pending_frequency and point.frequency_effective_date %}<small>{{ point.frequency_effective_date|localdate }} 起改為{{ frequency(point.pending_frequency) }}；生效前保留目前次數，避免影響今日紀錄。</small>{% endif %}</label>
     </div>

@@ -201,7 +201,14 @@
       }
       const floor = form.elements.namedItem('floor');
       const code = form.elements.namedItem('code');
+      const locationName = form.elements.namedItem('name');
       if (!floor || !code) return;
+      const toiletCode = value => {
+        const match = /^[A-Z](B[12]|[1-5]F|[145]M)(M)?-([MW])([0-9]{2})$/i.exec(value);
+        if (!match) return;
+        return { floor: match[1].toUpperCase(),
+          code: value[0].toUpperCase() + match[1].toUpperCase() + (match[2] ? 'm' : '') + '-' + match[3].toUpperCase() + match[4] };
+      };
       const registeredCode = value => {
         const official = catalogCodes.get(value.toLowerCase());
         if (official) return official;
@@ -221,16 +228,26 @@
           return;
         }
         const prefix = floor.selectedOptions[0]?.textContent.trim().toUpperCase();
+        const toilet = toiletCode(value);
+        if (toilet) {
+          if (form.elements.namedItem('category')?.value !== 'general'
+              || !locationName?.value.includes('\u5ec1') || toilet.floor !== prefix) {
+            code.setCustomValidity(t('廁所編號需對應總務分類、廁所名稱及所選樓層。'));
+          }
+          return;
+        }
         if (!/^[A-Z0-9]+-[A-Z0-9]{2,20}$/i.test(value) || !value.toUpperCase().startsWith(`${prefix}-`)) {
           code.setCustomValidity(t('點位編號需與樓層一致，請使用 {prefix}- 開頭。', { prefix }));
         }
       };
       code.addEventListener('input', validatePoint);
+      locationName?.addEventListener('input', validatePoint);
+      locationName?.addEventListener('change', validatePoint);
       floor.addEventListener('change', validatePoint);
       form.querySelectorAll('input[name=category]').forEach(input => input.addEventListener('change', validatePoint));
       code.addEventListener('blur', () => {
         const value = code.value.trim();
-        code.value = registeredCode(value)?.code || value.toUpperCase();
+        code.value = registeredCode(value)?.code || toiletCode(value)?.code || value.toUpperCase();
         validatePoint();
       });
       validatePoint();
