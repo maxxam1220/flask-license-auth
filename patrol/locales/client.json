@@ -886,5 +886,53 @@
   "本筆未完成": {
     "id": "Check-in ini belum selesai",
     "vi": "Lượt điểm danh này chưa hoàn tất"
+  },
+  "每3日一次": {
+    "id": "1 kali setiap 3 hari",
+    "vi": "1 lần mỗi 3 ngày"
+  },
+  "3日巡檢": {
+    "id": "Pemeriksaan 3 hari",
+    "vi": "Kiểm tra 3 ngày"
+  },
+  "3日巡檢期間": {
+    "id": "Periode pemeriksaan 3 hari",
+    "vi": "Chu kỳ kiểm tra 3 ngày"
+  },
+  "本期3日": {
+    "id": "Periode 3 hari ini",
+    "vi": "Chu kỳ 3 ngày này"
+  },
+  "前3日": {
+    "id": "Periode 3 hari sebelumnya",
+    "vi": "Chu kỳ 3 ngày trước"
+  },
+  "後3日": {
+    "id": "Periode 3 hari berikutnya",
+    "vi": "Chu kỳ 3 ngày sau"
+  },
+  "這兩筆打卡屬於同一個3日區間。": {
+    "id": "Kedua catatan ini berada dalam periode 3 hari yang sama.",
+    "vi": "Hai lượt điểm danh thuộc cùng một chu kỳ 3 ngày."
+  },
+  "在兩階段點執行簽到，也可到指定點位直接簽到。": {
+    "id": "Lakukan check-in pelaksanaan di titik dua tahap, atau check-in langsung di titik yang ditentukan.",
+    "vi": "Điểm danh thực hiện tại điểm hai giai đoạn, hoặc điểm danh trực tiếp tại các điểm được chỉ định."
+  },
+  "查看自己在指定點位的直接簽到時間。": {
+    "id": "Lihat waktu check-in langsung Anda di titik yang ditentukan.",
+    "vi": "Xem giờ điểm danh trực tiếp của bạn tại các điểm được chỉ định."
+  },
+  "在指定點位完成直接簽到後，會在這裡顯示點位及時間。": {
+    "id": "Setelah check-in langsung di titik yang ditentukan, lokasi dan waktunya ditampilkan di sini.",
+    "vi": "Sau khi điểm danh trực tiếp tại điểm được chỉ định, địa điểm và thời gian sẽ hiện ở đây."
+  },
+  "本期仍須由巡檢人員完成巡檢。": {
+    "id": "Petugas pemeriksa tetap harus menyelesaikan pemeriksaan untuk periode ini.",
+    "vi": "Nhân viên kiểm tra vẫn cần hoàn tất kiểm tra trong chu kỳ này."
+  },
+  "直接簽到不取代巡檢。": {
+    "id": "Check-in langsung tidak menggantikan pemeriksaan.",
+    "vi": "Điểm danh trực tiếp không thay thế việc kiểm tra."
   }
 }

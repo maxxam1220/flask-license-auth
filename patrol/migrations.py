@@ -14,10 +14,10 @@ from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstrain
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
 from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
-                    ENGINEERING_TITLE_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
+                    ENGINEERING_TITLE_RULE, EXECUTION_SLOT_RULE, EXECUTOR_VISIT_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 
 
-LATEST_VERSION = 17
+LATEST_VERSION = 18
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -134,6 +134,8 @@ def _upgrade_locked(connection) -> int:
         if current < 17:
             for model in (Inspection, PatrolExecution):
                 _add_missing_columns(connection, model.__tablename__, [model.__table__.c.checklist_data])
+        if current < 18:
+            _upgrade_v17_to_v18(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -334,6 +336,45 @@ def _upgrade_v7_to_v8(connection):
     connection.execute(points.update().where(spot).values(frequency="irregular"))
 
 
+def _frequency_constraint_rules():
+    """Only these three named checks are expanded; rows and indexes stay unchanged."""
+    return (
+        (Point.__tablename__, "patrol_point_pending_frequency", POINT_PENDING_FREQUENCY_RULE,
+         POINT_PENDING_FREQUENCY_RULE.replace(" OR pending_frequency = 'three_day'", "")),
+        (PatrolExecution.__tablename__, "patrol_execution_valid_slot", EXECUTION_SLOT_RULE,
+         EXECUTION_SLOT_RULE.replace(",'three_day'", "")),
+        (Inspection.__tablename__, "patrol_executor_visit_fields", EXECUTOR_VISIT_RULE,
+         EXECUTOR_VISIT_RULE.replace("(frequency = 'irregular' OR frequency = 'three_day')", "frequency = 'irregular'")),
+    )
+
+
+def _normalize_frequency_check(expression):
+    # PostgreSQL reflects IN (...) as = ANY (ARRAY[...]) and adds text casts.
+    value = re.sub(r"::(?:character varying|text)(?:\[\])?", "", str(expression).lower())
+    return re.sub(r"[\s()\[\]]", "", value).replace("=anyarray", "in")
+
+
+def _upgrade_v17_to_v18(connection):
+    """Permit fixed three-day periods without rewriting existing point/history rows."""
+    changes = []
+    for table, name, current, previous in _frequency_constraint_rules():
+        checks = {item["name"]: item["sqltext"] for item in inspect(connection).get_check_constraints(table)}
+        actual = _normalize_frequency_check(checks.get(name, ""))
+        if actual == _normalize_frequency_check(current):
+            continue  # Earlier upgrade steps can already create the new check.
+        if actual != _normalize_frequency_check(previous):
+            raise SchemaMigrationError(f"Unexpected frequency constraint: {name}; no checks were replaced.")
+        changes.append((table, name, current))
+    quote = connection.dialect.identifier_preparer.quote
+    for table, name, expression in changes:
+        if connection.dialect.name == "postgresql":
+            connection.exec_driver_sql(f"ALTER TABLE {quote(table)} DROP CONSTRAINT {quote(name)}")
+            connection.exec_driver_sql(f"ALTER TABLE {quote(table)} ADD CONSTRAINT {quote(name)} CHECK ({expression})")
+        else:
+            _sqlite_rebuild(connection, table, [], new_constraints=[CheckConstraint(expression, name=name)],
+                            replace_checks={name})
+
+
 def _compact(expression):
     return re.sub(r"\s+", "", expression).strip("()").lower()
 
@@ -436,6 +477,10 @@ def _sqlite_rebuild(connection, table_name, new_columns, *, replace_floor=False,
 
 def _validate_current(connection):
     inspector = inspect(connection)
+    for table, name, expected, _ in _frequency_constraint_rules():
+        checks = {item["name"]: item["sqltext"] for item in inspector.get_check_constraints(table)}
+        if _normalize_frequency_check(checks.get(name, "")) != _normalize_frequency_check(expected):
+            raise SchemaMigrationError(f"The frequency validation constraint is missing or invalid: {name}.")
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
                                    "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked,

@@ -126,5 +126,5 @@ def can_read_inspection(user, record):
         # The immutable role-at-submission marker distinguishes a direct visit
         # from receipts this same account submitted as an inspector in the past.
         return (record.executor_visit and record.category == "general" and
-                record.workflow_mode == "spot" and record.frequency == "irregular")
+                record.workflow_mode == "spot" and record.frequency in ("irregular", "three_day"))
     return user.role == "inspector"

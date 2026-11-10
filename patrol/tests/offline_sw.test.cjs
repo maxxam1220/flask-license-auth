@@ -88,6 +88,7 @@ test('versioned checklist script reads the current cached asset offline without 
   assert.equal(await (await w.fetchPage('/static/offline.js?v=ios-audio-1', { mode: 'cors' })).text(), 'asset');
   assert.equal(await (await w.fetchPage('/static/patrol-voice.js?v=ios-audio-1', { mode: 'cors' })).text(), 'asset');
   assert.equal(await (await w.fetchPage('/static/offline.js?v=ios-audio-2', { mode: 'cors' })).text(), 'asset');
+  assert.equal(await (await w.fetchPage('/static/offline.js?v=three-day-1', { mode: 'cors' })).text(), 'asset');
   assert.equal(await (await w.fetchPage('/static/patrol-voice.js?v=ios-audio-2', { mode: 'cors' })).text(), 'asset');
   assert.equal(await (await w.fetchPage('/static/offline.css?v=ios-audio-2', { mode: 'cors' })).text(), 'asset');
   assert.equal(w.requests.length, before);

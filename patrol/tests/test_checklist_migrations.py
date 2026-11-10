@@ -91,7 +91,7 @@ def test_v17_adds_only_two_empty_columns_and_preserves_all_history_and_hashes(en
         statements.append(statement)
     event.listen(engine, "before_cursor_execute", capture)
     try:
-        assert upgrade_schema(engine) == LATEST_VERSION == 17
+        assert upgrade_schema(engine) == LATEST_VERSION
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     assert not any(s.lstrip().upper().startswith(("DROP ", "DELETE ", "UPDATE ")) for s in statements)
@@ -134,7 +134,7 @@ def test_v17_migration_repeat_keeps_new_snapshots_and_does_not_rewrite_old_recei
         assert snapshot(connection, v16) == before
         assert connection.scalar(select(PatrolExecution.checklist_data).where(PatrolExecution.id == 51)) == values[0]
         assert connection.scalar(select(Inspection.checklist_data).where(Inspection.id == 61)) == values[1]
-        assert connection.scalar(select(func.count()).where(SchemaVersion.version == 17)) == 1
+        assert connection.scalar(select(func.count()).where(SchemaVersion.version == LATEST_VERSION)) == 1
 
 
 def test_v17_failure_rolls_back_both_columns_version_and_all_data(engine, v16, monkeypatch):

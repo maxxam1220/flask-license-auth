@@ -31,7 +31,7 @@
     <span class="point-code">{{ point_code(record) }}</span><h2>{{ point_name(record) }}</h2>
     {% if can_filter_inspection_team %}<div><span>負責單位</span><strong>{{ point_team_label(record) }}</strong></div>{% endif %}
     <div><span>{{ '簽到人員' if visit else '執行人員' if executed else '巡檢人員' }}</span><strong>{{ reporter_name(record) }}</strong></div>
-    {% if long_period %}<div class="receipt-period"><span>{{ '週巡' if record.frequency == 'weekly' else '月巡' }}期間</span><strong><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></strong></div>{% endif %}
+    {% if long_period %}<div class="receipt-period"><span>{{ '3日巡檢' if record.frequency == 'three_day' else '週巡' if record.frequency == 'weekly' else '月巡' }}期間</span><strong><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></strong></div>{% endif %}
     {% if record.frequency == 'daily2' %}<div><span>巡檢次數</span><strong>{{ slot_label(record.slot) }}</strong></div>{% endif %}
     <div><span>{{ '手機記錄時間' if record.offline_submission else '執行時間' if executed else '打卡時間' }}</span><strong>{{ record.created_at|localtime }}</strong></div>
     {% if record.offline_submission %}<div><span>離線補傳收件</span><strong>{{ record.offline_submission.received_at|localtime }}</strong></div>{% endif %}

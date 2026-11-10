@@ -127,8 +127,8 @@ def period_for(point, instant):
 
 
 def handoff_period(frequency, period_key):
-    """Describe the saved weekly/monthly first stage, including on historical receipts."""
-    if frequency not in ("weekly", "monthly"):
+    """Describe a saved multi-day period, including on historical receipts."""
+    if frequency not in ("three_day", "weekly", "monthly"):
         return None
     deadline = execution_deadline(frequency, period_key, "any")
     if deadline is None:
@@ -147,12 +147,12 @@ def slot_label(slot):
 
 
 def frequency_label(frequency):
-    return {"daily": "每日一次", "daily2": "每日兩次", "weekly": "每週一次", "monthly": "每月一次",
+    return {"daily": "每日一次", "daily2": "每日兩次", "three_day": "每3日一次", "weekly": "每週一次", "monthly": "每月一次",
             "irregular": "不定期"}.get(frequency, frequency)
 
 
 def progress_view(frequency):
-    return frequency if frequency in ("weekly", "monthly") else "daily"
+    return frequency if frequency in ("three_day", "weekly", "monthly") else "daily"
 
 
 def normalise_return_to(value, user):
@@ -194,7 +194,7 @@ def normalise_return_to(value, user):
                 return None
             elif key == "stage" and item not in ("execution", "inspection"):
                 return None
-            elif key == "frequency" and item not in ("daily", "daily2", "weekly", "monthly", "irregular", "daily_all"):
+            elif key == "frequency" and item not in ("daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
                 return None
             elif key == "status" and item not in ("open", "resolved", "all"):
                 return None
@@ -665,7 +665,7 @@ def create_app(config=None):
 
     def executor_can_scan(point):
         return point.category == "general" and (point.workflow_mode == "two_stage" or
-                (point.workflow_mode == "spot" and point.frequency == "irregular" and
+                (point.workflow_mode == "spot" and point.frequency in ("irregular", "three_day") and
                  point.code in app.config["EXECUTOR_VISIT_CODES"] and
                  registered_visit_owners().get(point.code, point.id) == point.id))
 
@@ -723,7 +723,7 @@ def create_app(config=None):
         if g.user.role == "executor":
             return query.where(Inspection.user_id == g.user.id, Inspection.category == "general",
                                Inspection.executor_visit.is_(True), Inspection.workflow_mode == "spot",
-                               Inspection.frequency == "irregular")
+                               Inspection.frequency.in_(("irregular", "three_day")))
         return query.where(Inspection.user_id == g.user.id, Inspection.category == scope)
 
     def historical_points(scope):
@@ -900,14 +900,14 @@ def create_app(config=None):
             points = db.session.scalars(scoped_query(query).options(selectinload(Point.schedules)).order_by(*point_order())).all()
         ready_points = ready_patrol_points(points, g.user, local_now, floor, category)
         if simple_executor:
-            visits = [point for point in points if point.frequency == "irregular"
+            visits = [point for point in points if point.frequency in ("irregular", "three_day")
                       and point.workflow_mode == "spot" and executor_can_scan(point)]
             if visits:
                 completed = set(db.session.scalars(select(Inspection.point_id).where(
                     Inspection.point_id.in_([point.id for point in visits]), Inspection.user_id == g.user.id,
                     Inspection.personal_day == local_now.date())))
                 ready_points.extend(dict(id=point.id, floor=point.floor, code=point.code, name=point.name,
-                                         frequency=point.frequency, period_end=local_now.date(),
+                                         frequency=point.frequency, period_end=period_bounds(local_now.date(), point.frequency)[1],
                                          status_key="visit", status_label="可直接簽到")
                                     for point in visits if point.id not in completed)
                 ready_points.sort(key=lambda row: (FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)), row["code"]))
@@ -962,7 +962,7 @@ def create_app(config=None):
                 Inspection.point_floor, Inspection.workflow_mode),
                 order_by=(Inspection.created_at.desc(), Inspection.id.desc())).label("personal")
         ).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies),
-                Inspection.legacy_unscheduled.is_(False))
+                Inspection.legacy_unscheduled.is_(False), Inspection.executor_visit.is_(False))
         completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
         ranked = completion_query.subquery()
         wanted = ranked.c.first == 1
@@ -985,7 +985,7 @@ def create_app(config=None):
         cards, floors = [], [{"floor": f, "label": label, "total": 0, "done": 0} for f, label in FLOOR_OPTIONS]
         irregular_points = []
         floor_counts = {item["floor"]: item for item in floors}
-        period_label = f"{period_day:%Y/%m}" if view == "monthly" else (f"{period_day:%m/%d} – {period_end:%m/%d}" if view == "weekly" else selected.isoformat())
+        period_label = f"{period_day:%Y/%m}" if view == "monthly" else (f"{period_day:%m/%d} – {period_end:%m/%d}" if view in ("three_day", "weekly") else selected.isoformat())
         for point in points:
             point_records = found.get(point.id, [])
             schedule = next((s for s in reversed(point.schedules) if s.effective_date <= reference_day), None)
@@ -993,7 +993,7 @@ def create_app(config=None):
             frequency, active, category = settings["frequency"], settings["active"], settings["category"]
             scheduled_floor, scheduled_code, scheduled_name = settings["floor"], settings["code"], settings["name"]
             mode, legacy_unscheduled = settings["workflow_mode"], settings["legacy_unscheduled"]
-            direct_visit = (executor and mode == "spot" and frequency == "irregular" and not legacy_unscheduled
+            direct_visit = (executor and mode == "spot" and frequency in ("irregular", "three_day") and not legacy_unscheduled
                             and point.code == scheduled_code and point.workflow_mode == "spot" and executor_can_scan(point))
             if ((frequency == "irregular" or legacy_unscheduled) and (schedule or not point.schedules) and active
                     and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
@@ -1010,7 +1010,7 @@ def create_app(config=None):
                 groups.setdefault((record.frequency, record.category, record.point_floor, record.workflow_mode), {})[record.slot] = record
             for group, records_by_slot in groups.items():
                 group_frequency, group_category, group_floor, group_mode = group
-                if (category_filter and category_filter != group_category) or (executor and group_mode != "two_stage"):
+                if (category_filter and category_filter != group_category) or (executor and group_mode != "two_stage" and not direct_visit):
                     continue
                 planned = planned_slots.get(group, {})
                 slot_keys = ("am", "pm") if group_frequency == "daily2" else ("any",)
@@ -1193,7 +1193,7 @@ def create_app(config=None):
                 return "visit", executor_can_scan(point), ""
             return "inspect", g.user.role in ("inspector", "admin"), ""
         if g.user.role == "executor":
-            period = "本週期" if point.frequency in ("weekly", "monthly") else "本次"
+            period = "本週期" if point.frequency in ("three_day", "weekly", "monthly") else "本次"
             return "execute", first is None, f"{period}已登記執行，不需重複簽到。" if first else ""
         if g.user.role != "inspector" or patrol_scope(g.user) != "general":
             return "inspect", False, "系統管理員僅可管理此點，兩段打卡須由對應角色完成。"
@@ -1290,7 +1290,7 @@ def create_app(config=None):
                 existing = {"created_at": None, "user_name": "你今天已在此點登記"}
             else:
                 existing = {"created_at": existing.created_at, "user": {"display_name": "其他巡檢人員"}}
-        label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("weekly", "monthly") else key
+        label = f"{local_dt(start):%m/%d} – {local_dt(end - timedelta(seconds=1)):%m/%d}" if point.frequency in ("three_day", "weekly", "monthly") else key
         binding_state = device_status()
         waiting_for_execution = point.workflow_mode == "two_stage" and g.user.role == "inspector" and not first and not existing
         result_kind = ("not_saved" if error else "already_recorded" if existing or (stage == "execute" and first) else
@@ -1305,8 +1305,8 @@ def create_app(config=None):
                                stage=stage, can_confirm=allowed and not existing, stage_notice=t(notice), receipt_url=receipt_url,
                                waiting_for_execution=waiting_for_execution,
                                previous_period=previous_period, draft_day=report_day, draft_slot=report_slot,
-                               long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" else None,
-                               first_reviewed=bool(first and point.frequency in ("weekly", "monthly") and execution_reviewed(first)),
+                               long_period=handoff_period(point.frequency, key) if point.workflow_mode == "two_stage" or point.frequency == "three_day" else None,
+                               first_reviewed=bool(first and point.frequency in ("three_day", "weekly", "monthly") and execution_reviewed(first)),
                                execution_time=first.created_at if first else None, checkin_execution=first,
                                personal_day=day.isoformat(),
                                flexible_daily2=flexible_daily2,
@@ -1424,7 +1424,7 @@ def create_app(config=None):
                 return form_error("直接簽到不接受備註或照片。")
             return form_error("執行登記不接受巡檢回報內容；備註、照片及異常請於巡檢階段填寫。")
         own_execution = stage == "execute" and first is not None and first.user_id == g.user.id
-        requires_day = flexible_daily2 or (mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("weekly", "monthly")))
+        requires_day = flexible_daily2 or (mode in ("spot", "two_stage") and (confirmed_day is not None or point.frequency in ("three_day", "weekly", "monthly")))
         if requires_day and confirmed_day != day.isoformat():
             # A delayed retry may read the actor's original shared execution
             # receipt. A stale form must never create a new day's attendance.
@@ -1542,7 +1542,7 @@ def create_app(config=None):
         return render_template("checkin_success.html", record=record, stage="visit" if record.executor_visit else "inspect", finalized=True,
                                voice_result=receipt_voice_marker(record, "inspection", "saved_visit" if record.executor_visit else "saved_inspect"),
                                flexible_daily2=record.frequency == "daily2" and daily2_anytime(record.period_key),
-                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
+                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" or record.frequency == "three_day" else None,
                                back_url=normalise_return_to(request.args.get("return_to"), g.user) or url_for("records", stage="inspection"),
                                progress_url=url_for("dashboard", view=progress_view(record.frequency),
                                                     date=record.period_key, floor=record.point_floor, category=record.category),
@@ -1573,7 +1573,7 @@ def create_app(config=None):
         source = request.form.get("return_to") if request.method == "POST" else request.args.get("return_to")
         back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
         return render_template("record_detail.html", record=record, issue_form_error=error,
-                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" else None,
+                               long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" or record.frequency == "three_day" else None,
                                issue_action_note=request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n"),
                                issue_version=issue_version(record.issue),
                                can_manage_issue=can_resolve_issue(g.user, record),
@@ -1969,7 +1969,7 @@ def create_app(config=None):
             # Attendance-only visits have no inspection outcome.
             query = query.where(Inspection.executor_visit.is_(False), Inspection.is_abnormal.is_(abnormal == "1"))
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "weekly", "monthly", "irregular", "daily_all"):
+        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         if frequency == "daily_all":
             query = query.where(model.frequency.in_(("daily", "daily2")))
@@ -2160,7 +2160,7 @@ def create_app(config=None):
             abort(400, description="請選擇正確的應完成日期範圍，最多可查詢 367 天。")
         floor, category = scope_filters()
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "weekly", "monthly", "irregular", "daily_all"):
+        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         # Read historical schedules, not the point's current classification.
         filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
@@ -2169,11 +2169,11 @@ def create_app(config=None):
             return [], filters
         scope = patrol_scope(g.user)
         points = historical_points(scope)
-        first_period = min(begin.replace(day=1), begin - timedelta(days=begin.weekday()))
+        first_period = min(begin.replace(day=1), begin - timedelta(days=begin.weekday()), period_bounds(begin, "three_day")[0])
         completion_query = select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot,
                                   Inspection.workflow_mode).distinct().where(Inspection.period_key >= first_period.isoformat(),
                                       Inspection.period_key <= end.isoformat(), Inspection.legacy_unscheduled.is_(False),
-                                      Inspection.frequency != "irregular")
+                                      Inspection.frequency != "irregular", Inspection.executor_visit.is_(False))
         completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
         completions = db.session.execute(completion_query).all()
         executions = []
@@ -2293,13 +2293,13 @@ def create_app(config=None):
                 # These codes grant executor access. Only the original point can
                 # recover a reserved code after an administrator renames it.
                 if point is None or point.id != registered_visit_owners().get(code):
-                    abort(409, description="此編號保留給原有的不定期簽到點。其他點位請使用新的編號。")
+                    abort(409, description="此編號保留給原有的直接簽到點。其他點位請使用新的編號。")
         elif point and category == point.category == "general" and raw_code == point.code and int(floor) == point.floor:
             code = point.code
         elif (not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code)
               or not code.startswith(floor_label(int(floor)) + "-")):
             abort(400, description="點位編號請使用如 1F-A01、B1-A01 或 1M-A01 的格式，並與樓層一致。")
-        frequencies = ("daily", "daily2", "weekly", "monthly", "irregular") if category == "general" else ("daily", "daily2", "weekly")
+        frequencies = ("daily", "daily2", "three_day", "weekly", "monthly", "irregular") if category == "general" else ("daily", "daily2", "three_day", "weekly")
         if not valid_label(name) or frequency not in frequencies:
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")
         if category not in ("safety", "general") and not (point and point.category == category == "uncategorized"):

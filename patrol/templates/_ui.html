@@ -33,7 +33,7 @@
 {% macro inspection_team_chip(selected='', enabled=false) -%}
 {% if enabled and selected %}<span class="query-chip"><span class="query-chip-label">負責單位</span><span class="query-chip-value">{{ '工務' if selected == 'engineering' else '總務' }}</span></span>{% endif %}
 {%- endmacro %}
-{% macro frequency(value) %}{{ t({'daily':'每日一次','daily2':'每日兩次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(value, value)) }}{% endmacro %}
+{% macro frequency(value) %}{{ t({'daily':'每日一次','daily2':'每日兩次','three_day':'每3日一次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(value, value)) }}{% endmacro %}
 {% macro status(value) %}<span class="badge badge-{{ value }}">{% if value == 'approved' %}{{ t('已核准') }}{% elif value == 'pending' %}{{ t('待審核') }}{% elif value == 'revoked' %}{{ t('已解除') }}{% elif value == 'rejected' %}{{ t('未核准') }}{% elif value == 'done' %}{{ t('已完成') }}{% elif value == 'not_due' %}{{ t('不需巡檢') }}{% else %}{{ t('尚未綁定') }}{% endif %}</span>{% endmacro %}
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ t(title) }}</h3><p>{{ t(description) }}</p></div>{% endmacro %}
 

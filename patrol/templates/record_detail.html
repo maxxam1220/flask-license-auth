@@ -36,7 +36,7 @@
     {% if record.workflow_mode == 'spot' %}<div><span>作業方式</span><strong>單段巡檢</strong></div>{% endif %}
     <div><span>巡檢頻率</span><strong>{{ frequency(record.frequency) }}</strong></div>
     {% if long_period %}
-      <div><span>{{ '週巡期間' if record.frequency == 'weekly' else '月巡期間' }}</span><strong>{{ long_period.start|localdate }} 至 {{ long_period.end|localdate }}</strong></div>
+      <div><span>{{ '3日巡檢期間' if record.frequency == 'three_day' else '週巡期間' if record.frequency == 'weekly' else '月巡期間' }}</span><strong>{{ long_period.start|localdate }} 至 {{ long_period.end|localdate }}</strong></div>
     {% else %}
       <div><span>{{ '巡檢次數' if record.frequency == 'daily2' else '巡檢時間' }}</span><strong>{{ slot_label(record.slot) if record.frequency == 'daily2' else '不限時段' }}</strong></div>
     {% endif %}
@@ -47,7 +47,7 @@
 {% set execution_checklist = checklist_snapshot(record.execution) if record.execution else none %}
 {% if record_checklist or execution_checklist %}<div class="{{ 'checklist-history-pair spaced' if record_checklist and execution_checklist else 'spaced' }}">{{ checklist_summary(execution_checklist, 'execute') }}{{ checklist_summary(record_checklist) }}</div>{% endif %}
 {% endif %}
-{% if record.execution %}<section class="panel spaced"><div class="section-heading"><div><h2>兩階段作業紀錄</h2><p>{{ '這兩筆打卡屬於同一週。' if long_period and record.frequency == 'weekly' else '這兩筆打卡屬於同一個月。' if long_period else '這筆巡檢對應的執行簽到。' }}</p></div></div><ol class="stage-trail"><li><span>1</span><div><strong>執行簽到 · {{ record.execution.user_name }}</strong><small>{{ record.execution.created_at|localtime }}{% if record.execution.offline_submission %}（手機記錄）<br>補傳收件 {{ record.execution.offline_submission.received_at|localtime }}{% endif %}</small></div></li><li><span>2</span><div><strong>完成巡檢 · {{ reporter_name(record) }}</strong><small>{{ record.created_at|localtime }}{% if record.offline_submission %}（手機記錄）<br>補傳收件 {{ record.offline_submission.received_at|localtime }}{% endif %}</small></div></li></ol></section>{% endif %}
+{% if record.execution %}<section class="panel spaced"><div class="section-heading"><div><h2>兩階段作業紀錄</h2><p>{{ '這兩筆打卡屬於同一個3日區間。' if long_period and record.frequency == 'three_day' else '這兩筆打卡屬於同一週。' if long_period and record.frequency == 'weekly' else '這兩筆打卡屬於同一個月。' if long_period else '這筆巡檢對應的執行簽到。' }}</p></div></div><ol class="stage-trail"><li><span>1</span><div><strong>執行簽到 · {{ record.execution.user_name }}</strong><small>{{ record.execution.created_at|localtime }}{% if record.execution.offline_submission %}（手機記錄）<br>補傳收件 {{ record.execution.offline_submission.received_at|localtime }}{% endif %}</small></div></li><li><span>2</span><div><strong>完成巡檢 · {{ reporter_name(record) }}</strong><small>{{ record.created_at|localtime }}{% if record.offline_submission %}（手機記錄）<br>補傳收件 {{ record.offline_submission.received_at|localtime }}{% endif %}</small></div></li></ol></section>{% endif %}
 {% if current_issue_state %}<div class="issue-comparison spaced" aria-label="{{ t('異常處理前後對照') }}">{% endif %}
 <section class="panel {{ '' if current_issue_state else 'spaced' }} field-report" aria-labelledby="field-report-title">
   <div class="section-heading"><div><h2 id="field-report-title">{{ t('處理前 · 原始回報') if current_issue_state else '現場回報' }}</h2>{% if current_issue_state %}<p>{{ reporter_name(record) }} · {{ record.created_at|localtime }}</p>{% endif %}</div></div>

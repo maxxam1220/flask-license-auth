@@ -665,7 +665,7 @@
         if (!eligible) voice('point_unavailable', `scan:${Date.now()}:${++voiceSequence}`);
       }
       text('point-code', displayed?.code || t('尚未取得點位')); text('point-name', displayed ? pointName(displayed.name, displayed.name_i18n) : t('請連線登入並準備今日離線資料。'));
-      text('point-meta', point ? `${point.floor} · ${point.frequency === 'daily2' ? t('每日兩次') : point.frequency === 'weekly' ? t('每週一次') : point.frequency === 'monthly' ? t('每月一次') : point.frequency === 'irregular' ? t('不定期') : t('每日一次')}` : '');
+      text('point-meta', point ? `${point.floor} · ${point.frequency === 'daily2' ? t('每日兩次') : point.frequency === 'three_day' ? t('每3日一次') : point.frequency === 'weekly' ? t('每週一次') : point.frequency === 'monthly' ? t('每月一次') : point.frequency === 'irregular' ? t('不定期') : t('每日一次')}` : '');
       text('point-stage', point ? stageText(point.stage) : '');
       const roundLabel = displayed ? eligible ? `${slotText(expected.slot)} · ${expected.day}` : !unchanged ? t('點位或日期已變更，請重新掃描') : t('本次已完成、已暫存或已到期，請重新掃描確認') : '';
       text('point-round', roundLabel);

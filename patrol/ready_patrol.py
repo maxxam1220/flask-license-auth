@@ -14,7 +14,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
     today = local_now.date()
     executor = user.role == "executor"
     current_half = "am" if local_now.hour < 12 else "pm"
-    period_ranges = {frequency: period_bounds(today, frequency) for frequency in ("daily", "daily2", "weekly", "monthly")}
+    period_ranges = {frequency: period_bounds(today, frequency) for frequency in ("daily", "daily2", "three_day", "weekly", "monthly")}
     candidates = {}
     for point in points:
         # historical_points() can include a former team's redacted point.
@@ -26,7 +26,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter):
             continue
         if point.frequency == "irregular" or (executor and point.workflow_mode != "two_stage"):
             continue
-        view = point.frequency if point.frequency in ("monthly", "weekly") else "daily"
+        view = point.frequency if point.frequency in ("three_day", "monthly", "weekly") else "daily"
         anytime = point.frequency == "daily2" and daily2_anytime(today)
         current_slot = current_half if point.frequency == "daily2" else "any"
         for plan, slot, deadline in slot_plans(point, today, schedule_timeline(point), view=view):

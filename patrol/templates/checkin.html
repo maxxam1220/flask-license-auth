@@ -23,16 +23,16 @@
     <p class="checkin-location">{{ point.name }}</p>
     <p class="checkin-place">{{ floor_label(point.floor) }}{% if can_filter_inspection_team %} · {{ point_team_label(point) }}{% endif %}</p>
     {% if existing %}
-      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if daily2_existing_daily_record %}本人今日已有完成紀錄{% elif flexible_daily2 %}{{ '本人今日兩次皆完成' if personal else '此點今日兩次皆完成' }}{% elif long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成巡檢{% elif personal %}本人已完成{{ '本次' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本次' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
+      <div class="checkin-result-note">{{ icon('circle-check') }}<div><strong>{% if daily2_existing_daily_record %}本人今日已有完成紀錄{% elif flexible_daily2 %}{{ '本人今日兩次皆完成' if personal else '此點今日兩次皆完成' }}{% elif long_period and personal and existing.created_at %}本人已於 {{ existing.created_at|localdate }} 完成{{ '直接簽到' if visit else '巡檢' }}{% elif personal %}本人已完成{{ '本次' if point.frequency == 'daily2' else '今天的' }}{{ '直接簽到' if visit else '巡檢' }}{% else %}{{ '本次' if point.frequency == 'daily2' else '本日' if point.frequency == 'daily' else '本期3日' if point.frequency == 'three_day' else '本月' if point.frequency == 'monthly' else '本週' }}已完成，不必重複打卡{% endif %}</strong><p>{{ reporter_name(existing) if existing.user_id is defined else existing.user_name or existing.user.display_name }}{% if existing.created_at %} · {{ existing.created_at|localtime }}{% endif %}</p></div></div>
     {% endif %}
     {% if form_error and waiting_for_execution %}<div class="flash flash-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<span>{{ form_error }}</span></div>{% endif %}
     {% if previous_period and (note or is_abnormal) and (waiting_for_execution or can_confirm) %}
     <div class="flash flash-warning" role="status"><span>草稿來自 {{ previous_period }}。請核對現場狀況與本次打卡，再確認送出。照片需重新選擇。</span></div>
     {% endif %}
     {% if long_period %}
-    <dl class="period-handoff" aria-label="本次兩階段巡檢期間">
-      <div><dt>{{ '週巡' if point.frequency == 'weekly' else '月巡' }}期間</dt><dd><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></dd></div>
-      <div><dt>執行簽到</dt><dd>{{ execution_time|localtime if execution_time else '本期尚未簽到' }}</dd></div>
+    <dl class="period-handoff" aria-label="本次巡檢期間">
+      <div><dt>{{ '3日巡檢' if point.frequency == 'three_day' else '週巡' if point.frequency == 'weekly' else '月巡' }}期間</dt><dd><time datetime="{{ long_period.start }}">{{ long_period.start }}</time> 至 <time datetime="{{ long_period.end }}">{{ long_period.end }}</time></dd></div>
+      {% if paired %}<div><dt>執行簽到</dt><dd>{{ execution_time|localtime if execution_time else '本期尚未簽到' }}</dd></div>{% endif %}
     </dl>
     {% endif %}
     {% if can_confirm and not existing and point.active and device_state == 'approved' %}
@@ -76,13 +76,13 @@
     </div>
     {% endif %}
     {{ voice_controls() }}
-    {% if long_period %}
+    {% if long_period and paired %}
     {% if first_reviewed %}
-    <div class="workflow-guide"><strong>{{ '本週' if point.frequency == 'weekly' else '本月' }}已有人完成巡檢</strong><p>{% if can_confirm and not execute %}你仍可登記 {{ personal_day }} 的本人巡檢。{% elif execute %}兩個階段均已完成，本期不需再次執行簽到。{% else %}本期團隊巡檢已達標。{% endif %}</p></div>
+    <div class="workflow-guide"><strong>{{ '本期3日' if point.frequency == 'three_day' else '本週' if point.frequency == 'weekly' else '本月' }}已有人完成巡檢</strong><p>{% if can_confirm and not execute %}你仍可登記 {{ personal_day }} 的本人巡檢。{% elif execute %}兩個階段均已完成，本期不需再次執行簽到。{% else %}本期團隊巡檢已達標。{% endif %}</p></div>
     {% elif execution_time or execute %}<div class="workflow-guide"><strong>{{ '第一階段已完成' if execution_time else '本期執行一次即可' }}</strong><p>{% if execution_time %}對應巡檢人員可在 {{ long_period.end }} 當日結束前掃碼巡檢，跨日仍可接續。{% else %}總務執行人員簽到後，巡檢員可於本期內的其他日期掃碼完成第二階段。{% endif %}</p></div>{% endif %}
     {% elif paired %}
     <div class="workflow-guide"><strong>{{ '每次巡檢皆須對應執行簽到' if point.frequency == 'daily2' else '先執行，再巡檢' }}</strong><p>{% if point.frequency == 'daily2' %}{{ current_slot_label }}：{% endif %}{% if execution_time %}已於 {{ execution_time|localtime }} 執行簽到。{% else %}請由總務執行人員先至現場簽到。{% endif %}{% if flexible_daily2 %}兩次執行可先完成，巡檢員之後再分別巡檢，無須間隔。{% endif %}對應巡檢人員可各自掃描同一張 QR Code，留下本人的巡檢紀錄。</p></div>
-    {% elif visit %}<div class="workflow-guide"><strong>不定期直接簽到</strong><p>到場後即可記錄人員、點位及時間。此點不列入漏打。</p></div>
+    {% elif visit %}<div class="workflow-guide"><strong>直接簽到</strong><p>到場後即可記錄人員、點位及時間。{{ '此點不列入漏打。' if point.frequency == 'irregular' else '本期仍須由巡檢人員完成巡檢。' }}</p></div>
     {% elif spot %}<div class="workflow-guide"><strong>單段巡檢</strong><p>{% if point.frequency == 'daily2' %}{% if flexible_daily2 %}每日可隨時巡檢兩次，無須間隔。{% endif %}無須執行人員先簽到，每次有一人巡檢即達標。{% else %}巡檢人員可各自直接打卡。{{ '此點不列入漏打。' if point.frequency == 'irregular' else '本期只要有人完成，即達成團隊進度。' }}{% endif %}</p></div>{% endif %}
     {% if point_open_issue_count %}<div class="checkin-issue-notice">{{ open_issue_badge(point_open_issue_count, url_for('issues', point_id=point.id, date_from='', date_to='') if is_patrol_admin or can_view_general_team else '') }}<p>此點位仍有未結案異常。完成本次打卡不會自動結案。</p>{% if current_user.role == 'inspector' and not can_view_general_team %}<a class="point-own-issues-link" href="{{ url_for('issues', point_id=point.id, date_from='', date_to='') }}">查看我在此點的異常 {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
     {% if personal %}<p class="checkin-personal-rule">{{ '每人每點每天可登記兩次，不限時間與間隔。' if flexible_daily2 else '每日兩次，每次可登記一筆。' if point.frequency == 'daily2' else '每人每點每天可登記一次。' }}其他人的紀錄不影響本人的打卡。</p>{% endif %}

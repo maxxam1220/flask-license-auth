@@ -14,7 +14,7 @@ EXECUTION_STATUS_LABELS = {"done": "已巡檢", "pending": "待巡檢", "expired
 
 def execution_deadline(frequency, period_key, slot):
     """Return the original Taipei slot's exclusive deadline, or None for an invalid snapshot."""
-    if frequency not in ("daily", "daily2", "weekly", "monthly", "irregular"):
+    if frequency not in ("daily", "daily2", "three_day", "weekly", "monthly", "irregular"):
         return None
     if slot not in (("am", "pm") if frequency == "daily2" else ("any",)):
         return None

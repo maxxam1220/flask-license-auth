@@ -9,7 +9,7 @@
     {% if form_error %}<div class="flash flash-error" role="alert" tabindex="-1" data-error-focus>{{ icon('alert') }}<span>{{ t(form_error) }}</span></div>{% endif %}
     {% if can_confirm and not existing and point.active and device_state == 'approved' %}
       <div class="checkin-quick-action">
-        <p>{{ t(current_slot_label) if point.frequency == 'daily2' else t({'daily':'每日一次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(point.frequency,point.frequency)) }}</p>
+        <p>{{ t(current_slot_label) if point.frequency == 'daily2' else t({'daily':'每日一次','three_day':'每3日一次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(point.frequency,point.frequency)) }}</p>
         <button class="button button-primary button-full button-large" type="submit" form="inspection-form" data-loading-text="{{ t('正在儲存簽到…') }}" {% if checkin_checklist|default(none) and not checkin_selected|default([]) %}disabled data-checklist-disabled="true"{% endif %}>{{ icon('check') }}<strong class="checkin-ok" lang="en">OK</strong><span>{{ t('確認簽到') }}</span></button>
         {% if checkin_checklist|default(none) %}{{ checklist_prompt() }}{% endif %}
         <p class="executor-help">{{ t('請先核對點位，再按 OK。') }}</p>
@@ -48,7 +48,7 @@
       {% else %}<div><span>{{ t('日期') }}</span><strong>{{ period_label }}</strong></div>{% endif %}
       {% if point.frequency == 'daily2' %}<div><span>{{ t('本次打卡') }}</span><strong>{{ t(current_slot_label) }}</strong></div>{% endif %}
     </div>
-    {% if visit %}<p class="checkin-footnote">{{ t('此點每天可直接簽到一次。') }}</p>
+    {% if visit %}<p class="checkin-footnote">{{ t('此點每天可直接簽到一次。') }}{% if point.frequency == 'three_day' %}<br>{{ t('直接簽到不取代巡檢。') }}{% endif %}</p>
     {% elif long_period %}<p class="checkin-footnote">{{ t('本期只需完成一次執行簽到。') }}</p>
     {% elif point.frequency == 'daily2' %}<p class="checkin-footnote">{{ t('每日可簽到兩次，兩次可連續完成。') }}</p>{% endif %}
   </div>

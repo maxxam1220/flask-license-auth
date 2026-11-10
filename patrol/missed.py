@@ -1,12 +1,13 @@
 """Pure, historical calculation of expired, uncompleted patrol obligations.
 
 The selected dates mean *due dates*: a daily slot is due on its patrol day,
-a weekly slot on Sunday, and a monthly slot on the last Taipei calendar day.
+a three-day slot on its third day, a weekly slot on Sunday, and a monthly
+slot on the last Taipei calendar day.
 At the exclusive deadline it becomes overdue. Both daily rounds now end at
 midnight; dates before the policy change retain their original noon deadline.
 
 Callers must preload point.schedules and supply completions for every user,
-starting at the earliest overlapping week or month start. Ordinary schedule
+starting at the earliest overlapping three-day, week or month start. Ordinary schedule
 changes apply to the whole effective date. A deletion records its precise
 instant so obligations already overdue that day can still be reported.
 """
@@ -20,11 +21,19 @@ from domain import CATEGORY_OPTIONS, FLOOR_ORDER
 from daily_rounds import daily2_anytime
 
 TAIPEI = ZoneInfo("Asia/Taipei")
-VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "weekly": ("weekly",), "monthly": ("monthly",)}
-FREQUENCIES = {"daily", "daily2", "weekly", "monthly", "irregular"}
+THREE_DAY_ANCHOR = date(2026, 11, 10)
+VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "three_day": ("three_day",),
+                    "weekly": ("weekly",), "monthly": ("monthly",)}
+FREQUENCIES = {"daily", "daily2", "three_day", "weekly", "monthly", "irregular"}
 
 
 def period_bounds(day, view):
+    if view == "three_day":
+        # One shared calendar, not a rolling deadline from each person's visit.
+        # This anchor also aligns with date.min, so the supported date range
+        # never needs an out-of-range start date or a truncated first period.
+        start = day - timedelta(days=(day - THREE_DAY_ANCHOR).days % 3)
+        return start, start + timedelta(days=2)
     if view == "monthly":
         return day.replace(day=1), day.replace(day=monthrange(day.year, day.month)[1])
     if view == "weekly":
@@ -47,7 +56,7 @@ def _utc(instant):
 def _completion_keys(completions, default_mode="standard"):
     keys = set()
     for item in completions:
-        if _value(item, "legacy_unscheduled", False):
+        if _value(item, "legacy_unscheduled", False) or _value(item, "executor_visit", False):
             continue
         if isinstance(item, (tuple, list)) and not hasattr(item, "point_id"):
             point_id, frequency, period_key, slot, *modes = item
@@ -182,7 +191,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
     executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
-    day_step = timedelta(days=7 if frequency == "weekly" else 1)
+    day_step = timedelta(days=7 if frequency == "weekly" else 3 if frequency == "three_day" else 1)
     for point in points:
         point_id = _value(point, "id")
         if point_id in seen_points:
@@ -193,7 +202,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         created_at = _value(point, "created_at")
         created_at = _utc(created_at) if created_at is not None else None
         timeline = schedule_timeline(point)
-        # A weekly/monthly filter can only match Sundays/month ends. Choose
+        # A period filter can only match its last day. Choose
         # those dates before reading historical schedules for each point.
         due_day = period_bounds(first_due_day, frequency)[1]
         while due_day <= last_due_day:
@@ -206,7 +215,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
                             and not (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
                     continue
                 period_start, _ = period_bounds(due_day, period_frequency)
-                if period_frequency in ("weekly", "monthly"):
+                if period_frequency in ("three_day", "weekly", "monthly"):
                     period_label = f"{period_start.isoformat()} – {due_day.isoformat()}"
                 else:
                     period_label = due_day.isoformat()
