@@ -69,7 +69,15 @@ python -m venv .venv
 本機 `127.0.0.1` 網址無法供另一支手機存取。即時相機需要 HTTPS 或 localhost；一般區網 HTTP 會使用手機檔案拍攝功能，相簿上傳作為相容方式。
 外網使用應以 Render 的 HTTPS 網址提供；不能把開發服務直接公開。
 
-## Render 部署準備
+## Render 部署
+
+正式網址：https://fuhe-label-check-tgv3.onrender.com/
+
+- 服務：`srv-dbq1mi49v7es73c98v5g`（My Workspace，Singapore）。
+- Blueprint：`exs-dbq1luon74is739euef0`；已依使用者確認建立網頁服務與 5 GB 持久磁碟。
+- 程式庫：`maxxam1220/flask-license-auth`，獨立分支 `label-check-v1`，設定檔 `label_web/render.yaml`。
+- 登入密碼：到 https://dashboard.render.com/web/srv-dbq1mi49v7es73c98v5g/env 複製 `LABELCHECK_PASSWORD` 的值。
+- 不要將登入密碼、資料庫連線字串或 session secret 寫入本文件。
 
 新建獨立 Python Web Service，區域選 Singapore，共用 DB_0801，**不新建第二個資料庫**。
 部署設定見 `render.yaml`。獨立分支 `label-check-v1`、來源子目錄 `label_web`，不修改其他應用程式的正式分支。
@@ -84,7 +92,7 @@ python -m venv .venv
 - 建議起始配置：0.5 CPU / 512 MB Web Service 與 5 GB Persistent Disk，依 2026-11-11 官方價格每月新增約 US$8.25，未含額外流量及既有資料庫費用；須以 Render 實際計價為準。
 - Render 產生登入密碼及 session secret；登入密碼在服務的 Environment 頁面 `LABELCHECK_PASSWORD` 查看，勿放入原始碼或照片。
 - 照片（含原始檔）放 `/var/data/labelcheck/images/`；DB_0801 只保存照片索引、標準、OCR 原文與核對紀錄。需同時備份 DB 與持久磁碟。
-- OCR 模型先以實際記憶體及延遲測量選擇方案，不能假設免費服務足夠。任何付費資源尚未建立。
+- OCR 模型以實際記憶體及延遲測量選擇方案；目前採單實例逐張辨識，不能假設高併發時仍有相同效能。
 - 尚未提供照片保留期、自動清理、外部備份與大量上傳功能。
 
 ## 驗證
@@ -102,4 +110,5 @@ node --check static\app.js
 模型與相依套件依各自授權使用：
 - RapidOCR：https://github.com/RapidAI/RapidOCR
 - PP-OCRv5：https://github.com/PaddlePaddle/PaddleOCR
+
 
