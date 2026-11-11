@@ -15,6 +15,13 @@ def now():
 
 
 metadata = MetaData()
+catalog = Table("labelcheck_catalog", metadata,
+    Column("code", String(80), primary_key=True), Column("name", Text, nullable=False),
+    Column("barcode", Text, nullable=False, default=""), Column("keep_days", Integer),
+    Column("barcode_type", String(20), nullable=False, default=""),
+    Column("active", Boolean, nullable=False, default=True),
+    Column("revision", String(64), nullable=False), Column("provenance", JSON, nullable=False),
+    Column("updated_at", String(40), nullable=False))
 images = Table("labelcheck_images", metadata,
     Column("id", String(32), primary_key=True), Column("created_at", String(40), nullable=False),
     Column("filename", String(255)), Column("sha256", String(64), index=True),

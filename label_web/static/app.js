@@ -6,6 +6,7 @@ const statusLabels = {pass: "已核對項目相符", fail: "發現差異", revie
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
 const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
 const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
+const maxPhotoBytes = 15 * 1024 * 1024;
 let toastTimer;
 
 function element(tag, className, text) {
@@ -32,6 +33,9 @@ async function api(path, options = {}) {
 }
 function when(iso) { return new Date(iso).toLocaleString("zh-TW", {timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"}); }
 function badge(status, text) { return element("span", `badge ${status}`, text || statusLabels[status]); }
+function isCatalogSource(source) { return source?.source_kind === "catalog" || String(source?.code || "").startsWith("list:"); }
+function sourceCodeLabel(source) { return String(source?.code || "").replace(/^list:/, ""); }
+function sourceOptionLabel(source) { return `${isCatalogSource(source) ? "清單" : "系統標籤"} ${sourceCodeLabel(source)} · ${source.name}`; }
 function showView(view) {
   if (!["inspect", "library", "standard", "history"].includes(view)) view = "inspect";
   $$(".view").forEach(x => { x.hidden = x.id !== `view-${view}`; });
@@ -88,7 +92,7 @@ async function loadTemplates(selectedId) {
   const payload = await api("/api/templates"); state.templates = payload.items;
   const select = $("#template-select"), previous = selectedId || select.value;
   select.replaceChildren();
-  select.append(new Option("自動對應系統標籤", ""));
+  select.append(new Option("自動對應系統標籤與清單", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
   $("#nav-count").textContent = String(state.templates.length);
@@ -102,17 +106,17 @@ async function loadScanConfig() {
 function renderInspectSource() {
   const node = $("#inspect-source-selected"); node.replaceChildren(); node.hidden = !state.inspectSource;
   if (!state.inspectSource) return;
-  node.append(element("strong", "", `已選擇：${state.inspectSource.code} ${state.inspectSource.name}`));
+  node.append(element("strong", "", `已選擇：${sourceOptionLabel(state.inspectSource)}`));
   const reset = element("button", "quiet", "改用自動對應"); reset.type = "button";
   reset.onclick = () => { if (state.busy) return; state.inspectSource = null; renderInspectSource(); markResultChanged(); };
   node.append(reset); $("#template-options").open = true;
 }
 function selectInspectSource(item) {
   if (state.busy) return;
-  state.inspectSource = {code:item.code,name:item.name}; state.inspectSearchRequest++;
+  state.inspectSource = {code:item.code,name:item.name,source_kind:item.source_kind}; state.inspectSearchRequest++;
   $("#template-select").value = ""; selectedStandard(); renderInspectSource();
-  $("#inspect-source-results").replaceChildren(); $("#inspect-source-note").textContent = "掃描或重新核對時將使用選定的系統標籤。";
-  markResultChanged(); toast(state.inspection ? "已選擇系統標籤，請按重新核對套用。" : "已選擇系統標籤，可以開始掃描。");
+  $("#inspect-source-results").replaceChildren(); $("#inspect-source-note").textContent = isCatalogSource(item) ? "將依這筆清單已有資料核對；未提供的內容不算已確認。" : "掃描或重新核對時將使用選定的系統標籤。";
+  markResultChanged(); toast(state.inspection ? "已選擇比對資料，請按重新核對套用。" : "已選擇比對資料，可以開始掃描。");
 }
 function newStandard(previous = null) {
   if (state.busy) return toast("請等待目前照片完成辨識。");
@@ -177,7 +181,7 @@ async function pollJob(jobId, kind) {
 }
 async function upload(file, kind) {
   if (!file || state.busy) return;
-  if (file.size > 15 * 1024 * 1024) return toast("照片超過 15 MB，請縮小後上傳。", true);
+  if (file.size > maxPhotoBytes) return toast("照片超過 15 MB，請改選較小的 JPG 照片，並保留標籤文字清晰。", true);
   const sourceCode = state.inspectSource?.code || "";
   const template = sourceCode ? "" : $("#template-select").value;
   if (kind === "inspection" && !template) kind = "recognition";
@@ -315,15 +319,23 @@ function renderSourceMatch(match, area, baseDate) {
   if (!match && !baseDate) return;
   const node = element("div", `source-match ${match?.status || "dated"}`); node.id = "result-source-match";
   if (!match) { node.append(element("p", "source-base-date", `基準日：${baseDate}`)); area.append(node); return; }
-  if (match.status === "matched") node.append(element("p", "", `比對標籤：${match.code} ${match.name}`));
+  if (match.status === "matched") {
+    node.append(element("p", "", `${isCatalogSource(match) ? "清單比對" : "比對標籤"}：${sourceCodeLabel(match)} ${match.name}`));
+    if (isCatalogSource(match)) {
+      const labels = {product:"品名",barcode:"條碼",keep_days:"保存天數",spec:"規格"};
+      const known = (match.known_fields || []).map(key => labels[key]).filter(Boolean);
+      const scope = element("p", "source-scope", `${known.length ? `核對範圍：${known.join("、")}。` : "依清單已有資料核對。"}清單沒有標籤版面，其他內容不視為已核對。`);
+      scope.id = "result-source-scope"; node.append(scope);
+    }
+  }
   else {
     const text = {ambiguous:"找到多份相似標籤，請選定後重新核對。",unmatched:"尚未找到對應標籤，可手動選擇後重新核對。",unavailable:"暫時無法讀取系統標籤，目前僅檢查可判讀的內容。"}[match.status] || match.reason;
     node.append(element("p", "", text));
     if (match.candidates?.length) {
       const choices = element("div", "match-candidates");
-      match.candidates.forEach(item => { const button = element("button", "source-option", `${item.code} · ${item.name}`); button.type="button"; button.onclick=()=>selectInspectSource(item); choices.append(button); }); node.append(choices);
+      match.candidates.forEach(item => { const button = element("button", "source-option", sourceOptionLabel(item)); button.type="button"; button.onclick=()=>selectInspectSource(item); choices.append(button); }); node.append(choices);
     } else if (["unmatched","ambiguous"].includes(match.status)) {
-      const choose = element("button", "source-match-pick", "選擇系統標籤"); choose.type="button";
+      const choose = element("button", "source-match-pick", "選擇比對資料"); choose.type="button";
       choose.onclick=()=>{ $("#template-options").open=true; $("#inspect-source-query").focus(); }; node.append(choose);
     }
   }
@@ -345,7 +357,7 @@ function renderRecheckControls(area) {
   const block = element("div", "recheck-controls"); block.id = "recheck-controls";
   const dirty = element("p", "recheck-dirty", "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
   const button = element("button", "button secondary", "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
-  block.append(dirty,button,element("p","recheck-help","使用原辨識文字，依最新系統標籤資料與本批日期核對。")); area.append(block);
+  block.append(dirty,button,element("p","recheck-help","使用原辨識文字，依最新系統標籤、清單與本批日期核對。")); area.append(block);
 }
 function renderResultLines(rows, area) {
   const list = element("section", "scan-lines"); list.id = "result-lines"; list.setAttribute("aria-label", "逐列檢查結果");
@@ -427,12 +439,15 @@ async function openCamera() {
   $("#camera-message").textContent = "請允許相機權限。";
   const token = ++cameraRequest;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1440}}});
+    const stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:3840}, height:{ideal:2160}}});
     if (token !== cameraRequest || !dialog.open) { stream.getTracks().forEach(track => track.stop()); return; }
     cameraStream = stream; const video = $("#camera-video"); video.srcObject = stream;
     await video.play();
     if (token !== cameraRequest || !dialog.open) return;
-    $("#camera-capture").disabled = false; $("#camera-message").textContent = "對準標籤，避開反光；按下拍攝後才會上傳辨識。";
+    $("#camera-capture").disabled = false;
+    $("#camera-message").textContent = Math.max(video.videoWidth, video.videoHeight) < 1600
+      ? "目前預覽解析度較低，細字建議改用「手機拍照」。讓標籤盡量填滿畫面，保留四邊。"
+      : "讓標籤盡量填滿畫面、保留四邊；等文字清晰再拍攝。細字模糊時可改用「手機拍照」。";
   } catch (error) {
     if (token !== cameraRequest || !dialog.open) return;
     stopCamera(); $("#camera-message").textContent = "無法開啟即時相機。請允許權限，或使用「手機拍照」及「選擇照片」。";
@@ -442,16 +457,40 @@ $("#scan-button").onclick = openCamera;
 $("#camera-close").onclick = closeCamera;
 $("#camera-dialog").addEventListener("close", stopCamera);
 $("#camera-native").onclick = () => { closeCamera(); $("#inspect-camera").click(); };
+async function captureCameraPhoto(video, track) {
+  if (typeof window.ImageCapture === "function" && track?.readyState === "live") {
+    try {
+      const photo = await new window.ImageCapture(track).takePhoto();
+      if (photo?.size) return photo;
+    } catch (_) { /* Keep the full video frame when still capture is unavailable. */ }
+  }
+  if (!video.videoWidth || !video.videoHeight) throw new Error("相機畫面尚未準備好，請稍候再拍攝。");
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("無法讀取相機畫面，請改用手機拍照。");
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", .95));
+  if (!blob) throw new Error("拍攝失敗，請重新拍照或使用手機拍照。");
+  return blob;
+}
 $("#camera-capture").onclick = async () => {
   const video = $("#camera-video"); if (!video.videoWidth || state.busy) return;
   $("#camera-capture").disabled = true;
-  const canvas = document.createElement("canvas"), scale = Math.min(1,2400 / Math.max(video.videoWidth,video.videoHeight));
-  canvas.width = Math.round(video.videoWidth*scale); canvas.height = Math.round(video.videoHeight*scale);
-  canvas.getContext("2d").drawImage(video,0,0,canvas.width,canvas.height);
-  const blob = await new Promise(resolve=>canvas.toBlob(resolve,"image/jpeg",.95));
-  closeCamera();
-  if (blob) await upload(new File([blob],"掃描標籤.jpg",{type:"image/jpeg"}),"inspection");
-  else toast("拍攝失敗，請重新拍照。",true);
+  const token = cameraRequest;
+  $("#camera-message").textContent = "正在拍攝清晰照片，請保持手機穩定…";
+  try {
+    const blob = await captureCameraPhoto(video, cameraStream?.getVideoTracks()[0]);
+    if (token !== cameraRequest || !$("#camera-dialog").open) return;
+    if (blob.size > maxPhotoBytes) throw new Error("照片超過 15 MB，請改用手機拍照並選擇較小的照片尺寸。");
+    closeCamera();
+    const extension = {"image/png":"png","image/webp":"webp"}[blob.type] || "jpg";
+    await upload(new File([blob],`掃描標籤.${extension}`,{type:blob.type || "image/jpeg"}),"inspection");
+  } catch (error) {
+    if (token === cameraRequest) { $("#camera-message").textContent = error.message; toast(error.message, true); }
+  } finally {
+    if (token === cameraRequest && $("#camera-dialog").open) $("#camera-capture").disabled = false;
+  }
 };
 window.addEventListener("pagehide", closeCamera);
 document.addEventListener("visibilitychange", () => { if(document.hidden) closeCamera(); });
@@ -464,7 +503,7 @@ $("#inspect-source-search").onsubmit = async event => {
     const data = await api(`/api/source-labels?q=${encodeURIComponent(query)}`);
     if (token !== state.inspectSearchRequest) return;
     $("#inspect-source-note").textContent = !data.available ? "目前無法讀取系統標籤。" : data.items.length ? "選定後，可用原照片重新核對或開始下一次掃描。" : "找不到符合的標籤，請換代碼或品名。";
-    data.items.forEach(item => { const choice = element("button", "source-option", `${item.code} · ${item.name}`); choice.type="button"; choice.disabled=state.busy; choice.onclick=()=>selectInspectSource(item); results.append(choice); });
+    data.items.forEach(item => { const choice = element("button", "source-option", sourceOptionLabel(item)); choice.type="button"; choice.disabled=state.busy; choice.onclick=()=>selectInspectSource(item); results.append(choice); });
   } catch (error) { if (token === state.inspectSearchRequest) { $("#inspect-source-note").textContent = error.message; toast(error.message,true); } }
   finally { button.disabled = state.busy; }
 };
@@ -474,7 +513,7 @@ $("#source-search").onsubmit = async event => {
   try {
     const data = await api(`/api/source-labels?q=${encodeURIComponent($("#source-query").value.trim())}`);
     $("#source-note").textContent = !data.available ? "目前尚未連接標籤系統資料庫。" : data.items.length ? "請選擇一份標籤，再核對正確內容。" : "找不到符合的標籤，請換代碼或品名。";
-    data.items.forEach(item => { const button = element("button", "source-option", `${item.code} · ${item.name}`); button.type="button"; button.onclick=()=>importSource(item.code); results.append(button); });
+    data.items.forEach(item => { const button = element("button", "source-option", sourceOptionLabel(item)); button.type="button"; button.onclick=()=>importSource(item.code); results.append(button); });
   } catch(error) { toast(error.message,true); } finally { setBusy(false); }
 };
 async function importSource(code) {
@@ -483,7 +522,7 @@ async function importSource(code) {
     const source = await api(`/api/source-labels/${encodeURIComponent(code)}`);
     state.source = source; state.referenceJob = null;
     const form = $("#standard-form"); form.reset(); $("#standard-fields").disabled = false;
-    form.elements.name.value = state.supersedes?.name || `${source.code} · ${source.name}`;
+    form.elements.name.value = state.supersedes?.name || `${sourceCodeLabel(source)} · ${source.name}`;
     textFields.forEach(key => { form.elements[key].value = source.fields[key] || ""; });
     const sourceDateText = (source.date_settings || []).map(item => item.content).join(" ").replace(/\s+/g, "");
     form.elements.dates.checked = state.supersedes?.rules.dates ?? source.rules?.dates ?? /製造|生產|有效|到期|保存期限/.test(sourceDateText);

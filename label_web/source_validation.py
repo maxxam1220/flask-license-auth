@@ -7,13 +7,13 @@ import unicodedata
 from validation import diff_parts, parse_date, traditional_display
 
 
-RULE_VERSION = "1.4"
+RULE_VERSION = "1.5"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
                "phone": "電話", "spec": "規格", "storage": "保存條件", "item_code": "貨號",
                "pack_count": "入數", "barcode": "條碼", "manufacture": "製造日期",
-               "expiry": "有效日期", "arrival": "到店日"}
+               "expiry": "有效日期", "arrival": "到店日", "shelf_days": "保存天數"}
 HEADINGS = {
     "product": r"(?:產品名稱|商品名稱|產品品名|品名)",
     "origin": r"(?:原料產地|原產地|原產國|產地)",
@@ -25,6 +25,7 @@ HEADINGS = {
     "manufacture": r"(?:製造日期|製造日|生產日期|生產日)",
     "expiry": r"(?:有效日期|有效期限|有效日|保存期限至|最佳賞味期|賞味期限|到期日)",
     "arrival": r"(?:到店日期|到店日|到貨日期|到貨日)",
+    "shelf_days": r"(?:保存天數|保存期限|保鮮期|賞味天數)",
 }
 ALL_HEADINGS = "|".join(HEADINGS.values())
 
@@ -270,7 +271,8 @@ def _date_fields(lines):
                 nxt = min(nearby, key=lambda item: item[0])[1]
                 value, evidence = nxt["text"], [line, nxt]
         candidate = {"value": value, "line_ids": [item["id"] for item in evidence],
-                     "score": min(float(item.get("score", 0)) for item in evidence), "ambiguous": False}
+                     "score": min(float(item.get("score", 0)) for item in evidence),
+                     "ambiguous": any(item.get("ambiguous", False) for item in evidence)}
         if key in found:
             found[key]["ambiguous"] = True
         else:
@@ -432,12 +434,12 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                 reason = "年月日格式可辨識；尚未確認這個日期的業務用途。"
             except (ValueError, TypeError):
                 status, reason = "fail", "日期不完整或不合法，請確認數字是否錯誤。"
-            if confidence < MIN_CONFIDENCE:
+            if confidence < MIN_CONFIDENCE or line.get("ambiguous"):
                 status, reason = "review", "日期文字看不清楚，請對照原圖。"
             add(f"date_line_{line['id']}_{number}", "其他日期格式", status, reason, "完整且合法的年月日", value, [line["id"]], confidence)
             if base and actual_date:
                 # Unlabelled dates cannot inherit a different field's cross-year allowance.
-                add(f"date_year_{line['id']}_{number}", "其他日期年份", "review" if confidence < MIN_CONFIDENCE else "pass" if actual_date.year == base.year else "fail",
+                add(f"date_year_{line['id']}_{number}", "其他日期年份", "review" if confidence < MIN_CONFIDENCE or line.get("ambiguous") else "pass" if actual_date.year == base.year else "fail",
                     "沒有此日期的對應排程，先核對本批基準年份。", str(base.year), str(actual_date.year), [line["id"]], confidence)
     if not base:
         notes.append("尚未指定本批基準日，未核對資料庫日期排程、基準年份或是否過期。")
@@ -460,7 +462,7 @@ def _decorate(result, lines):
                     remainder = remainder.replace(value, "", 1)
             if not normalize_text(remainder):
                 continue
-        low = float(line.get("score", 0)) < MIN_CONFIDENCE
+        low = float(line.get("score", 0)) < MIN_CONFIDENCE or line.get("ambiguous", False)
         result["checks"].append({"key": f"text_line_{line['id']}", "label": "其他辨識文字", "status": "review" if low else "read",
                                   "expected": "", "actual": line["text"], "raw_actual": line["text"], "line_ids": [line["id"]],
                                   "score": line.get("score"), "source": "ocr", "diff": [],
@@ -473,6 +475,7 @@ def _decorate(result, lines):
         check["conversion_changed"] = actual != check["display_actual"]
         check["source_lines"] = [{"id": identifier, "text": index[identifier]["text"],
                                   "display_text": traditional_display(index[identifier]["text"]), "score": index[identifier].get("score"),
+                                  "alternatives": index[identifier].get("alternatives", []),
                                   "conversion_changed": traditional_display(index[identifier]["text"]) != index[identifier]["text"]}
                                  for identifier in check.get("line_ids", []) if identifier in index]
     counts = {key: sum(check["status"] == key for check in result["checks"]) for key in ("pass", "fail", "review", "read")}
@@ -482,7 +485,7 @@ def _decorate(result, lines):
     return result
 
 
-def evaluate_source(lines, source, batch_date="", arrival_date="", base_date=""):
+def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="", ocr_capabilities=None):
     """A source is a single database label snapshot, or None when it is unknown."""
     # An explicit Code128 payload can look like a date, but it remains barcode data.
     barcode_groups = [group for group in _groups(_source_rows(source)) if group["kind"] == "barcode" and len(group["lines"]) == 1]
@@ -495,8 +498,35 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="")
     date_checks, date_fields, notes = _date_checks(date_lines, source, batch_date, arrival_date, base_date, literal_ids)
     fields.update(date_fields)
     checks.extend(date_checks)
-    notes.insert(0, (f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
+    unsupported = (ocr_capabilities or {}).get("unsupported_symbols", [])
+    for check in checks:
+        if check["status"] != "fail" or check.get("source") != "database":
+            continue
+        missing = [symbol for symbol in unsupported if symbol in check.get("expected", "") and symbol not in check.get("actual", "")]
+        expected_without = check.get("expected", "")
+        for symbol in missing:
+            expected_without = expected_without.replace(symbol, "")
+        if missing and normalize_text(expected_without) == normalize_text(check.get("actual", "")):
+            check.update(status="review", reason=f"目前辨識模型不支援 {'、'.join(missing)}；請對照照片確認符號有無漏印。", unsupported_symbols=missing)
+    catalog_source = (source or {}).get("source_kind") == "catalog"
+    if catalog_source:
+        # A list provides a duration, not a print layout or a manufacturing schedule.
+        # Check this only when the photo actually prints the duration in days.
+        for line in text_lines:
+            if _heading(line["text"]) != "shelf_days" or source.get("keep_days") is None:
+                continue
+            actual = _prepared(line["text"])
+            match = re.fullmatch(HEADINGS["shelf_days"] + r"[:：]?(\d+)(?:天|日)", actual)
+            confidence = float(line.get("score", 0))
+            same = bool(match) and int(match[1]) == source["keep_days"]
+            status = "review" if not match or confidence < MIN_CONFIDENCE or line.get("ambiguous") else "pass" if same else "fail"
+            checks.append({"key": f"shelf_days_{line['id']}", "label": "保存天數", "status": status,
+                "reason": "保存天數與清單相符。" if status == "pass" else "印出的保存天數與清單不同。" if status == "fail" else "保存天數或單位未看清楚，請確認。",
+                "expected": f"保存期限：{source['keep_days']}天", "actual": line["text"],
+                "line_ids": [line["id"]], "score": confidence, "source": "database"})
+    notes.insert(0, ("依清單核對已知品名、條碼及印出的保存天數；清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
+                    f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))
     result = {"checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
-              "verified_scope": "selected_database_label" if source else "dates_only", "mode": "recognition"}
+              "verified_scope": "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
     return _decorate(result, lines)

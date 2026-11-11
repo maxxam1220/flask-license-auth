@@ -6,6 +6,8 @@ import unicodedata
 from difflib import SequenceMatcher
 from sqlalchemy import text
 from validation import extract_fields, TEXT_FIELDS, traditional_display
+from source_validation import normalize_text
+import reference_catalog
 
 
 _SKU_LABEL = r"(?:貨號|货号|商品編號|商品编号|品號|品号)"
@@ -39,22 +41,35 @@ def _fixed_barcodes(value):
     return values
 
 
-def available(engine):
+def _desktop_available(engine):
     if engine.dialect.name != "postgresql":
         return False
     with engine.connect() as conn:
         return bool(conn.execute(text("SELECT to_regclass('barcode53.\"BcMst\"') IS NOT NULL AND to_regclass('barcode53.\"BcDtl\"') IS NOT NULL")).scalar())
 
 
+def available(engine):
+    return _desktop_available(engine) or reference_catalog.available(engine)
+
+
 def search(engine, query):
     pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-    with engine.connect() as conn:
-        rows = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name FROM barcode53."BcMst" '
-                                 'WHERE "CodeNo" ILIKE :q OR "CodeName" ILIKE :q ORDER BY "CodeNo" LIMIT 40'), {"q": pattern}).mappings()
-        return [dict(row) for row in rows]
+    items = []
+    if _desktop_available(engine):
+        with engine.connect() as conn:
+            rows = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name FROM barcode53."BcMst" '
+                                     'WHERE "CodeNo" ILIKE :q OR "CodeName" ILIKE :q ORDER BY "CodeNo" LIMIT 40'), {"q": pattern}).mappings().all()
+            items.extend(dict(row, source_kind="desktop") for row in rows)
+    wanted = _identity_text(query)
+    items.extend({"code": reference_catalog.PREFIX + str(row["code"]), "name": row["name"], "source_kind": "catalog"}
+                 for row in reference_catalog.records(engine)
+                 if any(wanted in _identity_text(row.get(key)) for key in ("code", "name", "barcode")))
+    return items[:80]
 
 
 def draft(engine, code):
+    if str(code).startswith(reference_catalog.PREFIX):
+        return reference_catalog.draft(engine, code)
     with engine.connect() as conn:
         # A single statement gives a consistent source snapshot without locking desktop edits.
         rows = conn.execute(text('SELECT m."CodeNo", m."CodeName", m."KeepDays", '
@@ -115,7 +130,7 @@ def build_draft(snapshot, code):
         "solar": clean(master.get("SunDay")), "solar_pos": int(master.get("SunPos") or 1),
         "price_len": clean(master.get("PriceLen")), "sale_price": price,
     }
-    return {"code": code, "name": snapshot[0]["CodeName"],
+    return {"code": code, "name": snapshot[0]["CodeName"], "source_kind": "desktop", "comparison_scope": "desktop_label",
             "revision": hashlib.sha256(json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest(),
             "fields": {k: fields.get(k, {}).get("value", "") for k in TEXT_FIELDS},
             "rules": {"dates": bool(re.search(r"製造日|生產日|有效日|有效期|到期日", date_labels)),
@@ -130,16 +145,17 @@ def build_draft(snapshot, code):
 
 
 def _catalog(engine):
-    """Small projections: names, then only static details useful for identification."""
-    with engine.connect() as conn:
-        masters = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name '
-                                    'FROM barcode53."BcMst" ORDER BY "CodeNo"')).mappings().all()
-        details = conn.execute(text('SELECT "CodeNo" AS code, "ObjContent" AS content '
-            'FROM barcode53."BcDtl" WHERE LEFT("Attr", 1)=\'3\' AND "ObjContent" IS NOT NULL '
-            'AND ("ObjContent" ~ \'貨號|货号|商品編號|商品编号|品號|品号|規格|规格|產地|産地|产地|條碼|条码|[Bb]arcode\' '
-            'OR "ObjContent" ~ \'^[[:space:]0-9]{8,24}$\')')).mappings().all()
+    """Names and static printed text; list metadata remains explicitly incomplete."""
+    masters, details = [], []
+    if _desktop_available(engine):
+        with engine.connect() as conn:
+            masters = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name '
+                                        'FROM barcode53."BcMst" ORDER BY "CodeNo"')).mappings().all()
+            details = conn.execute(text('SELECT "CodeNo" AS code, "ObjContent" AS content '
+                'FROM barcode53."BcDtl" WHERE LEFT("Attr", 1)=\'3\' AND "ObjContent" IS NOT NULL')).mappings().all()
     catalog = {str(row["code"]).strip(): {"code": str(row["code"]).strip(), "name": str(row["name"] or ""),
-                "sku": set(), "barcode": set(), "spec": set(), "origin": set()} for row in masters}
+                "sku": set(), "barcode": set(), "spec": set(), "origin": set(), "text": set(),
+                "source_kind": "desktop"} for row in masters}
     for row in details:
         item = catalog.get(str(row["code"]).strip())
         if item is None:
@@ -147,6 +163,10 @@ def _catalog(engine):
         content = str(row["content"] or "")
         item["sku"].update(_identifiers(content, _SKU_LABEL))
         item["barcode"].update(_fixed_barcodes(content))
+        for part in content.splitlines():
+            # A barcode's case, punctuation, and spaces are payload, not typography.
+            if part.strip() and not _fixed_barcodes(part):
+                item["text"].add(normalize_text(part))
         for key, label in (("spec", r"(?:規格|规格)"), ("origin", r"(?:原料[產産产]地|原[產産产]地|[產産产]地)")):
             for part in content.splitlines():
                 match = re.search(label + r"\s*[:：]?\s*(.+)", part)
@@ -155,16 +175,25 @@ def _catalog(engine):
                     value = re.split(r"品名|規格|规格|產地|産地|产地|保存|電話|电话|貨號|货号", match[1], 1)[0]
                     if value.strip():
                         item[key].add(_identity_text(value))
+    for row in reference_catalog.records(engine):
+        code = reference_catalog.PREFIX + str(row["code"])
+        barcode = str(row.get("barcode") or "").strip()
+        catalog[code] = {"code": code, "name": row["name"], "sku": set(),
+                         "barcode": {barcode} if barcode else set(), "spec": set(), "origin": set(),
+                         "text": set(), "source_kind": "catalog", "catalog_record": row}
     return catalog
 
 
 def _resolution(status, reason, catalog=None, codes=(), source=None):
     catalog = catalog or {}
-    candidates = [{"code": code, "name": catalog[code]["name"]}
+    candidates = [{"code": code, "name": catalog[code]["name"], "source_kind": catalog[code].get("source_kind", "desktop")}
                   for code in codes if code in catalog][:8]
-    return {"status": status, "code": source["code"] if source else "",
+    result = {"status": status, "code": source["code"] if source else "",
             "name": source["name"] if source else "", "reason": reason,
             "candidates": candidates, "source": source}
+    if source:
+        result.update({key: source[key] for key in ("source_kind", "comparison_scope", "known_fields", "limitations", "equivalent_sources") if key in source})
+    return result
 
 
 def resolve(engine, ocr_lines, source_code=""):
@@ -187,7 +216,7 @@ def resolve(engine, ocr_lines, source_code=""):
         for code, name in normalized_names.items():
             name_index.setdefault(name, set()).add(code)
         # Low-confidence OCR can suggest candidates, but cannot silently select one.
-        reliable = [line for line in ocr_lines if float(line.get("score", 0)) >= .94]
+        reliable = [line for line in ocr_lines if float(line.get("score", 0)) >= .65 and not line.get("ambiguous")]
         fields = extract_fields(reliable)
         product = fields.get("product", {})
         names = set()
@@ -210,10 +239,16 @@ def resolve(engine, ocr_lines, source_code=""):
             matched = name_index.get(name, set())
             if matched:
                 signals.append(matched)
+        name_candidates = set.intersection(*signals) if signals else set()
         for key, values in (("sku", sku_values), ("barcode", barcode_values)):
             for value in values:
                 matched = {code for code, item in catalog.items() if value in item[key]}
                 if matched:
+                    if key == "barcode" and matched & name_candidates:
+                        # A same-name list with an unknown barcode is not proof of
+                        # a different barcode. Barcode-only discovery still uses
+                        # affirmative known matches, never all blank records.
+                        matched |= {code for code in name_candidates if not catalog[code]["barcode"]}
                     signals.append(matched)
         if signals:
             candidates = set.intersection(*signals)
@@ -222,6 +257,20 @@ def resolve(engine, ocr_lines, source_code=""):
                                    catalog, sorted(set.union(*signals)))
             original_candidates = candidates.copy()
             if len(candidates) > 1:
+                observed_days = {int(match[1]) for line in reliable
+                                 if (match := re.fullmatch(r"(?:保存期限|保存天數|保鮮期|賞味天數):?(\d+)天",
+                                                          _identity_text(line["text"])))}
+                if observed_days and any(catalog[code].get("source_kind") == "catalog" for code in candidates):
+                    if len(observed_days) > 1:
+                        return _resolution("ambiguous", "照片出現不同的保存天數，無法確認單一清單來源。",
+                                           catalog, sorted(original_candidates))
+                    observed_days = next(iter(observed_days))
+                    candidates = {code for code in candidates
+                                  if catalog[code].get("catalog_record", {}).get("keep_days") is None
+                                  or catalog[code]["catalog_record"]["keep_days"] == observed_days}
+                    if not candidates:
+                        return _resolution("ambiguous", "照片保存天數與同名清單均不相符，無法確認單一來源。",
+                                           catalog, sorted(original_candidates))
                 for key in ("spec", "origin"):
                     field = fields.get(key, {})
                     if not field.get("value") or field.get("ambiguous"):
@@ -233,14 +282,43 @@ def resolve(engine, ocr_lines, source_code=""):
                         return _resolution("ambiguous", "同名標籤的規格或產地無法一致對應，請人工選擇。",
                                            catalog, sorted(original_candidates))
                     candidates = remaining
+                # Use other complete printed lines only after product identity is
+                # established. Shared footers alone never select a product. Lists
+                # have no layout evidence, so missing text cannot exclude them.
+                for line in reliable:
+                    if _fixed_barcodes(line["text"]):
+                        continue
+                    observed = normalize_text(line["text"])
+                    matches = {code for code in original_candidates if observed in catalog[code]["text"]}
+                    if not matches:
+                        continue
+                    supported = matches | {code for code in original_candidates if catalog[code].get("source_kind") == "catalog"}
+                    # Explicit spec/origin already retain unknown competing values.
+                    if any(observed == normalize_text(field.get("value", "")) for key, field in fields.items() if key in {"spec", "origin"}):
+                        continue
+                    candidates &= supported
+                    if not candidates:
+                        return _resolution("ambiguous", "同張照片的差異文字指向不同款式，無法確認單一來源。",
+                                           catalog, sorted(original_candidates))
+            equivalent = []
+            if len(candidates) > 1:
+                keys = {reference_catalog.equivalence_key(catalog[code]) for code in candidates}
+                if None not in keys and len(keys) == 1:
+                    equivalent = [{"code": code, "name": catalog[code]["name"], "source_kind": "catalog"}
+                                  for code in sorted(candidates)]
+                    candidates = {sorted(candidates)[0]}
             if len(candidates) != 1:
-                return _resolution("ambiguous", "有多款標籤符合目前文字，請選擇正確款式後核對。",
+                return _resolution("ambiguous", "現有文字仍無法區分多款來源；請補拍可辨識的規格、條碼或其他差異文字。",
                                    catalog, sorted(candidates))
             code = next(iter(candidates))
             source = draft(engine, code)
             if source is None:
                 return _resolution("unmatched", "該標籤已變更或移除，請重新選擇。")
-            return _resolution("matched", "依完全相符的品名、貨號或固定條碼，對應同一款標籤。",
+            if equivalent:
+                source["equivalent_sources"] = equivalent
+            reason = ("多筆清單的品名、條碼與保存天數完全相同，使用等價清單資料核對。" if equivalent
+                      else "依完整相符的品名、貨號、條碼及可用差異文字，對應同一款來源。")
+            return _resolution("matched", reason,
                                catalog, [code], source)
         # Suggestions are deliberately separate from source selection and validation.
         extracted = extract_fields(ocr_lines)

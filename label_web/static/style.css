@@ -11,6 +11,7 @@
 .camera-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #camera-video{display:block;width:100%;max-height:55dvh;background:#102820;border-radius:12px;object-fit:contain}
 #camera-message{min-height:2.6em;font-size:14px}
+.camera-guidance{font-size:12px;line-height:1.8;margin:12px 0}.upload-zone .photo-guidance{font-size:10px;margin:0 0 7px;line-height:1.7}
 #source-import{margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e1e5df}
 .source-option{display:block;width:100%;text-align:left;background:#f0f5ee;border:1px solid #d5e0d4;border-radius:9px;padding:12px;margin-top:8px;cursor:pointer;color:#173f35;overflow-wrap:anywhere}
 .source-option:hover{background:#dfeadc}
@@ -19,6 +20,7 @@
 /* Compact per-line scan results and optional system-label selection. */
 .base-date-label{margin-bottom:13px}.base-date-help{margin-bottom:22px}.base-date-label input{max-width:240px}
 .source-base-date{margin-top:5px;font-size:11px;color:#687761}
+.source-scope{margin-top:6px;font-size:11px;line-height:1.7;color:#687761}
 .recheck-controls{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 13px}.recheck-controls .button{min-height:38px;padding:7px 13px;font-size:12px}
 .recheck-help{font-size:11px;color:var(--muted);flex:1;min-width:170px}.recheck-dirty{flex-basis:100%;background:#fff2d8;border-left:3px solid #c99733;padding:10px 12px;color:#8b5e1d;font-size:12px}
 .scan-options{border-top:1px solid var(--line);padding-top:10px;margin-top:17px}

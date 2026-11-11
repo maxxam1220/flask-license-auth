@@ -101,12 +101,14 @@ def create_app(config=None, ocr=None):
         values["source_code"] = source_code.strip()
         return values
 
-    def check_source(lines, inputs):
+    def check_source(lines, inputs, ocr_info=None):
         match = label_source.resolve(engine, lines, inputs["source_code"])
         source = prepare_source(match.get("source"), inputs["base_date"])
-        standard = {"id": "", "name": f"系統標籤 {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
+        prefix = "清單比對" if (source or {}).get("source_kind") == "catalog" else "系統標籤"
+        standard = {"id": "", "name": f"{prefix} {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
                     "version": 0, "image_id": "", "mode": "system_label", "source": source}
-        result = evaluate_source(lines, source, inputs["batch_date"], inputs["arrival_date"], base_date=inputs["base_date"])
+        result = evaluate_source(lines, source, inputs["batch_date"], inputs["arrival_date"], base_date=inputs["base_date"],
+                                 ocr_capabilities=(ocr_info or {}).get("capabilities"))
         result["source_match"] = {key: value for key, value in match.items() if key != "source"}
         result["inputs"] = inputs
         return standard, result
@@ -334,7 +336,7 @@ def create_app(config=None, ocr=None):
             result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
             source_evaluation = None
             if job["kind"] == "recognition":
-                source_evaluation = check_source(ocr_result["lines"], inputs)
+                source_evaluation = check_source(ocr_result["lines"], inputs, ocr_result)
             with engine.begin() as conn:
                 if job["kind"] in {"inspection", "recognition"}:
                     if job["kind"] == "inspection":
@@ -450,7 +452,7 @@ def create_app(config=None, ocr=None):
         if not isinstance(body, dict):
             abort(400, description="請確認核對設定。")
         inputs = scan_inputs(body)
-        standard, result = check_source(original["ocr"]["lines"], inputs)
+        standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"])
         result["recheck_of"] = identifier
         result["recognition_reused"] = True
         new_id = db.uid()

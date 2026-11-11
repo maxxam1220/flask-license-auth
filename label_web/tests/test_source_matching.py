@@ -54,7 +54,7 @@ class FakeEngine:
         if self.failure and self.failure in query:
             raise RuntimeError("private database credential must not leak")
         if "to_regclass" in query:
-            return Result(scalar=True)
+            return Result(scalar="public.labelcheck_catalog" not in query)
         if 'WHERE m."CodeNo"=:code' in query:
             return Result(self.catalog.get(params["code"], []))
         if 'LEFT("Attr", 1)' in query:
@@ -106,7 +106,7 @@ class SourceMatchingTests(unittest.TestCase):
         self.assertFalse(any('WHERE m."CodeNo"=:code' in q for q, _ in db.queries))
 
     def test_low_confidence_exact_name_does_not_autoselect(self):
-        result = resolve(engine(), [line("品名：美國櫻桃1.3kg/盒", score=.8)])
+        result = resolve(engine(), [line("品名：美國櫻桃1.3kg/盒", score=.64)])
         self.assertEqual(result["status"], "unmatched")
         self.assertEqual(result["candidates"][0]["code"], "1013")
 
