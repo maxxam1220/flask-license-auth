@@ -42,3 +42,23 @@ class CatalogValidationTests(unittest.TestCase):
         self.assertFalse(any(item["status"] == "pass" for item in result["checks"]))
         self.assertEqual(result["status"], "review")
 
+    def test_repeated_weak_marker_deficit_remains_review(self):
+        expected = source("※餐盒※請冷藏保存")
+        for actual, status in (("※餐盒請冷藏保存", "review"), ("※餐盒請冷凍保存", "fail"),
+                               ("※餐盒請冷藏保存※", "fail")):
+            result = evaluate_source([line(0, actual)], expected,
+                ocr_capabilities={"known_weak_symbols": ["※"]})
+            self.assertEqual(result["checks"][0]["status"], status)
+
+    def test_known_weak_marker_is_review_only_when_it_is_the_only_difference(self):
+        expected = source("※餐盒請冷藏保存")
+        for actual, status in (("餐盒請冷藏保存", "review"), ("餐盒請冷凍保存", "fail"), ("※餐盒請冷藏保存", "pass")):
+            result = evaluate_source([line(0, actual)], expected,
+                ocr_capabilities={"unsupported_symbols": [], "known_weak_symbols": ["※"]})
+            item = result["checks"][0]
+            self.assertEqual(item["status"], status)
+            self.assertEqual(item["raw_actual"], actual)
+            if status == "review":
+                self.assertIn("容易", item["reason"])
+                self.assertNotIn("不支援", item["reason"])
+

@@ -283,6 +283,24 @@ function buildResultRows(checks, ocrLines) {
   }
   return [...rows.values()].sort((a,b) => rank[a.status] - rank[b.status]);
 }
+function appendOCRAlternatives(container, item) {
+  const targets = new Set(Array.isArray(item.line_ids) ? item.line_ids : []), seen = new Set(), values = [];
+  for (const check of item.checks || []) {
+    for (const line of Array.isArray(check?.source_lines) ? check.source_lines : []) {
+      if (!line || (targets.size && !targets.has(line.id))) continue;
+      for (const alternative of Array.isArray(line.alternatives) ? line.alternatives : []) {
+        const text = typeof alternative === "string" ? alternative : alternative?.text;
+        if (typeof text !== "string" || !text.trim() || text === line.text || seen.has(text)) continue;
+        seen.add(text); values.push(text);
+      }
+    }
+  }
+  if (!values.length) return;
+  const block = element("div", "line-comparison ocr-alternatives");
+  block.append(element("strong", "", "另一次辨識（僅供對照，未套用）"));
+  values.forEach(text => block.append(element("p", "scan-line-text", text)));
+  container.append(block);
+}
 function resultLine(item) {
   const expandable = ["fail","review"].includes(item.status);
   const row = element(expandable ? "details" : "div", `scan-line ${item.status}`); row.dataset.lineId = item.id;
@@ -311,6 +329,7 @@ function resultLine(item) {
       }
       detail.append(block);
     }
+    appendOCRAlternatives(detail, item);
     row.append(detail);
   }
   return row;

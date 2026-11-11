@@ -7,7 +7,7 @@ import unicodedata
 from validation import diff_parts, parse_date, traditional_display
 
 
-RULE_VERSION = "1.5"
+RULE_VERSION = "1.6"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
@@ -499,15 +499,24 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
     fields.update(date_fields)
     checks.extend(date_checks)
     unsupported = (ocr_capabilities or {}).get("unsupported_symbols", [])
+    weak = (ocr_capabilities or {}).get("known_weak_symbols", [])
     for check in checks:
         if check["status"] != "fail" or check.get("source") != "database":
             continue
-        missing = [symbol for symbol in unsupported if symbol in check.get("expected", "") and symbol not in check.get("actual", "")]
+        missing = [symbol for symbol in dict.fromkeys([*unsupported, *weak])
+                   if symbol and check.get("expected", "").count(symbol) > check.get("actual", "").count(symbol)]
         expected_without = check.get("expected", "")
+        actual_without = check.get("actual", "")
         for symbol in missing:
             expected_without = expected_without.replace(symbol, "")
-        if missing and normalize_text(expected_without) == normalize_text(check.get("actual", "")):
-            check.update(status="review", reason=f"目前辨識模型不支援 {'、'.join(missing)}；請對照照片確認符號有無漏印。", unsupported_symbols=missing)
+            actual_without = actual_without.replace(symbol, "")
+        if missing and normalize_text(expected_without) == normalize_text(actual_without):
+            reason = (f"目前辨識模型不支援 {'、'.join(missing)}；請對照照片確認符號有無漏印。"
+                      if all(symbol in unsupported for symbol in missing)
+                      else f"{'、'.join(missing)} 容易在整句辨識時漏讀；請對照照片確認符號有無漏印。")
+            check.update(status="review", reason=reason,
+                         unsupported_symbols=[symbol for symbol in missing if symbol in unsupported],
+                         known_weak_symbols=[symbol for symbol in missing if symbol in weak])
     catalog_source = (source or {}).get("source_kind") == "catalog"
     if catalog_source:
         # A list provides a duration, not a print layout or a manufacturing schedule.

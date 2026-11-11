@@ -1,6 +1,8 @@
 from copy import deepcopy
 from types import SimpleNamespace
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -105,6 +107,24 @@ class OCRPreprocessingTests(unittest.TestCase):
         self.assertEqual(observed["preprocessing"]["selected_rotation"], 90)
         self.assertEqual(observed["preprocessing"]["passes"], 2)
         self.assertEqual(observed["lines"][0]["text"], "重新辨識讀出的完整文字")
+
+    def test_v6_model_configuration_retains_memory_limits_and_symbol_uncertainty(self):
+        fake = FakeOCR(np.zeros((480, 640, 3), dtype=np.uint8),
+                       [result(["這是正確可閱讀的文字"], [[[40, 60], [240, 60], [240, 100], [40, 100]]])])
+        fake.text_rec.postprocess_op.character.append("※")
+        with TemporaryDirectory() as folder, patch("rapidocr.RapidOCR", return_value=fake) as factory:
+            observed = OCREngine(folder).recognize("photo.png")
+        params = factory.call_args.kwargs["params"]
+        self.assertEqual(params["Det.ocr_version"].value, "PP-OCRv6")
+        self.assertEqual(params["Det.model_type"].value, "small")
+        self.assertEqual(params["Rec.ocr_version"].value, "PP-OCRv6")
+        self.assertEqual(params["Rec.model_type"].value, "medium")
+        self.assertEqual(params["Rec.rec_batch_num"], 1)
+        self.assertEqual(params["Cls.cls_batch_num"], 1)
+        self.assertFalse(params["EngineConfig.onnxruntime.enable_cpu_mem_arena"])
+        self.assertEqual(observed["capabilities"], {"unsupported_symbols": [], "known_weak_symbols": ["※"]})
+        self.assertIn("PP-OCRv6 small-det + medium-rec", observed["engine"])
+        self.assertNotIn("warnings", observed)
 
 
 if __name__ == "__main__":

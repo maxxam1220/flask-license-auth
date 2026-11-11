@@ -104,14 +104,14 @@ class OCREngine:
                     "Cls.cls_batch_num": 1,
                     "Det.engine_type": EngineType.ONNXRUNTIME,
                     "Det.lang_type": LangDet.CH,
-                    "Det.model_type": ModelType.MOBILE,
-                    "Det.ocr_version": OCRVersion.PPOCRV5,
+                    "Det.model_type": ModelType.SMALL,
+                    "Det.ocr_version": OCRVersion.PPOCRV6,
                     "Det.limit_side_len": 1280,
                     "Det.limit_type": "max",
                     "Rec.engine_type": EngineType.ONNXRUNTIME,
                     "Rec.lang_type": LangRec.CH,
-                    "Rec.model_type": ModelType.SERVER,
-                    "Rec.ocr_version": OCRVersion.PPOCRV5,
+                    "Rec.model_type": ModelType.MEDIUM,
+                    "Rec.ocr_version": OCRVersion.PPOCRV6,
                     "Rec.rec_batch_num": 1,
                 })
             import cv2
@@ -145,10 +145,15 @@ class OCREngine:
                 else:
                     lines = merge_retry(lines, retry)
             characters = set(self.engine.text_rec.postprocess_op.character) if self.engine.text_rec is not None else set()
-            return {"lines": lines, "engine": "RapidOCR 3.10 / PP-OCRv5 mobile-det + server-rec",
+            return {"lines": lines, "engine": "RapidOCR 3.10 / PP-OCRv6 small-det + medium-rec",
                     "preprocessing": {"scale_x": round(scale_x, 4), "scale_y": round(scale_y, 4),
                                       "passes": passes, "selected_rotation": rotation},
-                    "capabilities": {"unsupported_symbols": [symbol for symbol in ("※",) if characters and symbol not in characters]},
+                    "capabilities": {
+                        "unsupported_symbols": [symbol for symbol in ("※",) if characters and symbol not in characters],
+                        # A supported dictionary entry can still be missed in context.
+                        # Validation uses this only for an observed matching discrepancy.
+                        "known_weak_symbols": [symbol for symbol in ("※",) if symbol in characters],
+                    },
                     "elapsed": round(time.monotonic() - start, 2)}
 
 
