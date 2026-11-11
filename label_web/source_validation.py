@@ -4,12 +4,18 @@ from difflib import SequenceMatcher
 import re
 import unicodedata
 
-from validation import diff_parts, parse_date, traditional_display, product_row_candidates
+from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
 
 
-RULE_VERSION = "1.7"
+RULE_VERSION = "1.8"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
+
+
+def _field_uncertain(field):
+    return field.get("ambiguous") or not field.get("confidence_ok", field.get("score", 0) >= MIN_CONFIDENCE)
+
+
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
                "phone": "電話", "spec": "規格", "storage": "保存條件", "item_code": "貨號",
                "pack_count": "入數", "barcode": "條碼", "manufacture": "製造日期",
@@ -112,7 +118,8 @@ def _groups(lines, source_fields=None):
                            "barcode_kind": chain[0].get("_barcode_kind"),
                            "barcode_heading": chain[0].get("_barcode_heading", False),
                            "score": min(float(item.get("score", 0)) for item in chain),
-                           "ambiguous": any(item.get("ambiguous", False) for item in chain)})
+                           "ambiguous": any(item.get("human_uncertain") or (item.get("ambiguous", False) and not item.get("human_verified")) for item in chain),
+                           "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in chain)})
             nearby = [(distance, item) for item in lines if item not in chain
                       and (distance := _following(chain[-1], item)) is not None]
             if not nearby:
@@ -122,7 +129,8 @@ def _groups(lines, source_fields=None):
         groups.append({"lines": row["lines"], "ids": frozenset(row["line_ids"]),
                        "text": row["raw_text"], "normal": normalize_text(row["raw_text"]), "kind": "product",
                        "barcode_kind": None, "barcode_heading": False,
-                       "score": row["score"], "ambiguous": row["ambiguous"], "assembled_product": True})
+                       "score": row["score"], "ambiguous": row["ambiguous"], "assembled_product": True,
+                       "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in row["lines"])})
     return groups
 
 
@@ -211,7 +219,7 @@ def _text_checks(lines, source):
             status, reason, text, confidence, identifiers = "review", "未辨識到資料庫中的這段文字，請確認是否漏印或照片未拍完整。", "", None, []
         else:
             text, confidence, identifiers = actual["text"], actual["score"], [item["id"] for item in actual["lines"]]
-            if ambiguous or actual["ambiguous"] or confidence < MIN_CONFIDENCE:
+            if ambiguous or _field_uncertain(actual):
                 status, reason = "review", "文字辨識不清楚或有多個候選，請對照原圖確認。"
             elif _equivalent(expected, actual):
                 status, reason = "pass", "與這份資料庫標籤的對應文字相符。"
@@ -284,7 +292,8 @@ def _date_fields(lines):
                 value, evidence = nxt["text"], [line, nxt]
         candidate = {"value": value, "line_ids": [item["id"] for item in evidence],
                      "score": min(float(item.get("score", 0)) for item in evidence),
-                     "ambiguous": any(item.get("ambiguous", False) for item in evidence)}
+                     "ambiguous": any(item.get("human_uncertain") or (item.get("ambiguous", False) and not item.get("human_verified")) for item in evidence),
+                     "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in evidence)}
         if key in found:
             found[key]["ambiguous"] = True
         else:
@@ -375,7 +384,7 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                 parsed[key] = parse_date(value)
         except (ValueError, TypeError):
             status, reason = "fail", "日期不完整、不合法或格式不符，請確認印字與辨識原文。"
-        if not value or confidence < MIN_CONFIDENCE or field.get("ambiguous"):
+        if not value or _field_uncertain(field):
             status, reason = "review", "日期未看清楚或有多個候選，請對照原圖確認。"
         if status != "pass":
             uncertain.add(key)
@@ -405,7 +414,7 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
             continue
         field = fields.get(key, {})
         actual = parsed.get(key, {}).get("date")
-        low = field.get("score", 0) < MIN_CONFIDENCE or field.get("ambiguous") or not field.get("value")
+        low = _field_uncertain(field) or not field.get("value")
         add(check_key, label, "review" if low else "pass" if actual == date.fromisoformat(expected) else "fail",
             "與本次指定的日期核對。", expected, field.get("value", ""), field.get("line_ids", []), field.get("score"))
     for first, second, key, label, expectation in (("manufacture", "expiry", "date_order", "日期先後", "有效日期 ≥ 製造日期"),
@@ -416,21 +425,21 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         a, b = parsed[first], parsed[second]
         bad = b["date"] < a["date"] or (b["date"] == a["date"] and a.get("hour") is not None and b.get("hour") is not None
                                                and (b["hour"], b["minute"]) < (a["hour"], a["minute"]))
-        low = any(fields.get(item, {}).get("score", 0) < MIN_CONFIDENCE or fields.get(item, {}).get("ambiguous") for item in (first, second))
+        low = any(_field_uncertain(fields.get(item, {})) for item in (first, second))
         bad_reason = {"date_order": "有效日期早於製造日期。", "arrival_manufacture": "到店日早於製造日期。", "arrival_expiry": "到店日晚於有效日期。"}[key]
         add(key, label, "review" if low else "fail" if bad else "pass", bad_reason if bad else "日期先後順序合理。",
             expectation, f"{a['date']} → {b['date']}", fields[first]["line_ids"] + fields[second]["line_ids"])
     if base:
         if "expiry" in parsed:
             field = fields["expiry"]
-            low = field.get("score", 0) < MIN_CONFIDENCE or field.get("ambiguous")
+            low = _field_uncertain(field)
             expired = parsed["expiry"]["date"] < base
             add("expired", "有效日期與基準日", "review" if low else "fail" if expired else "pass",
                 "有效日期已早於本批基準日。" if expired else "有效日期未早於本批基準日。", f"有效日期 ≥ {base}", field["value"], field["line_ids"])
         if "manufacture" in parsed and parsed["manufacture"]["date"] > base:
             field, setting = fields["manufacture"], settings.get("manufacture", {})
             scheduled = setting.get("expected_date") == parsed["manufacture"]["date"]
-            low = field.get("score", 0) < MIN_CONFIDENCE or field.get("ambiguous")
+            low = _field_uncertain(field)
             add("future_manufacture", "製造日期與基準日", "review" if low else "pass" if scheduled else "fail",
                 ("此未來製造日符合本次手動指定的預定日期。" if setting.get("manual_override") else "此未來製造日符合資料庫設定的預定生產位移。") if scheduled else "製造日期晚於基準日，且無相符的資料庫預定生產設定。",
                 setting.get("expected_text") or f"製造日期 ≤ {base}", field["value"], field["line_ids"])
@@ -446,12 +455,12 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                 reason = "年月日格式可辨識；尚未確認這個日期的業務用途。"
             except (ValueError, TypeError):
                 status, reason = "fail", "日期不完整或不合法，請確認數字是否錯誤。"
-            if confidence < MIN_CONFIDENCE or line.get("ambiguous"):
+            if line_is_uncertain(line, MIN_CONFIDENCE):
                 status, reason = "review", "日期文字看不清楚，請對照原圖。"
             add(f"date_line_{line['id']}_{number}", "其他日期格式", status, reason, "完整且合法的年月日", value, [line["id"]], confidence)
             if base and actual_date:
                 # Unlabelled dates cannot inherit a different field's cross-year allowance.
-                add(f"date_year_{line['id']}_{number}", "其他日期年份", "review" if confidence < MIN_CONFIDENCE or line.get("ambiguous") else "pass" if actual_date.year == base.year else "fail",
+                add(f"date_year_{line['id']}_{number}", "其他日期年份", "review" if line_is_uncertain(line, MIN_CONFIDENCE) else "pass" if actual_date.year == base.year else "fail",
                     "沒有此日期的對應排程，先核對本批基準年份。", str(base.year), str(actual_date.year), [line["id"]], confidence)
     if not base:
         notes.append("尚未指定本批基準日，未核對資料庫日期排程、基準年份或是否過期。")
@@ -474,7 +483,7 @@ def _decorate(result, lines):
                     remainder = remainder.replace(value, "", 1)
             if not normalize_text(remainder):
                 continue
-        low = float(line.get("score", 0)) < MIN_CONFIDENCE or line.get("ambiguous", False)
+        low = line_is_uncertain(line, MIN_CONFIDENCE)
         result["checks"].append({"key": f"text_line_{line['id']}", "label": "其他辨識文字", "status": "review" if low else "read",
                                   "expected": "", "actual": line["text"], "raw_actual": line["text"], "line_ids": [line["id"]],
                                   "score": line.get("score"), "source": "ocr", "diff": [],
@@ -515,6 +524,9 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
     for check in checks:
         if check["status"] != "fail" or check.get("source") != "database":
             continue
+        if check.get("line_ids") and all(next((line.get("human_verified", False) for line in lines if line["id"] == identifier), False)
+                                         for identifier in check["line_ids"]):
+            continue
         missing = [symbol for symbol in dict.fromkeys([*unsupported, *weak])
                    if symbol and check.get("expected", "").count(symbol) > check.get("actual", "").count(symbol)]
         expected_without = check.get("expected", "")
@@ -540,11 +552,15 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
             match = re.fullmatch(HEADINGS["shelf_days"] + r"[:：]?(\d+)(?:天|日)", actual)
             confidence = float(line.get("score", 0))
             same = bool(match) and int(match[1]) == source["keep_days"]
-            status = "review" if not match or confidence < MIN_CONFIDENCE or line.get("ambiguous") else "pass" if same else "fail"
+            status = "review" if not match or line_is_uncertain(line, MIN_CONFIDENCE) else "pass" if same else "fail"
             checks.append({"key": f"shelf_days_{line['id']}", "label": "保存天數", "status": status,
                 "reason": "保存天數與清單相符。" if status == "pass" else "印出的保存天數與清單不同。" if status == "fail" else "保存天數或單位未看清楚，請確認。",
                 "expected": f"保存期限：{source['keep_days']}天", "actual": line["text"],
                 "line_ids": [line["id"]], "score": confidence, "source": "database"})
+    if (source or {}).get("standard_reference", {}).get("state") == "stale":
+        checks.append({"key":"standard_reference_stale", "label":"比對標準", "status":"review", "actual":"來源已變更",
+                       "expected":"", "line_ids":[], "score":None, "source":"standard",
+                       "reason":"原始來源資料已變更，先前人工比對標準已停用；請重新確認標準後再核對。"})
     notes.insert(0, ("依清單核對已知品名、條碼及印出的保存天數；清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
                     f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))

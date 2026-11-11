@@ -3,11 +3,13 @@ import hashlib
 import json
 import re
 import unicodedata
+from copy import deepcopy
 from difflib import SequenceMatcher
 from sqlalchemy import text
 from validation import extract_fields, TEXT_FIELDS, traditional_display
 from source_validation import normalize_text
 import reference_catalog
+import standard_reference
 
 
 _SKU_LABEL = r"(?:貨號|货号|商品編號|商品编号|品號|品号)"
@@ -64,10 +66,26 @@ def search(engine, query):
     items.extend({"code": reference_catalog.PREFIX + str(row["code"]), "name": row["name"], "source_kind": "catalog"}
                  for row in reference_catalog.records(engine)
                  if any(wanted in _identity_text(row.get(key)) for key in ("code", "name", "barcode")))
+    for code, version in standard_reference.current_versions(engine).items():
+        base = raw_draft(engine, code)
+        if base is None:
+            items = [item for item in items if str(item["code"]) != code]
+            continue
+        effective = standard_reference.apply_current(engine, base, version)
+        existing = next((item for item in items if str(item["code"]) == code), None)
+        if existing is not None:
+            existing["name"] = effective["name"]
+        elif any(wanted in _identity_text(value) for value in [effective["name"], code, *effective.get("barcode_values", [])]):
+            items.insert(0, {"code": code, "name": effective["name"], "source_kind": effective["source_kind"]})
     return items[:80]
 
 
 def draft(engine, code):
+    return standard_reference.apply_current(engine, raw_draft(engine, code))
+
+
+def raw_draft(engine, code):
+    """Current external source, without web overrides or per-inspection dates."""
     if str(code).startswith(reference_catalog.PREFIX):
         return reference_catalog.draft(engine, code)
     with engine.connect() as conn:
@@ -144,7 +162,7 @@ def build_draft(snapshot, code):
             "notice": "標籤系統資料尚未人工核准。請確認實際印字、產地及地址；原系統保存天數與日期位移僅供參考，不會自動套用。"}
 
 
-def _catalog(engine):
+def raw_catalog(engine):
     """Names and static printed text; list metadata remains explicitly incomplete."""
     masters, details = [], []
     if _desktop_available(engine):
@@ -184,6 +202,38 @@ def _catalog(engine):
     return catalog
 
 
+def _catalog(engine):
+    catalog = raw_catalog(engine)
+    for code, version in standard_reference.current_versions(engine).items():
+        if code not in catalog:
+            continue
+        base = raw_draft(engine, code)
+        if base is None:
+            catalog.pop(code, None)
+            continue
+        source = standard_reference.apply_current(engine, base, version)
+        item = deepcopy(catalog[code])
+        item["name"] = source["name"]
+        if source.get("source_kind") == "catalog":
+            barcode = next(iter(source.get("barcode_values", [])), "")
+            item["barcode"] = set(source.get("barcode_values", []))
+            item["catalog_record"] = dict(item["catalog_record"], name=source["name"], keep_days=source.get("keep_days"), barcode=barcode)
+        else:
+            item.update(sku=set(), barcode=set(), spec=set(), origin=set(), text=set())
+            for row in source.get("lines", []):
+                value = row["text"]
+                item["sku"].update(_identifiers(value, _SKU_LABEL))
+                item["barcode"].update(_fixed_barcodes(value))
+                if not _fixed_barcodes(value):
+                    item["text"].add(normalize_text(value))
+            for key in ("spec", "origin"):
+                value = source.get("fields", {}).get(key)
+                if value:
+                    item[key].add(_identity_text(value))
+        catalog[code] = item
+    return catalog
+
+
 def _resolution(status, reason, catalog=None, codes=(), source=None):
     catalog = catalog or {}
     candidates = [{"code": code, "name": catalog[code]["name"], "source_kind": catalog[code].get("source_kind", "desktop")}
@@ -193,6 +243,10 @@ def _resolution(status, reason, catalog=None, codes=(), source=None):
             "candidates": candidates, "source": source}
     if source:
         result.update({key: source[key] for key in ("source_kind", "comparison_scope", "known_fields", "limitations", "equivalent_sources") if key in source})
+        if source.get("standard_reference"):
+            result["standard_reference"] = source["standard_reference"]
+            if source["standard_reference"]["state"] == "stale":
+                result["reason"] = source["notice"]
     return result
 
 
@@ -216,7 +270,8 @@ def resolve(engine, ocr_lines, source_code=""):
         for code, name in normalized_names.items():
             name_index.setdefault(name, set()).add(code)
         # Low-confidence OCR can suggest candidates, but cannot silently select one.
-        reliable = [line for line in ocr_lines if float(line.get("score", 0)) >= .65 and not line.get("ambiguous")]
+        reliable = [line for line in ocr_lines if not line.get("human_uncertain") and
+                    (line.get("human_verified") is True or (float(line.get("score", 0)) >= .65 and not line.get("ambiguous")))]
         fields = extract_fields(reliable)
         product = fields.get("product", {})
         names = set()

@@ -24,6 +24,8 @@ from validation import extract_fields, evaluate, parse_date, TEXT_FIELDS
 from source_validation import evaluate_source, RULE_VERSION
 from source_rules import prepare_source
 import label_source
+import corrections
+import standard_reference
 
 register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 32_000_000
@@ -56,6 +58,7 @@ def create_app(config=None, ocr=None):
     slots = threading.BoundedSemaphore(12)
     image_lock = threading.Lock()
     retry_lock = threading.Lock()
+    correction_lock = threading.Lock()
     recognizer = ocr or IsolatedOCR(ROOT / "models")
     app.extensions.update(label_engine=engine, label_worker=worker)
     with engine.begin() as conn:
@@ -103,8 +106,8 @@ def create_app(config=None, ocr=None):
         values["source_code"] = source_code.strip()
         return values
 
-    def check_source(lines, inputs, ocr_info=None):
-        match = label_source.resolve(engine, lines, inputs["source_code"])
+    def check_source(lines, inputs, ocr_info=None, match_lines=None):
+        match = label_source.resolve(engine, lines if match_lines is None else match_lines, inputs["source_code"])
         source = prepare_source(match.get("source"), inputs["base_date"])
         prefix = "清單比對" if (source or {}).get("source_kind") == "catalog" else "系統標籤"
         standard = {"id": "", "name": f"{prefix} {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
@@ -509,18 +512,63 @@ def create_app(config=None, ocr=None):
             query = query.where(db.inspections.c.status == request.args["status"])
         with engine.connect() as conn:
             rows = conn.execute(query.order_by(db.inspections.c.created_at.desc()).offset((page - 1) * 24).limit(25)).mappings().all()
+            manual = corrections.latest_summaries(conn, [x["id"] for x in rows[:24]])
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
-            version=x["template_snapshot"]["version"], created_at=x["created_at"], image=image_payload(x["image_id"])) for x in rows[:24]],
+            version=x["template_snapshot"]["version"], created_at=x["created_at"], image=image_payload(x["image_id"]),
+            manual_revision=manual.get(x["id"], {}).get("revision", 0),
+            manual_status=manual.get(x["id"], {}).get("status")) for x in rows[:24]],
             has_more=len(rows) > 24, page=page)
 
-    @app.get("/api/inspections/<identifier>")
-    def inspection(identifier):
-        row = get_one(db.inspections, identifier)
+    def inspection_payload(original):
+        row = dict(original)
+        identifier = row["id"]
         row["image"] = image_payload(row["image_id"])
         row["reference_image"] = image_payload(row["template_snapshot"]["image_id"])
         with engine.connect() as conn:
             row["reviews"] = [dict(x) for x in conn.execute(select(db.reviews).where(db.reviews.c.inspection_id == identifier).order_by(db.reviews.c.created_at)).mappings()]
-        return jsonify(row)
+            row["manual_revision"] = corrections.public_revision(corrections.latest(conn, identifier))
+            recent = corrections.history(conn, identifier, size=10)
+            row["correction_history"] = recent["items"]
+            row["correction_history_has_more"] = recent["has_more"]
+        return row
+
+    @app.get("/api/inspections/<identifier>")
+    def inspection(identifier):
+        return jsonify(inspection_payload(get_one(db.inspections, identifier)))
+
+    @app.get("/api/inspections/<identifier>/corrections")
+    def correction_history(identifier):
+        get_one(db.inspections, identifier)
+        try:
+            page = int(request.args.get("page", 1))
+            if not 1 <= page <= 1_000_000:
+                raise ValueError()
+        except ValueError:
+            abort(400, description="頁碼不正確。")
+        with engine.connect() as conn:
+            return jsonify(corrections.history(conn, identifier, page=page))
+
+    @app.post("/api/inspections/<identifier>/corrections")
+    def add_correction(identifier):
+        body = request.get_json(silent=True)
+        try:
+            with correction_lock, engine.begin() as conn:
+                original = conn.execute(select(db.inspections).where(db.inspections.c.id == identifier)
+                    .with_for_update()).mappings().first()
+                if original is None:
+                    abort(404, description="找不到這筆資料。")
+                original = dict(original)
+                action = corrections.validate_request(body, original)
+                current = corrections.latest(conn, identifier)
+                if action["base_revision"] != (current["revision"] if current else 0):
+                    abort(409, description="其他人已儲存新的訂正，請載入最新版本後再確認。")
+                revision = corrections.build_revision(original, current, action, db.now())
+                conn.execute(insert(db.corrections).values(**revision))
+        except corrections.CorrectionInputError as exc:
+            abort(400, description=str(exc))
+        except IntegrityError:
+            abort(409, description="訂正版本已更新，請載入最新版本後再確認。")
+        return jsonify(inspection_payload(original)), 201
 
     @app.post("/api/inspections/<identifier>/reviews")
     def add_review(identifier):
@@ -538,19 +586,35 @@ def create_app(config=None, ocr=None):
 
     @app.post("/api/inspections/<identifier>/recheck")
     def recheck(identifier):
-        original = get_one(db.inspections, identifier)
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             abort(400, description="請確認核對設定。")
         inputs = scan_inputs(body)
-        standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"])
-        result["recheck_of"] = identifier
-        result["recognition_reused"] = True
         new_id = db.uid()
-        with engine.begin() as conn:
-            conn.execute(insert(db.inspections).values(id=new_id, image_id=original["image_id"],
+        copied_from = None
+        with correction_lock, engine.begin() as conn:
+            original = conn.execute(select(db.inspections).where(db.inspections.c.id == identifier)
+                .with_for_update()).mappings().first()
+            if original is None:
+                abort(404, description="找不到這筆資料。")
+            original = dict(original)
+            current = corrections.latest(conn, identifier)
+            active = current if current and current["patches"] else None
+            standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"],
+                match_lines=active["ocr"]["lines"] if active else None)
+            result["recheck_of"] = identifier
+            result["recognition_reused"] = True
+            fresh = dict(id=new_id, image_id=original["image_id"],
                 template_id="", template_snapshot=standard, status=result["status"],
-                result=result, ocr=original["ocr"], created_at=db.now()))
-        return jsonify(inspection_id=new_id), 201
+                result=result, ocr=original["ocr"], created_at=db.now())
+            conn.execute(insert(db.inspections).values(**fresh))
+            if active:
+                copied_from = {"inspection_id":identifier, "revision":active["revision"]}
+                revision = corrections.build_revision(fresh, {"revision":0, "patches":active["patches"]},
+                    {"operation":"copy", "reviewer":active["reviewer"], "note":"重新核對時沿用已儲存的人工訂正。",
+                     "copied_from":copied_from}, db.now())
+                conn.execute(insert(db.corrections).values(**revision))
+        return jsonify(inspection_id=new_id, manual_revision=1 if copied_from else 0, copied_from=copied_from), 201
 
+    standard_reference.register_routes(app, engine)
     return app

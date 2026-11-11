@@ -69,10 +69,17 @@ def parse_date(text):
     return {"date": date(year, month, day), "hour": hour, "minute": minute}
 
 
+def line_is_uncertain(line, threshold):
+    """Human confirmation is separate from, and never changes, the OCR score."""
+    return bool(line.get("human_uncertain") or (not line.get("human_verified") and
+                (float(line.get("score", 0)) < threshold or line.get("ambiguous", False))))
+
+
 def _candidate(value, lines, ambiguous=False):
     return {"value": value.strip(" ：:"), "score": min(float(x.get("score", 0)) for x in lines),
             "line_ids": [x["id"] for x in lines],
-            "ambiguous": ambiguous or any(x.get("ambiguous", False) for x in lines)}
+            "ambiguous": ambiguous or any(x.get("human_uncertain") or (x.get("ambiguous", False) and not x.get("human_verified")) for x in lines),
+            "confidence_ok": all(not line_is_uncertain(x, .94) for x in lines)}
 
 
 def _bounds(line):
@@ -283,7 +290,7 @@ def extract_fields(lines, expected=None):
             if key == "product":
                 row = next((row for row in product_rows if row["lines"][0]["id"] == line["id"]), None)
                 if row:
-                    candidates.append({key: row[key] for key in ("value", "score", "line_ids", "ambiguous")})
+                    candidates.append({key: row[key] for key in ("value", "score", "line_ids", "ambiguous", "confidence_ok")})
                     continue
             if value:
                 candidates.append(_candidate(value, evidence))
@@ -369,7 +376,7 @@ def _fixed_check(key, field):
     status, reason = "pass", "與已確認固定文字逐字相符（忽略空白與換行）。"
     if field.get("ambiguous"):
         status, reason = "review", "偵測到多個候選內容，請對照原圖確認。"
-    elif field.get("score", 0) < .94:
+    elif not field.get("confidence_ok", field.get("score", 0) >= .94):
         status, reason = "review", "文字辨識把握不足，請對照原圖；不自動更正。"
     elif compact(actual) != compact(expected):
         status, reason = "fail", "與已確認固定文字不同，請確認錯字、漏字或多字。"
@@ -407,7 +414,7 @@ def _finish_result(lines, result):
         # Checking a phone's digits does not verify a misread heading on the same OCR line.
         if remainder or changed:
             checks.append({"key": f"source_line_{line['id']}", "label": "來源行文字",
-                           "status": "review" if changed or line.get("score", 0) < .94 else "read",
+                           "status": "review" if changed or line_is_uncertain(line, .94) else "read",
                            "expected": "", "actual": line["text"], "diff": [], "line_ids": [line["id"]],
                            "score": line.get("score"), "source": "ocr",
                            "reason": ("來源行含繁簡轉換字形，繁體顯示僅供閱讀；請對照原圖確認。" if changed
@@ -423,17 +430,17 @@ def _finish_result(lines, result):
                 parse_date(match[0])
             except (ValueError, TypeError):
                 status, reason = "review", "日期不完整或不合法，請確認數字是否漏印或辨識錯誤。"
-            if line.get("score", 0) < .94:
+            if line_is_uncertain(line, .94):
                 status, reason = "review", "日期辨識把握不足，請對照原圖確認。"
             checks.append({"key": f"date_line_{line['id']}_{number}", "label": "其他日期格式", "status": status,
                            "expected": "完整且合法的年月日", "actual": match[0], "reason": reason,
                            "line_ids": [line["id"]], "score": line.get("score"), "source": "date"})
         changed = traditional_display(line["text"]) != line["text"]
         checks.append({"key": f"text_line_{line['id']}", "label": "其他辨識文字",
-                       "status": "read" if line.get("score", 0) >= .94 and not changed else "review", "expected": "",
+                       "status": "read" if not line_is_uncertain(line, .94) and not changed else "review", "expected": "",
                        "actual": line["text"], "diff": [], "line_ids": [line["id"]], "score": line.get("score"),
                        "source": "ocr", "reason": ("來源行含繁簡轉換字形，繁體顯示僅供閱讀；請對照原圖確認。" if changed
-                                                    else "已讀取文字，尚無核對依據，未判定內容正確。" if line.get("score", 0) >= .94
+                                                    else "已讀取文字，尚無核對依據，未判定內容正確。" if not line_is_uncertain(line, .94)
                                                     else "文字辨識把握不足，請對照原圖確認；尚無核對依據。")})
     indexed = {line["id"]: line for line in lines}
     for check in checks:
@@ -478,7 +485,7 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
             status, reason = "review", "未辨識到這個欄位，請重拍或人工複核。"
         elif field.get("ambiguous"):
             status, reason = "review", "辨識到多個候選內容，需要確認。"
-        elif field["score"] < threshold:
+        elif not field.get("confidence_ok", field["score"] >= threshold):
             status, reason = "review", "文字辨識把握不足，請對照原圖；不自動更正。"
         elif compact(expected) != compact(actual):
             status, reason = "fail", "與標準文字不同，請確認是否有錯字、漏字或多字。"
@@ -497,7 +504,7 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
                 parsed[key] = parse_date(value)
             except (ValueError, TypeError):
                 status, reason = "review", "日期未讀完整或日期不合法，請查看原圖。"
-            if field.get("ambiguous") or field.get("score", 0) < threshold:
+            if field.get("ambiguous") or not field.get("confidence_ok", field.get("score", 0) >= threshold):
                 status, reason = "review", "日期辨識不確定，請查看原圖；不推測數字。"
             if status != "pass":
                 uncertain_dates.add(key)
@@ -541,7 +548,7 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
             parsed["arrival"] = parse_date(value)
         except (ValueError, TypeError):
             status, reason = "review", "到店日未讀完整或日期不合法，請查看原圖。"
-        if field.get("ambiguous") or field.get("score", 0) < threshold:
+        if field.get("ambiguous") or not field.get("confidence_ok", field.get("score", 0) >= threshold):
             status, reason = "review", "到店日辨識不確定，請查看原圖；不推測數字。"
         if status != "pass":
             uncertain_dates.add("arrival")
@@ -567,7 +574,7 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
                 except (ValueError, TypeError):
                     continue
                 uncertain = ("arrival" in uncertain_dates or other.get("ambiguous")
-                             or other.get("score", 0) < threshold)
+                             or not other.get("confidence_ok", other.get("score", 0) >= threshold))
                 actual_date = parsed["arrival"]["date"]
                 bad = actual_date < other_date if key == "manufacture" else actual_date > other_date
                 reason = ("到店日早於製造日期。" if key == "manufacture" else "到店日晚於有效日期。") if bad else "日期先後符合設定。"

@@ -48,6 +48,15 @@ reviews = Table("labelcheck_reviews", metadata,
     Column("id", String(32), primary_key=True), Column("inspection_id", String(32), nullable=False, index=True),
     Column("decision", String(20), nullable=False), Column("reviewer", String(100), nullable=False),
     Column("note", Text, nullable=False), Column("created_at", String(40), nullable=False))
+corrections = Table("labelcheck_corrections", metadata,
+    Column("id", String(32), primary_key=True),
+    Column("inspection_id", String(32), nullable=False, index=True),
+    Column("revision", Integer, nullable=False), Column("change", JSON, nullable=False),
+    Column("patches", JSON, nullable=False), Column("ocr", JSON, nullable=False),
+    Column("result", JSON, nullable=False), Column("status", String(20), nullable=False),
+    Column("reviewer", String(100), nullable=False), Column("note", Text, nullable=False),
+    Column("created_at", String(40), nullable=False),
+    UniqueConstraint("inspection_id", "revision", name="uq_labelcheck_correction_revision"))
 
 
 def open_database(url, data_dir):

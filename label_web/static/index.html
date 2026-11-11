@@ -113,5 +113,47 @@
   </main>
 </div>
 <dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">正面靠近拍攝，讓標籤盡量填滿畫面並保留四邊。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
+<dialog id="correction-dialog" class="edit-dialog" aria-labelledby="correction-title">
+  <div class="edit-heading"><h2 id="correction-title">訂正這行</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div>
+  <p class="help">請依照片實際印字訂正，只影響這筆檢查。原始辨識與訂正紀錄都會保留。</p>
+  <figure class="correction-photo"><canvas id="correction-photo" role="img" aria-label="所選文字的原始照片位置"></canvas><figcaption id="correction-photo-note">載入原圖中…</figcaption><a id="correction-full-photo" target="_blank" rel="noopener">查看完整原圖</a></figure>
+  <form id="correction-form">
+    <label>原始 OCR 文字<textarea id="correction-original" rows="2" readonly></textarea></label>
+    <details id="correction-standard-details"><summary>查看比對標準（唯讀）</summary><p id="correction-standard" class="scan-line-text"></p></details>
+    <label>訂正類型<select id="correction-kind" required><option value="ocr_misread">辨識讀錯：照片印字正確，OCR 讀錯</option><option value="label_misprint">標籤印錯：照片上確實有錯字或漏字</option><option value="uncertain">看不清楚：保留文字，標記待確認</option></select></label>
+    <label>照片實際印字<textarea id="correction-text" rows="3" maxlength="2000" required></textarea></label>
+    <p id="correction-text-help" class="help">依照片逐字填寫，包含標點；即使照片印錯，也請保留實際錯字。</p>
+    <label>訂正人員<input id="correction-reviewer" maxlength="100" required autocomplete="name"></label>
+    <label>訂正原因<textarea id="correction-note" rows="2" maxlength="2000" required></textarea></label>
+    <p id="correction-error" class="upload-error" role="alert" hidden></p>
+    <button id="correction-reload" class="button secondary" type="button" hidden>載入最新訂正</button>
+    <div class="edit-actions"><button id="correction-save" class="button primary" type="submit">儲存訂正並重新判定</button><button id="correction-revoke" class="button secondary" type="button" hidden>撤回這行訂正</button></div>
+    <p id="correction-revoke-help" class="help" hidden>撤回後會使用這行原始辨識文字，先前訂正紀錄仍保留。</p>
+  </form>
+</dialog>
+<dialog id="standard-edit-dialog" class="edit-dialog" aria-labelledby="standard-edit-title">
+  <div class="edit-heading"><h2 id="standard-edit-title">修正比對標準</h2><button id="standard-edit-close" class="button secondary" type="button">關閉</button></div>
+  <p id="standard-edit-source" class="edit-source"></p><p id="standard-edit-notice" class="help"></p>
+  <p class="help">這裡修改網站的比對依據，會套用到之後同款標籤；印標程式的版面不會因此變更。照片辨識文字不會自動填入。</p>
+  <form id="standard-edit-form" hidden>
+    <div id="standard-edit-operation" class="note" hidden><p id="standard-edit-operation-note"></p><button id="standard-edit-operation-cancel" class="button secondary" type="button">取消還原，繼續編輯</button></div>
+    <label>標準品名<input id="standard-edit-name" maxlength="200" required></label>
+    <label>保存天數<input id="standard-edit-days" type="number" min="0" max="3650" step="1" placeholder="未設定"></label>
+    <p class="help">只修改保存規則；不要把本批製造日期或到期日期寫進標準文字。</p>
+    <details id="standard-edit-lines"><summary>修改標準文字列</summary><div id="standard-edit-line-fields"></div></details>
+    <details id="standard-edit-dates"><summary>修改日期位移規則</summary><div id="standard-edit-date-fields"></div></details>
+    <label>修改人員<input id="standard-edit-reviewer" maxlength="100" required autocomplete="name"></label>
+    <label>修改原因<textarea id="standard-edit-note" rows="2" maxlength="2000" required></textarea></label>
+    <button id="standard-edit-preview-button" class="button secondary" type="button">預覽修改差異</button>
+    <section id="standard-edit-preview" class="standard-preview" aria-label="修改前後預覽" hidden></section>
+    <label id="standard-edit-confirm-label" class="check-label confirm-check" hidden><input id="standard-edit-confirm" type="checkbox" required><span>我已確認以上差異，套用到之後同款標籤的比對。</span></label>
+    <button id="standard-edit-save" class="button primary full" type="submit" hidden>確認儲存新版比對標準</button>
+  </form>
+  <p id="standard-edit-error" class="upload-error" role="alert" hidden></p>
+  <button id="standard-edit-reload" class="button secondary" type="button" hidden>重新載入最新標準</button>
+  <button id="standard-edit-photo-template" class="button secondary" type="button" hidden>建立照片標準新版</button>
+  <button id="standard-edit-reset" class="button secondary" type="button" hidden>恢復原始來源</button>
+  <details id="standard-edit-history"><summary>標準修改紀錄</summary><div id="standard-edit-history-list"></div></details>
+</dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 </body></html>
