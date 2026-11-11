@@ -223,6 +223,11 @@ def payload(engine, inspection):
         return unsupported
     current = _current(engine, str(base["code"]))
     effective = apply_current(engine, base, current or {})
+    notice = effective.get("notice", "")
+    if effective.get("standard_reference", {}).get("state") not in {"approved", "stale"}:
+        notice = ("目前使用商品清單的已知資料作為比對依據；沒有版面的欄位與日期排程不會推造。"
+                  if base["source_kind"] == "catalog" else
+                  "目前使用標籤系統原始資料作為比對依據；有日期設定時會依本批基準日核對。修改後另存網站比對標準版本。")
     with engine.connect() as conn:
         history = conn.execute(select(versions.c.revision, versions.c.operation, versions.c.reviewer,
             versions.c.note, versions.c.created_at, versions.c.source_revision,
@@ -231,7 +236,7 @@ def payload(engine, inspection):
     return {"editable": True, "kind": base["source_kind"], "code": base["code"], "name": effective["name"],
             "base_revision": current["revision"] if current else 0, "source_revision": str(base["revision"]),
             "stale": effective.get("standard_reference", {}).get("state") == "stale",
-            "notice": effective.get("notice", ""), "source": effective,
+            "notice": notice, "source": effective,
             "history": [dict(row) for row in history[:10]], "has_more": len(history) > 10}
 
 

@@ -466,7 +466,7 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
     const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/standard`);
     if (state.standardEdit !== context) return;
     Object.assign(context,{data,loading:false,lineControls:[],dateControls:[],conflict:false});
-    $("#standard-edit-source").textContent=`${data.kind === "catalog" ? "清單" : data.kind === "photo_template" ? "照片標準" : "系統標籤"} ${String(data.code || "").replace(/^list:/,"")} · ${data.name || data.source?.name || "未指定"} · 比對標準第 ${data.base_revision || 0} 版`;
+    $("#standard-edit-source").textContent=`${data.kind === "catalog" ? "清單" : data.kind === "photo_template" ? "照片標準" : "系統標籤"} ${String(data.code || "").replace(/^list:/,"")} · ${data.name || data.source?.name || "未指定"} · ${data.base_revision ? `比對標準第 ${data.base_revision} 版` : "原始來源"}`;
     $("#standard-edit-notice").textContent=`${data.stale ? "來源資料已更新，請重新核對目前內容。 " : ""}${data.notice || ""}`;
     const history=$("#standard-edit-history-list");
     for(const item of data.history || []){
