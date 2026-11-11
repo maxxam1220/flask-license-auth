@@ -4,10 +4,10 @@ from difflib import SequenceMatcher
 import re
 import unicodedata
 
-from validation import diff_parts, parse_date, traditional_display
+from validation import diff_parts, parse_date, traditional_display, product_row_candidates
 
 
-RULE_VERSION = "1.6"
+RULE_VERSION = "1.7"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
@@ -118,6 +118,11 @@ def _groups(lines, source_fields=None):
             if not nearby:
                 break
             chain.append(min(nearby, key=lambda pair: pair[0])[1])
+    for row in product_row_candidates(lines):
+        groups.append({"lines": row["lines"], "ids": frozenset(row["line_ids"]),
+                       "text": row["raw_text"], "normal": normalize_text(row["raw_text"]), "kind": "product",
+                       "barcode_kind": None, "barcode_heading": False,
+                       "score": row["score"], "ambiguous": row["ambiguous"], "assembled_product": True})
     return groups
 
 
@@ -188,6 +193,14 @@ def _text_checks(lines, source):
     actual_groups = _groups(lines)
     used_source, used_actual, checks, fields, keys = set(), set(), [], {}, set()
 
+    def usable(expected, actual):
+        if actual["ids"] & used_actual or not _compatible(expected, actual):
+            return False
+        # Once geometry establishes a complete observed product row, do not
+        # accept a shorter subset and hide extra/mistyped adjacent characters.
+        return expected["kind"] != "product" or not any(
+            actual["ids"] < row["ids"] for row in actual_groups if row.get("assembled_product"))
+
     def record(expected, actual=None, ambiguous=False):
         kind = expected["kind"] if len(expected["lines"]) == 1 else None
         key = kind or f"source_text_{expected['lines'][0]['id']}"
@@ -221,8 +234,7 @@ def _text_checks(lines, source):
         for expected in sorted(expected_groups, key=lambda group: len(group["lines"])):
             if expected["ids"] & used_source or (len(expected["lines"]) == 1) != (group_size == 1) or not expected["normal"]:
                 continue
-            candidates = [actual for actual in actual_groups if not actual["ids"] & used_actual
-                          and _compatible(expected, actual) and _equivalent(expected, actual)]
+            candidates = [actual for actual in actual_groups if usable(expected, actual) and _equivalent(expected, actual)]
             if candidates:
                 candidates.sort(key=lambda group: (len(group["lines"]), -group["score"]))
                 best = candidates[0]
@@ -233,7 +245,7 @@ def _text_checks(lines, source):
             continue
         ranked = []
         for actual in actual_groups:
-            if actual["ids"] & used_actual or not _compatible(expected, actual):
+            if not usable(expected, actual):
                 continue
             similarity = SequenceMatcher(None, _compared_text(expected, expected["text"]), _compared_text(expected, actual["text"]), autojunk=False).ratio()
             minimum = .4 if expected["kind"] and expected["kind"] == actual["kind"] else .55

@@ -428,9 +428,16 @@ function resultLine(item) {
       if (check.label) block.append(element("strong", "", check.label));
       if (check.reason && check.reason !== reasons[0]) block.append(element("p", "check-reason", check.reason));
       if (check.conversion_changed) block.append(element("p", "display-note", "上方以繁體顯示；以下保留 OCR 原文。"));
-      for (const [key, label] of [["expected","標準"],["actual","原文"]]) {
+      const hasDiff = Array.isArray(check.diff) && check.diff.length > 0;
+      for (const [key, label] of [["expected","標準"],["actual",hasDiff ? "差異對照" : "辨識原文"]]) {
         if (key === "expected" && !check.expected) continue;
         const comparison = element("div", "comparison-row"); comparison.append(element("span", "", label), diffNode(check, key)); block.append(comparison);
+      }
+      if (hasDiff) {
+        const raw = typeof check.raw_actual === "string" ? check.raw_actual : check.actual || "";
+        const original = element("div", "comparison-row");
+        original.append(element("span", "", "辨識原文"), element("span", "scan-line-text", raw || "（未辨識到文字）"));
+        block.append(original);
       }
       detail.append(block);
     }

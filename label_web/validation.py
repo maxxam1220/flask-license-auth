@@ -71,7 +71,8 @@ def parse_date(text):
 
 def _candidate(value, lines, ambiguous=False):
     return {"value": value.strip(" ：:"), "score": min(float(x.get("score", 0)) for x in lines),
-            "line_ids": [x["id"] for x in lines], "ambiguous": ambiguous}
+            "line_ids": [x["id"] for x in lines],
+            "ambiguous": ambiguous or any(x.get("ambiguous", False) for x in lines)}
 
 
 def _bounds(line):
@@ -86,6 +87,87 @@ def _below_in_column(line, other):
     overlap = max(0, min(right, nr) - max(x, nx))
     aligned = overlap >= min(right - x, nr - nx) * .35 or abs(nx - x) < height * 1.5
     return aligned and ny >= bottom - height * .4 and ny - bottom <= max(height * 1.5, 20)
+
+
+def product_row_candidates(lines):
+    """Assemble observed horizontal product fragments without consulting a standard.
+
+    Close boxes on the same baseline may be OCR pieces of one name. A price,
+    another field heading, company, address or barcode is a stopping boundary.
+    Returned lines are the original evidence; no missing character is supplied.
+    """
+    def fragment(line, anchor=False):
+        value = compact(traditional_display(line.get("text", "")))
+        heading = re.match(ALIASES["product"] + r"[：:]?", value)
+        if heading:
+            if not anchor:
+                return False
+            value = value[heading.end():]
+            if not value:
+                return True
+        if re.search(ALL_KEYS, value):
+            return False
+        if re.search(r"價格|售價|單價|特價|促銷|公司|股份|有限|企業社|商行|食用|清洗|客服|熱量|蛋白質|脂肪|碳水", value):
+            return False
+        if re.search(r"[市縣].{1,20}(?:[區鄉鎮市]|[路街])", value):
+            return False
+        if re.search(r"(?:[$＄]|NT\$)|^[(（\[]?\d+(?:\.\d+)?元", value, re.I):
+            return False
+        if anchor and re.fullmatch(r"[（(\[【].*[）)\]】]", value):
+            return False  # A detached parenthetical suffix cannot supply a missing head.
+        return bool(re.search(r"[\u4e00-\u9fff]", value)) or (not anchor and bool(re.match(r"[（(\[【]", value)))
+
+    usable = [line for line in lines if line.get("box")]
+    groups = []
+    for first in usable:
+        if not fragment(first, anchor=True):
+            continue
+        chain, ambiguous = [first], False
+        for _ in range(5):
+            left = chain[-1]
+            x, y, right, bottom = _bounds(left)
+            nearby = []
+            for other in usable:
+                if other in chain:
+                    continue
+                nx, ny, nr, nb = _bounds(other)
+                height, other_height = bottom-y, nb-ny
+                if min(height, other_height) <= 0 or min(height, other_height) / max(height, other_height) < .6:
+                    continue
+                overlap = max(0, min(bottom, nb)-max(y, ny))
+                if overlap < min(height, other_height)*.6 or abs((y+bottom)-(ny+nb))/2 > max(height, other_height)*.35:
+                    continue
+                gap = nx-right
+                bracket = bool(re.match(r"\s*[（(\[【]", other["text"]))
+                if 0 <= gap <= max(height, other_height) * (2. if bracket else 1.25):
+                    nearby.append((gap, other))
+            if not nearby:
+                break
+            nearby.sort(key=lambda pair: pair[0])
+            gap, nxt = nearby[0]
+            nx, ny, nr, nb = _bounds(nxt)
+            band_top, band_bottom = max(y, ny), min(bottom, nb)
+            # Font-size filtering chooses a plausible continuation, but must not
+            # make an intervening visible price or small character disappear.
+            blocked = False
+            for middle in usable:
+                if middle in chain or middle is nxt or not middle.get("text", "").strip():
+                    continue
+                mx, my, mr, mb = _bounds(middle)
+                if mx < nx and mr > right and my < band_bottom and mb > band_top:
+                    blocked = True
+                    break
+            if blocked:
+                break
+            if not fragment(nxt):
+                break
+            ambiguous |= len(nearby) > 1 and abs(nearby[1][0]-gap) < 2
+            chain.append(nxt)
+        if len(chain) > 1:
+            raw = "".join(item["text"] for item in chain)
+            value = re.sub(r"^\s*" + ALIASES["product"] + r"\s*[：:]?\s*", "", raw, count=1)
+            groups.append(dict(_candidate(value, chain, ambiguous), lines=chain, raw_text=raw))
+    return groups
 
 
 def _next_value(line, ordered):
@@ -175,6 +257,7 @@ def _advisory_candidate(ordered):
 def extract_fields(lines, expected=None):
     found = {}
     ordered = sorted(lines, key=lambda x: (min(p[1] for p in x["box"]), min(p[0] for p in x["box"])))
+    product_rows = product_row_candidates(ordered)
     for key, alias in ALIASES.items():
         candidates = []
         for i, line in enumerate(ordered):
@@ -197,10 +280,15 @@ def extract_fields(lines, expected=None):
             # Join a wrapped address only where the continuation is close and address-like.
             if key == "address" and value:
                 value, evidence = _join_address(value, evidence, ordered)
+            if key == "product":
+                row = next((row for row in product_rows if row["lines"][0]["id"] == line["id"]), None)
+                if row:
+                    candidates.append({key: row[key] for key in ("value", "score", "line_ids", "ambiguous")})
+                    continue
             if value:
                 candidates.append(_candidate(value, evidence))
         if candidates:
-            found[key] = dict(candidates[0], ambiguous=len(candidates) > 1)
+            found[key] = dict(candidates[0], ambiguous=len(candidates) > 1 or candidates[0]["ambiguous"])
     if "address" not in found:
         addresses = [x for x in ordered if not re.search(ALL_KEYS, x["text"])
                      and re.search(r"[市縣].{1,20}(?:[區鄉鎮市]|[路街])", compact(x["text"]))]
@@ -245,6 +333,17 @@ def extract_fields(lines, expected=None):
                       and x["id"] not in excluded
                       and re.search(r"[\u4e00-\u9fff]", x["text"])
                       and not re.search(r"\d{4}\s*[年./-]|清晨|上午|下午|鮮食\s|營養|熱量|蛋白質|脂肪|碳水|毫克|公克|客服|公司|食用|清洗", x["text"])]
+        # Replace members with the observed complete row, so a suffix a fraction
+        # of a pixel higher cannot displace the name on its left.
+        for row in product_rows:
+            if any(identifier in excluded for identifier in row["line_ids"]):
+                continue
+            if not any(item["id"] in row["line_ids"] for item in candidates):
+                continue
+            positions = [index for index, item in enumerate(candidates) if item["id"] in row["line_ids"]]
+            replacement = dict(row["lines"][0], text=row["value"], _product_evidence=row["lines"], ambiguous=row["ambiguous"])
+            candidates = [item for item in candidates if item["id"] not in row["line_ids"]]
+            candidates.insert(min(positions), replacement)
         if expected and expected.get("product") and candidates:
             # Similarity locates the line only. Acceptance always requires exact characters.
             ranked = sorted(candidates, key=lambda x: SequenceMatcher(None, compact(x["text"]), compact(expected["product"])).ratio(), reverse=True)
@@ -252,9 +351,10 @@ def extract_fields(lines, expected=None):
             if SequenceMatcher(None, compact(best["text"]), compact(expected["product"])).ratio() >= 0.35:
                 score = SequenceMatcher(None, compact(best["text"]), compact(expected["product"])).ratio()
                 ambiguous = len(ranked) > 1 and abs(score - SequenceMatcher(None, compact(ranked[1]["text"]), compact(expected["product"])).ratio()) < .04
-                found["product"] = _candidate(best["text"], [best], ambiguous)
+                found["product"] = _candidate(best["text"], best.get("_product_evidence", [best]), ambiguous or best.get("ambiguous", False))
         elif candidates:
-            found["product"] = _candidate(candidates[0]["text"], [candidates[0]])
+            best = candidates[0]
+            found["product"] = _candidate(best["text"], best.get("_product_evidence", [best]), best.get("ambiguous", False))
     return found
 
 
