@@ -2,6 +2,7 @@ import io
 import tempfile
 import time
 import unittest
+import threading
 from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
@@ -109,6 +110,25 @@ class APITests(unittest.TestCase):
 
     def test_local_source_search_does_not_invent_data(self):
         self.assertEqual(self.client.get("/api/source-labels?q=雙拼").json,{"available":False,"items":[]})
+
+    def test_busy_upload_does_not_block_health_requests(self):
+        started, release = threading.Event(), threading.Event()
+        def slow_ocr(_path):
+            started.set()
+            release.wait(5)
+            return {"lines": make_lines(), "engine": "TEST ONLY", "elapsed": .01}
+        with patch.object(FakeOCR, "recognize", side_effect=slow_ocr):
+            try:
+                first = self.client.post("/api/jobs", data={"kind":"recognition", "photo":(self.photo(),"label.png")}, headers=self.headers)
+                self.assertEqual(first.status_code, 202)
+                self.assertTrue(started.wait(2))
+                before = time.monotonic()
+                second = self.client.post("/api/jobs", data={"kind":"reference", "photo":(self.photo(),"label.png")}, headers=self.headers)
+                self.assertEqual(second.status_code, 429)
+                self.assertLess(time.monotonic() - before, 2)
+                self.assertEqual(self.client.get("/healthz").status_code, 200)
+            finally:
+                release.set()
 
     def test_invalid_history_page_and_original_access(self):
         self.assertEqual(self.client.get("/api/inspections?page=bad").status_code,400)

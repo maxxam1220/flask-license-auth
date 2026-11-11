@@ -13,7 +13,9 @@ class OCREngine:
     def recognize(self, image_path):
         with self.lock:
             if self.engine is None:
+                import cv2
                 from rapidocr import RapidOCR, EngineType, LangDet, LangRec, ModelType, OCRVersion
+                cv2.setNumThreads(1)
                 self.model_dir.mkdir(parents=True, exist_ok=True)
                 self.engine = RapidOCR(params={
                     "Global.model_root_dir": str(self.model_dir),
@@ -22,6 +24,8 @@ class OCREngine:
                     "Global.log_level": "warning",
                     "EngineConfig.onnxruntime.intra_op_num_threads": 2,
                     "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+                    "EngineConfig.onnxruntime.enable_cpu_mem_arena": False,
+                    "Cls.cls_batch_num": 1,
                     "Det.engine_type": EngineType.ONNXRUNTIME,
                     "Det.lang_type": LangDet.CH,
                     "Det.model_type": ModelType.MOBILE,
@@ -32,6 +36,7 @@ class OCREngine:
                     "Rec.lang_type": LangRec.CH,
                     "Rec.model_type": ModelType.SERVER,
                     "Rec.ocr_version": OCRVersion.PPOCRV5,
+                    "Rec.rec_batch_num": 1,
                 })
             start = time.monotonic()
             result = self.engine(str(image_path))
@@ -50,8 +55,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("image")
     parser.add_argument("--output")
+    parser.add_argument("--model-dir", default=str(Path(__file__).parent / "models"))
     args = parser.parse_args()
-    result = OCREngine(Path(__file__).parent / "models").recognize(args.image)
+    result = OCREngine(Path(args.model_dir)).recognize(args.image)
+    # Operational evidence for the one-shot Linux worker, not an OCR confidence score.
+    try:
+        import resource
+        result["worker_peak_rss_mb"] = round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    except ImportError:
+        pass
     encoded = json.dumps(result, ensure_ascii=False, indent=2)
     if args.output:
         Path(args.output).write_text(encoded, encoding="utf-8")

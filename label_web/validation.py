@@ -25,7 +25,7 @@ def parse_date(text):
     value = unicodedata.normalize("NFKC", str(text or "")).strip()
     roc = value.startswith("民國")
     value = re.sub(r"^民國\s*", "", value)
-    match = re.fullmatch(r"(\d{3,4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*(?:時|:)(?:(\d{1,2})\s*分?)?)?", value)
+    match = re.fullmatch(r"(\d{3,4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*(?:時|时|:)(?:(\d{1,2})\s*分?)?)?", value)
     if not match:
         raise ValueError("日期須包含完整年月日；無法判讀的字元不會自動修正。")
     year, month, day = (int(match[i]) for i in (1, 2, 3))

@@ -18,7 +18,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 import database as db
-from ocr_engine import OCREngine
+from ocr_worker import IsolatedOCR
 from validation import extract_fields, evaluate, parse_date, recognize_only
 import label_source
 
@@ -52,7 +52,7 @@ def create_app(config=None, ocr=None):
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="label-ocr")
     slots = threading.BoundedSemaphore(12)
     image_lock = threading.Lock()
-    recognizer = ocr or OCREngine(ROOT / "models")
+    recognizer = ocr or IsolatedOCR(ROOT / "models")
     app.extensions.update(label_engine=engine, label_worker=worker)
     with engine.begin() as conn:
         conn.execute(update(db.jobs).where(db.jobs.c.state.in_(["pending", "running"])).values(
@@ -321,8 +321,12 @@ def create_app(config=None, ocr=None):
         if not slots.acquire(blocking=False):
             abort(429, description="目前等待辨識的照片較多，請稍後再試。")
         try:
-            with image_lock:
+            if not image_lock.acquire(timeout=0.1):
+                abort(429, description="正在處理上一張照片，請稍後再上傳。")
+            try:
                 image = store_image(request.files["photo"])
+            finally:
+                image_lock.release()
             row = dict(id=db.uid(), image_id=image["id"], kind=kind, template_id=template_id or None,
                        batch_date=batch, state="pending", created_at=db.now())
             with engine.begin() as conn:
