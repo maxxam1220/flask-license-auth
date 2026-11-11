@@ -18,7 +18,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.utils import secure_filename
 
 import database as db
-from ocr_worker import IsolatedOCR
+from ocr_worker import IsolatedOCR, OCRMemoryLimitError
 from validation import extract_fields, evaluate, parse_date, TEXT_FIELDS
 from source_validation import evaluate_source, RULE_VERSION
 from source_rules import prepare_source
@@ -351,10 +351,15 @@ def create_app(config=None, ocr=None):
                         result=evaluation, ocr=ocr_result, created_at=db.now()))
                     result["inspection_id"] = inspection_id
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="done", result=result))
-        except Exception:
+        except Exception as error:
             app.logger.exception("OCR job failed")
+            message = ("這張照片的辨識用量超過目前服務可用記憶體，已停止本次辨識。請裁切至單張標籤後重試。"
+                       if isinstance(error, OCRMemoryLimitError)
+                       else "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")
+            if isinstance(error, OCRMemoryLimitError) and error.kind == "monitor_unavailable":
+                message = "目前暫時無法安全啟動辨識，請稍後再試。照片已保留。"
             with engine.begin() as conn:
-                conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="failed", error="照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。"))
+                conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="failed", error=message))
         finally:
             slots.release()
 

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
 from server import create_app
+from ocr_worker import OCRMemoryLimitError
 from test_validation import make_lines, STANDARD
 
 
@@ -190,6 +191,56 @@ class APITests(unittest.TestCase):
                 self.assertEqual(self.client.get("/healthz").status_code, 200)
             finally:
                 release.set()
+
+    def test_memory_stopped_job_is_safe_and_releases_capacity_for_next_photo(self):
+        # One available slot makes a leaked permit observable on the very next upload.
+        single_slot = threading.BoundedSemaphore(1)
+        recognizer = FakeOCR()
+        with patch("server.threading.BoundedSemaphore", return_value=single_slot):
+            app = create_app({"TESTING":True, "DATA_DIR":Path(self.temp.name)/"memory-guard",
+                              "DATABASE_URL":"", "APP_PASSWORD":""}, ocr=recognizer)
+        client = app.test_client()
+        headers = {"X-CSRF-Token":client.get("/api/session").json["csrf"]}
+        success = {"lines":make_lines(), "engine":"TEST ONLY", "elapsed":.01}
+        error = OCRMemoryLimitError("worker_budget", 361*1024*1024, 360*1024*1024)
+        try:
+            with patch.object(recognizer, "recognize", side_effect=[error, success]), patch.object(app.logger, "exception"):
+                response = client.post("/api/jobs", data={"kind":"recognition", "base_date":"2026-11-10",
+                                       "photo":(self.photo(),"label.png")}, headers=headers)
+                self.assertEqual(response.status_code, 202, response.json)
+                # Wait for the submitted work (including its finally block), not a timer.
+                app.extensions["label_worker"].submit(lambda: None).result(timeout=3)
+                failed = client.get("/api/jobs/" + response.json["id"]).json
+                self.assertEqual(failed["state"], "failed")
+                self.assertEqual(failed["error"], "這張照片的辨識用量超過目前服務可用記憶體，已停止本次辨識。請裁切至單張標籤後重試。")
+                self.assertNotIn("worker_budget", str(failed))
+                self.assertNotIn("361", str(failed["error"]))
+                self.assertNotIn("inspection_id", failed["result"])
+                self.assertEqual(client.get("/healthz").status_code, 200)
+                self.assertEqual(client.get("/api/inspections").json["items"], [])
+                again = client.post("/api/jobs", data={"kind":"recognition", "base_date":"2026-11-10",
+                                    "photo":(self.photo(),"next.png")}, headers=headers)
+                self.assertEqual(again.status_code, 202, again.json)
+                app.extensions["label_worker"].submit(lambda: None).result(timeout=3)
+                recovered = client.get("/api/jobs/" + again.json["id"]).json
+                self.assertEqual(recovered["state"], "done", recovered)
+                self.assertIsNone(recovered["error"])
+                self.assertTrue(recovered["result"]["inspection_id"])
+                self.assertEqual(client.get("/healthz").status_code, 200)
+        finally:
+            app.extensions["label_worker"].shutdown(wait=True)
+            app.extensions["label_engine"].dispose()
+
+    def test_non_memory_worker_error_keeps_generic_client_message(self):
+        with patch.object(FakeOCR, "recognize", side_effect=RuntimeError("private model path and process details")), patch.object(self.app.logger, "exception"):
+            response = self.client.post("/api/jobs", data={"kind":"recognition",
+                                        "photo":(self.photo(),"label.png")}, headers=self.headers)
+            self.assertEqual(response.status_code, 202, response.json)
+            self.app.extensions["label_worker"].submit(lambda: None).result(timeout=3)
+        failed = self.client.get("/api/jobs/" + response.json["id"]).json
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["error"], "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")
+        self.assertNotIn("private model", str(failed))
 
     def test_invalid_history_page_and_original_access(self):
         self.assertEqual(self.client.get("/api/inspections?page=bad").status_code,400)
