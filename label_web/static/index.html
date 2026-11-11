@@ -34,10 +34,12 @@
   <main>
     <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><span class="top-badge">掃描辨識 · 標準核對</span></header>
     <section id="view-inspect" class="view">
-      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">不必先上傳正確照片，拍照後即可檢查固定文字與日期。</p></div></div>
+      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">拍照後自動尋找系統標籤比對，查看每一列的檢查結果。</p></div></div>
       <div class="steps" aria-label="檢查流程"><span><b>1</b>拍照或選照片</span><i></i><span><b>2</b>自動辨識核對</span><i></i><span><b>3</b>查看相符與差異</span></div>
       <div class="inspect-grid">
         <div class="panel inspect-input">
+          <label for="base-date" class="base-date-label">本批基準日<input id="base-date" type="date" required></label>
+          <p class="help base-date-help">依此日期與標籤系統設定核對日期；查歷史標籤時可調整。</p>
           <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
             <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>讓整張標籤清楚入鏡</h3><p>正面拍攝，避開反光、手指與遮擋</p>
@@ -47,11 +49,10 @@
           <input id="inspect-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
           <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
-          <section id="scan-baseline" class="scan-baseline" aria-labelledby="scan-baseline-heading"><h3 id="scan-baseline-heading">自動核對的固定文字</h3><div id="scan-standards" class="scan-standards"><p class="muted">正在載入固定文字…</p></div><p class="help">其他內容會列出辨識文字；沒有比對依據的項目，不會判定為相符。</p></section>
-          <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後會核對本批製造日，避免兩個日期同時印錯。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入預定到店日，核對照片是否印對日期；未填時僅檢查日期格式及可判讀的先後關係。</p></details>
-          <details id="template-options" class="scan-options"><summary>其他比對設定 <span class="optional">選用</span></summary><label for="template-select">辨識方式與標準<select id="template-select"><option value="">直接掃描（固定文字與日期檢查）</option></select></label><p id="recognition-help" class="help">直接掃描會使用上方固定文字，不需要正確照片。</p><div id="selected-standard" class="selected-standard" hidden></div><p class="help">若需比對特定商品的品名、規格或保存條件，可另建一份人工確認的標準。</p><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立選用標準</button></details>
+          <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填覆蓋</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對製造日。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對到店日；未填時依基準日與系統設定檢查。</p></details>
+          <details id="template-options" class="scan-options"><summary>其他比對設定 <span class="optional">選用</span></summary><form id="inspect-source-search"><label for="inspect-source-query">選擇系統標籤<input id="inspect-source-query" maxlength="100" required placeholder="搜尋標籤代碼或品名"></label><button class="button secondary" type="submit">搜尋系統標籤</button></form><div id="inspect-source-results" class="source-results"></div><p id="inspect-source-note" class="help source-search-note"></p><div id="inspect-source-selected" class="selected-system-source" hidden></div><div class="form-divider"></div><label for="template-select">照片標準<select id="template-select"><option value="">自動對應系統標籤</option></select></label><p id="recognition-help" class="help">不必先上傳正確照片。找不到唯一標籤時，可在上方手動選定。</p><div id="selected-standard" class="selected-standard" hidden></div><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立選用標準</button></details>
         </div>
-        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>掃描後，結果會分組顯示</h2><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異／需確認</span></div><p class="small muted">其他已辨識文字會另外列出，不會當成已確認正確。</p></div>
+        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>每一列，直接看結果</h2><div class="result-legend"><span class="badge pass">✓ 相符</span><span class="badge fail">✕ 有差異</span><span class="badge review">? 需確認</span></div><p class="small muted">沒有比對依據的文字會標為「僅辨識」。</p></div>
         <div id="result-area" hidden></div>
       </div>
     </section>

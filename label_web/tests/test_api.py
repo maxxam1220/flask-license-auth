@@ -32,7 +32,7 @@ class APITests(unittest.TestCase):
         file=io.BytesIO();Image.new("RGB",(500,500),"white").save(file,"PNG");file.seek(0);return file
 
     def job(self, kind="reference", template_id="", **inputs):
-        response=self.client.post("/api/jobs",data={"kind":kind,"template_id":template_id,"photo":(self.photo(),"標籤.png"),**inputs},headers=self.headers)
+        response=self.client.post("/api/jobs",data={"kind":kind,"template_id":template_id,"base_date":"2026-11-10","photo":(self.photo(),"標籤.png"),**inputs},headers=self.headers)
         self.assertEqual(response.status_code,202,response.json)
         for _ in range(100):
             job=self.client.get("/api/jobs/"+response.json["id"]).json
@@ -81,28 +81,61 @@ class APITests(unittest.TestCase):
         response=self.client.post("/api/jobs",data={"kind":"inspection","template_id":"missing","photo":(self.photo(),"label.png")},headers=self.headers)
         self.assertEqual(response.status_code,404)
 
-    def test_direct_scan_persists_builtin_checks_and_full_text_without_photo_reference(self):
+    def test_direct_scan_without_database_keeps_text_unverified_and_has_no_builtin(self):
         job = self.job("recognition")
         result = self.client.get("/api/inspections/" + job["result"]["inspection_id"]).json
-        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["status"], "review")
         self.assertIsNone(result["reference_image"])
-        self.assertEqual(result["result"]["fields"]["product"]["value"], STANDARD["fields"]["product"])
-        address = next(c for c in result["result"]["checks"] if c["key"] == "address")
-        self.assertEqual(address["expected"], "新北市土城區中興路9號")
-        self.assertEqual(address["status"], "fail")
+        self.assertTrue(any(STANDARD["fields"]["product"] in c.get("actual", "") for c in result["result"]["checks"]))
+        self.assertEqual(result["result"]["source_match"]["status"], "unavailable")
+        self.assertFalse(any(c.get("source") == "builtin" for c in result["result"]["checks"]))
         self.assertTrue(any(c["status"] == "read" for c in result["result"]["checks"]))
         self.assertEqual(result["result"]["coverage"]["total_lines"], result["result"]["coverage"]["covered_lines"])
         self.assertEqual(self.client.get("/api/inspections").json["items"][0]["version"], 0)
 
-    def test_scan_config_exposes_confirmed_fixed_text_only_after_login(self):
+    def test_scan_config_exposes_today_without_hardcoded_standards_after_login(self):
         self.app.config["APP_PASSWORD"] = "testpass"
         self.assertEqual(self.client.get("/api/scan-config").status_code,401)
         response = self.client.post("/api/login",json={"password":"testpass"},headers=self.headers)
         self.assertEqual(response.status_code,200)
         response = self.client.get("/api/scan-config")
         self.assertEqual(response.status_code,200)
-        standards = {x["key"]:x["value"] for x in response.json["standards"]}
-        self.assertEqual(standards, {"company":"福和生鮮農產股份有限公司", "address":"新北市土城區中興路9號", "phone":"0800-200-859", "advisory":"果皮上的白點為正常現象(保護果實避免曬傷的碳酸鈣粉)"})
+        self.assertEqual(response.json["standards"], [])
+        self.assertEqual(response.json["mode"], "system_label")
+        self.assertRegex(response.json["today"], r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_system_source_is_selected_and_snapshotted_without_creating_template(self):
+        source = {"code":"1013", "name":"測試來源", "revision":"r1", "lines":make_lines()[:3],
+                  "fields":STANDARD["fields"], "rules":{"dates":True}, "keep_days":3,
+                  "date_settings":[{"content":"製造日期:","format":"A","shift_days":0},
+                                   {"content":"有效日期:","format":"B","shift_days":0}]}
+        with patch("server.label_source.resolve", return_value={"status":"matched","code":"1013","name":"測試來源","reason":"test","candidates":[],"source":source}) as resolver:
+            job = self.job("recognition",source_code="1013")
+        self.assertEqual(resolver.call_args.args[2],"1013")
+        row = self.client.get("/api/inspections/"+job["result"]["inspection_id"]).json
+        self.assertEqual(row["result"]["source_match"]["code"],"1013")
+        self.assertEqual(row["result"]["inputs"]["base_date"],"2026-11-10")
+        self.assertEqual(row["template_snapshot"]["source"]["revision"],"r1")
+        self.assertEqual(self.client.get("/api/templates").json["items"],[])
+
+    def test_recheck_reuses_ocr_and_preserves_original_result(self):
+        job = self.job("recognition")
+        identifier = job["result"]["inspection_id"]
+        original = self.client.get("/api/inspections/"+identifier).json
+        with patch.object(FakeOCR,"recognize",side_effect=AssertionError("must reuse OCR")):
+            response = self.client.post(f"/api/inspections/{identifier}/recheck",json={"base_date":"2027-11-10"},headers=self.headers)
+        self.assertEqual(response.status_code,201,response.json)
+        updated = self.client.get("/api/inspections/"+response.json["inspection_id"]).json
+        self.assertEqual(updated["image_id"],original["image_id"])
+        self.assertEqual(updated["ocr"],original["ocr"])
+        self.assertEqual(updated["result"]["recheck_of"],identifier)
+        self.assertEqual(updated["status"],"fail")
+        self.assertEqual(self.client.get("/api/inspections/"+identifier).json["result"],original["result"])
+
+    def test_invalid_base_date_and_mixed_references_are_rejected(self):
+        for inputs in ({"base_date":"2026-02-30"},{"source_code":"1013","template_id":"x"}):
+            response = self.client.post("/api/jobs",data={"kind":"recognition","photo":(self.photo(),"label.png"),**inputs},headers=self.headers)
+            self.assertEqual(response.status_code,400,response.json)
 
     def test_source_standard_without_photo_and_stale_revision(self):
         source = {"code":"123", "name":"系統標籤", "revision":"revision1", "keep_days":9,

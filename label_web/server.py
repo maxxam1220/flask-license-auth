@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 import hashlib
@@ -19,7 +19,9 @@ from werkzeug.utils import secure_filename
 
 import database as db
 from ocr_worker import IsolatedOCR
-from validation import extract_fields, evaluate, parse_date, recognize_only, TEXT_FIELDS, BUILTIN_STANDARDS, RULE_VERSION
+from validation import extract_fields, evaluate, parse_date, TEXT_FIELDS
+from source_validation import evaluate_source, RULE_VERSION
+from source_rules import prepare_source
 import label_source
 
 register_heif_opener()
@@ -76,6 +78,38 @@ def create_app(config=None, ocr=None):
         result = dict(row)
         result["image"] = image_payload(result["image_id"])
         return result
+
+    def taiwan_today():
+        return datetime.now(timezone(timedelta(hours=8))).date().isoformat()
+
+    def scan_inputs(body):
+        values = {}
+        for key, label in (("base_date", "本批基準日"), ("batch_date", "本批製造日"), ("arrival_date", "本批到店日")):
+            value = body.get(key, "") or (taiwan_today() if key == "base_date" else "")
+            if not isinstance(value, str):
+                abort(400, description=f"{label}格式不正確。")
+            if value:
+                try:
+                    if date.fromisoformat(value).isoformat() != value:
+                        raise ValueError()
+                except ValueError:
+                    abort(400, description=f"{label}格式不正確。")
+            values[key] = value
+        source_code = body.get("source_code", "")
+        if not isinstance(source_code, str) or len(source_code) > 100 or any(ord(char) < 32 for char in source_code):
+            abort(400, description="系統標籤代碼不正確。")
+        values["source_code"] = source_code.strip()
+        return values
+
+    def check_source(lines, inputs):
+        match = label_source.resolve(engine, lines, inputs["source_code"])
+        source = prepare_source(match.get("source"), inputs["base_date"])
+        standard = {"id": "", "name": f"系統標籤 {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
+                    "version": 0, "image_id": "", "mode": "system_label", "source": source}
+        result = evaluate_source(lines, source, inputs["batch_date"], inputs["arrival_date"], base_date=inputs["base_date"])
+        result["source_match"] = {key: value for key, value in match.items() if key != "source"}
+        result["inputs"] = inputs
+        return standard, result
 
     @app.before_request
     def protect():
@@ -161,7 +195,7 @@ def create_app(config=None, ocr=None):
 
     @app.get("/api/scan-config")
     def scan_config():
-        return jsonify(standards=BUILTIN_STANDARDS, version=RULE_VERSION)
+        return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today())
 
     @app.get("/api/source-labels")
     def source_labels():
@@ -293,16 +327,21 @@ def create_app(config=None, ocr=None):
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="running"))
             with image_lock:
                 ocr_result = recognizer.recognize(data_dir / "images" / job["image_id"] / "image.jpg")
-            inputs = {"batch_date": job["batch_date"], "arrival_date": (job.get("result") or {}).get("request", {}).get("arrival_date", "")}
+            saved_request = (job.get("result") or {}).get("request", {})
+            inputs = {"batch_date": job["batch_date"], "arrival_date": saved_request.get("arrival_date", ""),
+                      "source_code": saved_request.get("source_code", ""),
+                      "base_date": saved_request.get("base_date") or taiwan_today()}
             result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
+            source_evaluation = None
+            if job["kind"] == "recognition":
+                source_evaluation = check_source(ocr_result["lines"], inputs)
             with engine.begin() as conn:
                 if job["kind"] in {"inspection", "recognition"}:
                     if job["kind"] == "inspection":
                         standard = dict(conn.execute(select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
                         evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
                     else:
-                        standard = {"id": "", "name": "直接掃描・固定文字與日期檢查", "version": 0, "image_id": "", "mode": "recognition"}
-                        evaluation = recognize_only(ocr_result["lines"], inputs["batch_date"], inputs["arrival_date"])
+                        standard, evaluation = source_evaluation
                     evaluation["inputs"] = inputs
                     inspection_id = db.uid()
                     conn.execute(insert(db.inspections).values(id=inspection_id, image_id=job["image_id"],
@@ -323,23 +362,15 @@ def create_app(config=None, ocr=None):
         if kind not in {"reference", "inspection", "recognition"} or "photo" not in request.files:
             abort(400, description="請選擇照片。")
         template_id = request.form.get("template_id", "")
+        inputs = scan_inputs(request.form)
+        source_code = inputs["source_code"]
+        if source_code and (kind != "recognition" or template_id):
+            abort(400, description="請選擇系統標籤或照片標準其中一種。")
         if kind == "inspection":
             standard = get_one(db.templates, template_id)
             if not standard["active"]:
                 abort(409, description="標準已更新，請重新選擇。")
-        batch = request.form.get("batch_date", "")
-        if batch:
-            try:
-                date.fromisoformat(batch)
-            except ValueError:
-                abort(400, description="本批製造日期格式不正確。")
-        arrival = request.form.get("arrival_date", "")
-        if arrival:
-            try:
-                if date.fromisoformat(arrival).isoformat() != arrival:
-                    raise ValueError()
-            except ValueError:
-                abort(400, description="本批到店日期格式不正確。")
+        batch = inputs["batch_date"]
         if not slots.acquire(blocking=False):
             abort(429, description="目前等待辨識的照片較多，請稍後再試。")
         try:
@@ -351,7 +382,7 @@ def create_app(config=None, ocr=None):
                 image_lock.release()
             row = dict(id=db.uid(), image_id=image["id"], kind=kind, template_id=template_id or None,
                        batch_date=batch, state="pending", created_at=db.now(),
-                       result={"request": {"batch_date": batch, "arrival_date": arrival}})
+                       result={"request": inputs})
             with engine.begin() as conn:
                 conn.execute(insert(db.jobs).values(**row))
             worker.submit(process_job, row)
@@ -411,5 +442,22 @@ def create_app(config=None, ocr=None):
         with engine.begin() as conn:
             conn.execute(insert(db.reviews).values(**row))
         return jsonify(row), 201
+
+    @app.post("/api/inspections/<identifier>/recheck")
+    def recheck(identifier):
+        original = get_one(db.inspections, identifier)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            abort(400, description="請確認核對設定。")
+        inputs = scan_inputs(body)
+        standard, result = check_source(original["ocr"]["lines"], inputs)
+        result["recheck_of"] = identifier
+        result["recognition_reused"] = True
+        new_id = db.uid()
+        with engine.begin() as conn:
+            conn.execute(insert(db.inspections).values(id=new_id, image_id=original["image_id"],
+                template_id="", template_snapshot=standard, status=result["status"],
+                result=result, ocr=original["ocr"], created_at=db.now()))
+        return jsonify(inspection_id=new_id), 201
 
     return app

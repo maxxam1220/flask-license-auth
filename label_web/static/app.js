@@ -1,7 +1,7 @@
 "use strict";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = {csrf: "", templates: [], referenceJob: null, source: null, supersedes: null, busy: false, page: 1, inspection: null};
+const state = {csrf: "", templates: [], referenceJob: null, source: null, inspectSource: null, inspectSearchRequest: 0, supersedes: null, busy: false, page: 1, inspection: null, resultDirty: false};
 const statusLabels = {pass: "已核對項目相符", fail: "發現差異", review: "需要人工複核", read: "僅辨識"};
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
 const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
@@ -46,19 +46,33 @@ function setBusy(busy, kind = "") {
   $$("[data-file]").forEach(b => { b.disabled = busy; });
   $("#scan-button").disabled = busy;
   $("#source-search button").disabled = busy;
+  $$("#inspect-source-search input, #inspect-source-search button, #inspect-source-results button, #inspect-source-selected button, .match-candidates button").forEach(button => { button.disabled = busy; });
   $("#template-select").disabled = busy;
+  $("#base-date").disabled = busy;
   $("#batch-date").disabled = busy;
   $("#arrival-date").disabled = busy;
+  if ($("#recheck-button")) $("#recheck-button").disabled = busy;
   $$("[data-action='new-standard']").forEach(x => { x.disabled = busy; });
   $("#inspect-progress").hidden = !busy || !["inspection", "recognition"].includes(kind);
   $("#reference-progress").hidden = !busy || kind !== "reference";
 }
-function clearResult() { state.inspection = null; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
+function clearResult() { state.inspection = null; state.resultDirty = false; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
+function markResultChanged() {
+  if (!state.inspection) return;
+  state.resultDirty = true;
+  if ($("#recheck-dirty")) $("#recheck-dirty").hidden = false;
+}
+function validBaseDate() {
+  const input = $("#base-date");
+  if (!input.value || !input.checkValidity()) { input.reportValidity(); toast("請設定本批基準日。", true); return false; }
+  return true;
+}
 function selectedStandard() {
   const standard = state.templates.find(t => t.id === $("#template-select").value);
   const node = $("#selected-standard"); node.replaceChildren(); node.hidden = !standard;
   $("#recognition-help").hidden = !!standard;
   if (standard) {
+    state.inspectSource = null; renderInspectSource();
     $("#template-options").open = true;
     if (standard.image) { const img = element("img"); img.src = standard.image.thumbnail; img.alt = "選定的標準照片"; node.append(img); }
     const info = element("div"); info.append(element("strong", "", standard.fields.product), element("p", "", `第 ${standard.version} 版 · ${standard.approved_by} 已確認`));
@@ -74,20 +88,31 @@ async function loadTemplates(selectedId) {
   const payload = await api("/api/templates"); state.templates = payload.items;
   const select = $("#template-select"), previous = selectedId || select.value;
   select.replaceChildren();
-  select.append(new Option("直接掃描（固定文字與日期檢查）", ""));
+  select.append(new Option("自動對應系統標籤", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
   $("#nav-count").textContent = String(state.templates.length);
   selectedStandard(); renderLibrary();
 }
 async function loadScanConfig() {
-  const config = await api("/api/scan-config"), list = $("#scan-standards");
-  list.replaceChildren();
-  config.standards.forEach(item => {
-    const row = element("p", "fixed-standard");
-    row.append(element("span", "fixed-standard-label", item.label), element("span", "", item.value));
-    list.append(row);
-  });
+  const config = await api("/api/scan-config");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(config.today || "")) throw new Error("無法取得今天日期，請手動設定本批基準日。");
+  if (!$("#base-date").value) $("#base-date").value = config.today;
+}
+function renderInspectSource() {
+  const node = $("#inspect-source-selected"); node.replaceChildren(); node.hidden = !state.inspectSource;
+  if (!state.inspectSource) return;
+  node.append(element("strong", "", `已選擇：${state.inspectSource.code} ${state.inspectSource.name}`));
+  const reset = element("button", "quiet", "改用自動對應"); reset.type = "button";
+  reset.onclick = () => { if (state.busy) return; state.inspectSource = null; renderInspectSource(); markResultChanged(); };
+  node.append(reset); $("#template-options").open = true;
+}
+function selectInspectSource(item) {
+  if (state.busy) return;
+  state.inspectSource = {code:item.code,name:item.name}; state.inspectSearchRequest++;
+  $("#template-select").value = ""; selectedStandard(); renderInspectSource();
+  $("#inspect-source-results").replaceChildren(); $("#inspect-source-note").textContent = "掃描或重新核對時將使用選定的系統標籤。";
+  markResultChanged(); toast(state.inspection ? "已選擇系統標籤，請按重新核對套用。" : "已選擇系統標籤，可以開始掃描。");
 }
 function newStandard(previous = null) {
   if (state.busy) return toast("請等待目前照片完成辨識。");
@@ -153,10 +178,12 @@ async function pollJob(jobId, kind) {
 async function upload(file, kind) {
   if (!file || state.busy) return;
   if (file.size > 15 * 1024 * 1024) return toast("照片超過 15 MB，請縮小後上傳。", true);
-  const template = $("#template-select").value;
+  const sourceCode = state.inspectSource?.code || "";
+  const template = sourceCode ? "" : $("#template-select").value;
   if (kind === "inspection" && !template) kind = "recognition";
+  if (kind !== "reference" && !validBaseDate()) return;
   const form = new FormData(); form.append("photo", file); form.append("kind", kind);
-  if (kind !== "reference") { form.append("template_id", template); form.append("batch_date", $("#batch-date").value); form.append("arrival_date", $("#arrival-date").value); clearResult(); }
+  if (kind !== "reference") { form.append("template_id", template); form.append("source_code", sourceCode); form.append("base_date", $("#base-date").value); form.append("batch_date", $("#batch-date").value); form.append("arrival_date", $("#arrival-date").value); clearResult(); }
   else { state.referenceJob = null; state.source = null; $("#standard-fields").disabled = true; $("#reference-preview").hidden = true; $("#reference-ocr").hidden = true; }
   setBusy(true, kind);
   try {
@@ -199,13 +226,13 @@ function renderLibrary() {
     if (standard.rules.arrival) dateRules.push("到店日");
     content.append(element("p", "help", dateRules.length ? `日期檢查：${dateRules.join("、")}` : "未啟用日期檢查"), element("p", "", `${standard.approved_by} · ${when(standard.created_at)}`));
     const actions = element("div", "library-actions"), use = element("button", "button primary", "用此標準檢查"), edit = element("button", "button secondary", "建立新版");
-    use.onclick = () => { if(state.busy) return toast("請等待目前辨識完成。"); $("#template-select").value = standard.id; selectedStandard(); clearResult(); showView("inspect"); };
+    use.onclick = () => { if(state.busy) return toast("請等待目前辨識完成。"); $("#template-select").value = standard.id; selectedStandard(); markResultChanged(); showView("inspect"); };
     edit.onclick = () => newStandard(standard); actions.append(use, edit); content.append(actions); card.append(content); list.append(card);
   });
 }
 async function loadInspection(id) {
-  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection;
-  renderInspection(inspection); showView("inspect");
+  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false;
+  renderInspection(inspection); showView("inspect"); $("#result-area").scrollIntoView({block:"start",behavior:"instant"});
 }
 function diffNode(check, key) {
   const node = element("span");
@@ -230,70 +257,114 @@ function drawEvidence(canvas, inspection) {
     }
   }; image.src = inspection.image.url;
 }
-function resultLine(check, expandable) {
-  const row = element(expandable ? "details" : "div", `result-line ${check.status}`);
-  const body = expandable ? element("summary", "result-line-summary") : row;
-  const title = element("div", "result-line-title");
-  title.append(element("span", "result-line-label", check.label || "辨識文字"), badge(check.status, {pass:"相符",fail:"有差異",review:"需確認",read:"僅辨識"}[check.status]));
-  const shown = check.display_actual ?? check.display_text ?? check.actual;
-  body.append(title, element("p", "result-line-text", shown || "未辨識到"));
-  if (!expandable && check.status === "pass" && /日期|到店/.test(check.label || "") && check.reason) body.append(element("p", "result-line-reason", check.reason));
-  if (expandable) {
-    body.append(element("span", "result-line-expand", "展開查看原因與原文")); row.append(body);
-    const detail = element("div", "result-line-detail");
-    if (check.reason) detail.append(element("p", "check-reason", check.reason));
-    if (check.conversion_changed) detail.append(element("p", "display-note", "上方以繁體顯示；下方保留 OCR 原文，請對照照片確認。"));
-    for (const [key, label] of [["expected", "標準"], ["actual", "原文"]]) {
-      if (key === "expected" && !check.expected) continue;
-      const comparison = element("div", "comparison-row"); comparison.append(element("span", "", label), diffNode(check, key)); detail.append(comparison);
+function buildResultRows(checks, ocrLines) {
+  const rank = {fail:0,review:1,pass:2,read:3}, sources = new Map(), rows = new Map();
+  ocrLines.forEach(line => sources.set(line.id, line));
+  checks.forEach(check => (check.source_lines || []).forEach(line => sources.set(line.id, {...sources.get(line.id),...line})));
+  for (const line of sources.values()) rows.set(`line-${line.id}`, {id:`line-${line.id}`,status:"read",text:line.display_text ?? line.text,checks:[],line_ids:[line.id]});
+  checks.forEach((check, index) => {
+    const ids = (check.line_ids || []).filter(id => sources.has(id));
+    const targets = ids.length ? ids.map(id => rows.get(`line-${id}`)) : [{id:`check-${index}`,status:"read",text:check.display_actual ?? check.display_text ?? check.actual,checks:[],line_ids:[]}];
+    for (const row of targets) {
+      row.checks.push(check);
+      if ((rank[check.status] ?? 1) < rank[row.status]) row.status = check.status;
+      if (!ids.length) { row.label = check.label; rows.set(row.id, row); }
     }
-    if (check.source_lines?.length) {
-      const original = element("details", "source-lines"), list = element("div", "ocr-lines");
-      original.append(element("summary", "", "對應照片的完整原文"), list); renderOCR(check.source_lines, list); detail.append(original);
+  });
+  for (const row of rows.values()) {
+    // A date substring passing does not verify other words on that same line.
+    if (row.status === "pass" && row.checks.some(check => check.status === "read")) {
+      row.status = "read"; row.partialPass = true;
+    }
+  }
+  return [...rows.values()].sort((a,b) => rank[a.status] - rank[b.status]);
+}
+function resultLine(item) {
+  const expandable = ["fail","review"].includes(item.status);
+  const row = element(expandable ? "details" : "div", `scan-line ${item.status}`); row.dataset.lineId = item.id;
+  const body = expandable ? element("summary", "scan-line-summary") : row;
+  const mark = element("span", `line-mark ${item.status}`, {pass:"✓",fail:"✕",review:"?",read:"·"}[item.status]);
+  mark.setAttribute("role", "img"); mark.setAttribute("aria-label", {pass:"相符",fail:"有差異",review:"需確認",read:"僅辨識"}[item.status]);
+  const content = element("div", "scan-line-content");
+  const text = item.text || `${item.label || "內容"}：未辨識到`;
+  content.append(element("p", "scan-line-text", item.label && item.text ? `${item.label}：${text}` : text));
+  if (item.status === "read") content.append(element("small", "line-note", item.partialPass ? "部分日期檢查已通過，其餘文字尚無比對依據" : "僅辨識，尚無比對依據"));
+  const reasons = [...new Set(item.checks.filter(check => check.status === item.status).map(check => check.reason).filter(Boolean))];
+  if (expandable && reasons.length) content.append(element("p", "line-reason", reasons[0]));
+  body.append(mark, content);
+  if (expandable) {
+    const hint = element("span", "line-detail-hint", "+"); hint.setAttribute("aria-hidden", "true"); body.append(hint); row.append(body);
+    const detail = element("div", "scan-line-detail");
+    const checks = item.checks.filter(check => ["fail","review"].includes(check.status));
+    for (const check of checks) {
+      const block = element("div", "line-comparison");
+      if (check.label) block.append(element("strong", "", check.label));
+      if (check.reason && check.reason !== reasons[0]) block.append(element("p", "check-reason", check.reason));
+      if (check.conversion_changed) block.append(element("p", "display-note", "上方以繁體顯示；以下保留 OCR 原文。"));
+      for (const [key, label] of [["expected","標準"],["actual","原文"]]) {
+        if (key === "expected" && !check.expected) continue;
+        const comparison = element("div", "comparison-row"); comparison.append(element("span", "", label), diffNode(check, key)); block.append(comparison);
+      }
+      detail.append(block);
     }
     row.append(detail);
   }
   return row;
 }
-function renderResultGroups(result, ocrLines, area) {
-  const groups = element("div", "result-groups"); groups.id = "result-groups";
-  for (const [id, title, statuses, empty] of [
-    ["matched", "相符", ["pass"], "目前沒有可確認相符的項目。"],
-    ["attention", "有差異／需確認", ["fail", "review"], "目前沒有發現差異或待確認項目。"]
-  ]) {
-    const section = element("section", `result-group result-group-${id}`); section.id = `result-${id}`;
-    const checks = result.checks.filter(check => statuses.includes(check.status));
-    const heading = element("h2", "result-group-heading", title); heading.append(element("span", "group-count", String(checks.length))); section.append(heading);
-    if (!checks.length) section.append(element("p", "group-empty", empty));
-    checks.forEach(check => section.append(resultLine(check, id === "attention")));
-    groups.append(section);
+function renderSourceMatch(match, area, baseDate) {
+  if (!match && !baseDate) return;
+  const node = element("div", `source-match ${match?.status || "dated"}`); node.id = "result-source-match";
+  if (!match) { node.append(element("p", "source-base-date", `基準日：${baseDate}`)); area.append(node); return; }
+  if (match.status === "matched") node.append(element("p", "", `比對標籤：${match.code} ${match.name}`));
+  else {
+    const text = {ambiguous:"找到多份相似標籤，請選定後重新核對。",unmatched:"尚未找到對應標籤，可手動選擇後重新核對。",unavailable:"暫時無法讀取系統標籤，目前僅檢查可判讀的內容。"}[match.status] || match.reason;
+    node.append(element("p", "", text));
+    if (match.candidates?.length) {
+      const choices = element("div", "match-candidates");
+      match.candidates.forEach(item => { const button = element("button", "source-option", `${item.code} · ${item.name}`); button.type="button"; button.onclick=()=>selectInspectSource(item); choices.append(button); }); node.append(choices);
+    } else if (["unmatched","ambiguous"].includes(match.status)) {
+      const choose = element("button", "source-match-pick", "選擇系統標籤"); choose.type="button";
+      choose.onclick=()=>{ $("#template-options").open=true; $("#inspect-source-query").focus(); }; node.append(choose);
+    }
   }
-  area.append(groups);
-  const reads = result.checks.filter(check => check.status === "read");
-  const covered = new Set(result.checks.flatMap(check => check.line_ids || []));
-  // Older saved results may not account for text outside recognized fields.
-  const extra = ocrLines.filter(line => !covered.has(line.id)).map(line => ({key:`line-${line.id}`,label:"辨識文字",status:line.score < .94 ? "review" : "read",actual:line.text,display_actual:line.display_text ?? line.text,line_ids:[line.id],reason:"尚無比對依據，請對照原圖確認。"}));
-  const extraIssues = extra.filter(check => check.status === "review");
-  if (extraIssues.length) {
-    const attention = $("#result-attention", groups); $(".group-empty", attention)?.remove();
-    extraIssues.forEach(check => attention.append(resultLine(check, true)));
-    $(".group-count", attention).textContent = String(result.checks.filter(check => ["fail","review"].includes(check.status)).length + extraIssues.length);
-  }
-  const other = [...reads, ...extra.filter(check => check.status === "read")];
-  if (other.length) {
-    const section = element("section", "result-read"); section.id = "result-read";
-    const heading = element("h2", "result-group-heading", "其他已辨識文字"); heading.append(element("span", "group-count", String(other.length)));
-    section.append(heading, element("p", "read-help", "以下僅完成文字辨識，尚無比對依據，不能據此確認正確。"));
-    other.forEach(check => section.append(resultLine(check, false))); area.append(section);
-  }
+  if (baseDate) node.append(element("p", "source-base-date", `基準日：${baseDate}`));
+  area.append(node);
+}
+async function recheckInspection() {
+  if (!state.inspection || state.busy || !validBaseDate()) return;
+  const identifier = state.inspection.id, button = $("#recheck-button");
+  const body = {source_code:state.inspectSource?.code || "",base_date:$("#base-date").value,batch_date:$("#batch-date").value,arrival_date:$("#arrival-date").value};
+  setBusy(true); button.textContent = "核對中…";
+  try {
+    const result = await api(`/api/inspections/${encodeURIComponent(identifier)}/recheck`, {method:"POST",body});
+    await loadInspection(result.inspection_id); toast("已使用原辨識文字，依最新系統資料重新核對。");
+  } catch (error) { toast(error.message,true); }
+  finally { button.textContent = "重新核對"; setBusy(false); }
+}
+function renderRecheckControls(area) {
+  const block = element("div", "recheck-controls"); block.id = "recheck-controls";
+  const dirty = element("p", "recheck-dirty", "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
+  const button = element("button", "button secondary", "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
+  block.append(dirty,button,element("p","recheck-help","使用原辨識文字，依最新系統標籤資料與本批日期核對。")); area.append(block);
+}
+function renderResultLines(rows, area) {
+  const list = element("section", "scan-lines"); list.id = "result-lines"; list.setAttribute("aria-label", "逐列檢查結果");
+  if (!rows.length) list.append(element("p", "group-empty", "沒有辨識到文字，請重新拍攝清楚的標籤。"));
+  rows.forEach(row => list.append(resultLine(row))); area.append(list);
 }
 function renderInspection(inspection) {
   const area = $("#result-area"); area.replaceChildren(); area.hidden = false; $("#result-placeholder").hidden = true;
-  const result = inspection.result, header = element("div", `result-header ${result.status}`);
-  header.append(badge(result.status), element("h2", "", result.status === "pass" ? "已核對的項目相符" : result.status === "fail" ? "請確認標示差異" : "有內容需要再確認"), element("p", "", `${inspection.template_snapshot.name}${inspection.template_snapshot.version ? ` · 第 ${inspection.template_snapshot.version} 版` : ""} · ${when(inspection.created_at)}`));
-  const counts = element("div", "result-counts"); counts.append(element("span", "", `${result.counts.pass} 項相符`), element("span", "", `${result.counts.fail} 項差異`), element("span", "", `${result.counts.review} 項待確認`));
-  if (result.counts.read) counts.append(element("span", "", `${result.counts.read} 項僅辨識`)); header.append(counts); area.append(header);
-  renderResultGroups(result, inspection.ocr.lines, area);
+  const result = inspection.result, rows = buildResultRows(result.checks, inspection.ocr.lines), header = element("div", `scan-result-header ${result.status}`);
+  header.append(element("h2", "", "掃描結果"), element("p", "", when(inspection.created_at)));
+  const counts = element("div", "result-counts");
+  for (const [status,label] of [["fail","✕ 有差異"],["review","? 需確認"],["pass","✓ 相符"],["read","· 僅辨識"]]) {
+    const count = rows.filter(row => row.status === status).length;
+    if (count) counts.append(element("span", `count-${status}`, `${label} ${count}`));
+  }
+  header.append(counts); area.append(header);
+  renderSourceMatch(result.source_match, area, result.inputs?.base_date);
+  renderRecheckControls(area);
+  renderResultLines(rows, area);
   if (result.notes.length) { const notes = element("div", "result-notes"); result.notes.forEach(note => notes.append(element("p", "", note))); area.append(notes); }
   const evidence = element("div", "panel evidence"); evidence.append(element("h2", "", "對照原圖"));
   const pair = element("div", "photo-pair");
@@ -329,7 +400,7 @@ async function initialize() {
   $("#logout").hidden=!session.requires_login;
   $("#login").hidden=session.authenticated; $("#app-shell").hidden=!session.authenticated;
   if (!session.authenticated) return;
-  await Promise.all([loadTemplates(), loadScanConfig()]); showView(location.hash.slice(1));
+  await Promise.all([loadTemplates(),loadScanConfig()]); showView(location.hash.slice(1));
   const stored = sessionStorage.getItem("labelcheck-pending");
   if (stored) {
     let pending; try { pending=JSON.parse(stored); } catch { sessionStorage.removeItem("labelcheck-pending"); return; }
@@ -384,6 +455,19 @@ $("#camera-capture").onclick = async () => {
 };
 window.addEventListener("pagehide", closeCamera);
 document.addEventListener("visibilitychange", () => { if(document.hidden) closeCamera(); });
+$("#inspect-source-search").onsubmit = async event => {
+  event.preventDefault(); if (state.busy) return;
+  const query = $("#inspect-source-query").value.trim(); if (!query) return;
+  const token = ++state.inspectSearchRequest, button = $("#inspect-source-search button"), results = $("#inspect-source-results");
+  button.disabled = true; results.replaceChildren(); $("#inspect-source-note").textContent = "搜尋中…";
+  try {
+    const data = await api(`/api/source-labels?q=${encodeURIComponent(query)}`);
+    if (token !== state.inspectSearchRequest) return;
+    $("#inspect-source-note").textContent = !data.available ? "目前無法讀取系統標籤。" : data.items.length ? "選定後，可用原照片重新核對或開始下一次掃描。" : "找不到符合的標籤，請換代碼或品名。";
+    data.items.forEach(item => { const choice = element("button", "source-option", `${item.code} · ${item.name}`); choice.type="button"; choice.disabled=state.busy; choice.onclick=()=>selectInspectSource(item); results.append(choice); });
+  } catch (error) { if (token === state.inspectSearchRequest) { $("#inspect-source-note").textContent = error.message; toast(error.message,true); } }
+  finally { button.disabled = state.busy; }
+};
 $("#source-search").onsubmit = async event => {
   event.preventDefault(); if(state.busy) return;
   const results = $("#source-results"); results.replaceChildren(); setBusy(true);
@@ -418,9 +502,10 @@ $$("[data-action='new-standard']").forEach(b=>b.onclick=()=>newStandard());
 $$("[data-file]").forEach(b=>b.onclick=()=>$("#"+b.dataset.file).click());
 for (const id of ["inspect-file","inspect-camera","reference-file","reference-camera"]) $("#"+id).onchange=event=>{ const file=event.target.files[0]; event.target.value=""; upload(file,id.startsWith("inspect")?"inspection":"reference"); };
 for (const [id,kind] of [["inspect-drop","inspection"],["reference-drop","reference"]]) { const zone=$("#"+id); zone.ondragover=e=>{ e.preventDefault(); zone.classList.add("dragging"); }; zone.ondragleave=()=>zone.classList.remove("dragging"); zone.ondrop=e=>{ e.preventDefault(); zone.classList.remove("dragging"); upload(e.dataTransfer.files[0],kind); }; }
-$("#template-select").onchange=()=>{ selectedStandard(); clearResult(); };
-$("#batch-date").onchange=clearResult;
-$("#arrival-date").onchange=clearResult;
+$("#template-select").onchange=()=>{ state.inspectSource=null; renderInspectSource(); selectedStandard(); markResultChanged(); };
+$("#base-date").onchange=markResultChanged;
+$("#batch-date").onchange=markResultChanged;
+$("#arrival-date").onchange=markResultChanged;
 $("#standard-form").onsubmit=saveStandard;
 $("#standard-form").addEventListener("input",event=>{if(event.target.name!=="confirmed") $("#standard-form").elements.confirmed.checked=false;});
 $("#standard-form").elements.dates.onchange=toggleDateFields;
