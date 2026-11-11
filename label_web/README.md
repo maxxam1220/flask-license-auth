@@ -1,0 +1,105 @@
+# 標籤核對網頁第一版
+
+手機拍照或相簿上傳 → 本機中文 OCR → 與人工核准的標準逐字比對。
+本專案位於 `C:\build\barcode53_phase1\label_web`，與原有 PyQt 桌面程式分開啟動。
+
+## 已實作
+
+- 標準照片上傳、辨識原文、人工修正與核准。
+- 「掃描標籤」以 HTTPS 網頁開啟後鏡頭，按下拍攝後辨識；不支援時可改用手機拍照或選照片。
+- 沒有標準時可「先辨識」，文字與日期檢查會存入歷史，但不會判定整張標籤通過。
+- 可搜尋既有系統標籤，帶入品名、地址、產地，人工核准後成為無照片的文字標準。
+- 品名、地址、產地逐字核對，只忽略空白及換行；不改正 OCR 錯字、不轉換繁簡字、不模糊放行。
+- 製造日／有效日格式、先後順序、選填的保存天數與本批製造日。
+- 低信心、漏讀、候選不唯一一律待複核。低信心日期仍顯示疑似矛盾，不能當作通過。
+- 原圖框選證據、逐字差異、歷史查詢與獨立人工複核紀錄。
+- 標準版本不可覆寫；建立新版時保留舊版和當時檢查快照。
+- 照片格式 JPG / PNG / WebP / HEIC，EXIF 方向修正、最大 15 MB / 3,200 萬像素。
+- 單一辨識工作執行、最多 12 個待處理工作、重啟時將未完成工作標為失敗。
+
+OCR 並非零錯誤保證。模型信心分數不是經校準的正確率，清楚、完整且無反光的標籤仍需現場樣本驗收。
+本版核對指定欄位，不等於已檢查成分、營養標示或全部版面文字；也尚未實作條碼圖形解碼。
+
+## 本機啟動
+
+```powershell
+cd C:\build\barcode53_phase1\label_web
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\Start-LabelWeb.ps1
+```
+
+開啟 http://127.0.0.1:5083/ 。第一次辨識會下載 PP-OCRv5 模型到 `models/`；後續辨識不傳送照片給外部 OCR 服務。
+第一份標準庫是空的，可先辨識，或由使用者上傳正確標籤／匯入系統標籤並核准；不會把 QA 樣本當作正式標準。
+
+預設資料庫為 `data/labelcheck.sqlite3`，照片在 `data/images/`。原圖另保留於每張圖片的 `original` 檔案，介面展示去除 EXIF 的標準化 JPEG。
+不要刪除 `data/`。備份時需同時保存資料庫與照片。
+
+## 共用既有 PostgreSQL
+
+已核對目標為 Render **My Workspace → DB_0801 / db_0801 / Singapore**。
+
+本機要開始將真實建檔資料存入既有資料庫，可先停止本機服務，再執行：
+
+```powershell
+.\Start-LabelWeb.ps1 -UseExistingDatabase
+```
+
+此參數從父目錄 `config.ini` 在記憶體讀取既有連線，不複製密碼到網頁原始碼。
+首次啟動會新增以下獨立資料表，**不會搬移本機 SQLite 已有資料**：
+
+- `labelcheck_images`
+- `labelcheck_templates`
+- `labelcheck_jobs`
+- `labelcheck_inspections`
+- `labelcheck_reviews`
+
+唯讀查詢原有 `barcode53.BcMst / BcDtl`，不修改原標籤資料。匯入時排除不顯示欄位，日期設定及位移只供參考；若來源已變更，核准會要求重新匯入。未連接或遷移正式 DB 的測試不能視為正式資料庫驗證。
+只共用資料庫時，照片仍位於執行網頁的主機；搬到 Render 前須一起遷移圖片，不能只切換連線。
+
+## 手機同網路試用
+
+先透過環境變數設定至少 12 字元的 `LABELCHECK_PASSWORD`，再執行：
+
+```powershell
+.\Start-LabelWeb.ps1 -AllowLan
+```
+
+手機與電腦需在同一個區域網路，使用 `http://電腦區域網路IP:5083/`；Windows 防火牆是否允許連入需由現場確認。
+本機 `127.0.0.1` 網址無法供另一支手機存取。即時相機需要 HTTPS 或 localhost；一般區網 HTTP 會使用手機檔案拍攝功能，相簿上傳作為相容方式。
+外網使用應以 Render 的 HTTPS 網址提供；不能把開發服務直接公開。
+
+## Render 部署準備
+
+新建獨立 Python Web Service，區域選 Singapore，共用 DB_0801，**不新建第二個資料庫**。
+部署設定見 `render.yaml`。獨立分支 `label-check-v1`、來源子目錄 `label_web`，不修改其他應用程式的正式分支。
+
+- Root Directory：若整個標籤專案入庫則為 `label_web`；若只入庫網頁子目錄則留空。
+- Build：`pip install -r requirements.txt && python prepare_models.py`（建置時下載並驗證模型）
+- Start：`python run.py`
+- Health：`/healthz`
+- 用 `.env.example` 的鍵設定環境變數；`LABELCHECK_DATABASE_URL` 使用 DB_0801 的 Internal URL。
+- 照片需要持久儲存。第一版檔案介面可使用掛載 `/var/data` 的 Render Persistent Disk；一般服務目錄重啟會遺失資料。
+- 第一版只執行 **一個** 程式實例。多實例或大量照片階段應遷移到 R2/S3 物件儲存和外部工作佇列。
+- 建議起始配置：0.5 CPU / 512 MB Web Service 與 5 GB Persistent Disk，依 2026-11-11 官方價格每月新增約 US$8.25，未含額外流量及既有資料庫費用；須以 Render 實際計價為準。
+- Render 產生登入密碼及 session secret；登入密碼在服務的 Environment 頁面 `LABELCHECK_PASSWORD` 查看，勿放入原始碼或照片。
+- 照片（含原始檔）放 `/var/data/labelcheck/images/`；DB_0801 只保存照片索引、標準、OCR 原文與核對紀錄。需同時備份 DB 與持久磁碟。
+- OCR 模型先以實際記憶體及延遲測量選擇方案，不能假設免費服務足夠。任何付費資源尚未建立。
+- 尚未提供照片保留期、自動清理、外部備份與大量上傳功能。
+
+## 驗證
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+node --check static\app.js
+.venv\Scripts\python.exe tests\real_ocr_check.py
+```
+
+單元/API 測試使用注入的辨識結果，涵蓋錯字、門牌數字、日期、低信心、版本快照、覆核及存取保護。
+`real_ocr_check.py` 使用實際模型辨識合成測試標籤與使用者提供的錯誤照片，產物僅在 `qa/`，不接正式資料庫。
+合成標籤標有「網頁測試用・不是正式商品標籤」。QA 的假地址不得作為正式標準。
+
+模型與相依套件依各自授權使用：
+- RapidOCR：https://github.com/RapidAI/RapidOCR
+- PP-OCRv5：https://github.com/PaddlePaddle/PaddleOCR
+

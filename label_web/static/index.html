@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+<svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+<symbol id="i-scan" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M7 8v8m3-8v8m4-8v8m3-8v8M2 12h20"/></symbol>
+<symbol id="i-library" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8m-8 4h8m-8 4h5"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+<symbol id="i-camera" viewBox="0 0 24 24"><path d="M8 5l1-2h6l1 2h4a2 2 0 0 1 2 2v12H2V7a2 2 0 0 1 2-2z"/><circle cx="12" cy="12" r="4"/></symbol>
+<symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5l5-5 5 5M4 15v6h16v-6"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l4 4L19 6"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5l5 5-5 5"/></symbol>
+</defs></svg>
+<div id="login" class="login-screen" hidden>
+  <form id="login-form" class="panel login-panel"><div class="brand-mark"><svg><use href="#i-scan"/></svg></div><p class="eyebrow">福和生鮮 · 品質管理</p><h1>登入標籤核對</h1><label>登入密碼<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">登入</button><p id="login-error" class="error" role="alert"></p></form>
+</div>
+<div id="app-shell" class="shell" hidden>
+  <aside class="sidebar">
+    <a href="#inspect" class="brand"><span class="brand-mark"><svg><use href="#i-scan"/></svg></span><span>標籤核對<small>福和生鮮 · 品質管理</small></span></a>
+    <p class="nav-label">工作區</p>
+    <nav aria-label="主要功能">
+      <button data-view="inspect" class="nav-item active"><svg><use href="#i-scan"/></svg><span>檢查標籤</span></button>
+      <button data-view="library" class="nav-item"><svg><use href="#i-library"/></svg><span>標準標籤庫</span><span id="nav-count" class="nav-count">0</span></button>
+      <button data-view="history" class="nav-item"><svg><use href="#i-clock"/></svg><span>檢查紀錄</span></button>
+    </nav>
+    <div class="sidebar-bottom"><span class="status-dot"></span>第一版 · 逐字核對<button id="logout" class="quiet">登出</button></div>
+  </aside>
+  <main>
+    <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><span class="top-badge">掃描辨識 · 標準核對</span></header>
+    <section id="view-inspect" class="view">
+      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>檢查標籤</h1><p class="lead">拍下完整標籤，核對每一個重要欄位。</p></div><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立標準標籤</button></div>
+      <div class="steps" aria-label="檢查流程"><span><b>1</b>選擇標準</span><i></i><span><b>2</b>拍照或上傳</span><i></i><span><b>3</b>查看差異</span></div>
+      <div id="no-standards" class="notice"><svg><use href="#i-library"/></svg><div><strong>還沒有標準，也能先掃描</strong><p>先讀取文字、檢查日期先後；建立已確認標準後，就能逐字核對。</p></div><button class="button primary" data-action="new-standard">建立標準 <svg><use href="#i-arrow"/></svg></button></div>
+      <div class="inspect-grid">
+        <div class="panel inspect-input">
+          <div class="section-title"><span class="step-number">01</span><h2>選擇核對標準</h2></div>
+          <label for="template-select">辨識方式與標準<select id="template-select"><option value="">先辨識，不比對標準</option></select></label>
+          <p id="recognition-help" class="help">尚無核對標準：可讀出文字、檢查日期矛盾，不能據此確認整張標籤正確。</p>
+          <div id="selected-standard" class="selected-standard" hidden></div>
+          <label for="batch-date">本批製造日期 <span class="optional">選填</span><input id="batch-date" type="date"></label>
+          <p class="help">填入後會核對本批製造日，避免兩個日期同時印錯。</p>
+          <div class="section-title divided"><span class="step-number">02</span><h2>拍攝待檢查標籤</h2></div>
+          <div class="upload-zone" id="inspect-drop">
+            <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>讓整張標籤清楚入鏡</h3><p>正面拍攝，避開反光、手指與遮擋</p>
+            <div class="upload-actions"><button id="scan-button" class="button primary capture-button"><svg><use href="#i-camera"/></svg>掃描標籤</button><button class="button secondary" data-file="inspect-file"><svg><use href="#i-upload"/></svg>選擇照片</button></div>
+            <small>JPG、PNG、WebP、HEIC · 每張最多 15 MB</small>
+          </div>
+          <input id="inspect-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
+          <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
+          <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
+        </div>
+        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>核對結果將顯示在這裡</h2><p>逐字核對品名、地址、產地，<br>並檢查製造日期與有效日期。</p><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異</span><span class="badge review">需複核</span></div><p class="small muted">看不清楚的內容不會自動判定通過。</p></div>
+        <div id="result-area" hidden></div>
+      </div>
+    </section>
+    <section id="view-library" class="view" hidden>
+      <div class="heading"><div><p class="eyebrow">REFERENCE LIBRARY</p><h1>標準標籤庫</h1><p class="lead">由正確照片或系統標籤建立，每份標準均需人員確認。</p></div><button class="button primary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立標準標籤</button></div>
+      <div id="library-list" class="library-grid"></div>
+    </section>
+    <section id="view-standard" class="view" hidden>
+      <div class="heading"><div><p class="eyebrow">NEW REFERENCE</p><h1 id="standard-heading">建立標準標籤</h1><p class="lead">上傳正確照片，再逐欄確認文字與日期規則。</p></div><button class="button secondary" data-go="library">返回標準庫</button></div>
+      <div class="standard-grid">
+        <div class="panel">
+          <details id="source-import"><summary>從既有標籤系統帶入參考</summary><p class="help">搜尋標籤代碼或品名，帶入後仍需逐欄確認。</p><form id="source-search"><label>標籤代碼或品名<input id="source-query" maxlength="100" required placeholder="例如：雙拼"></label><button class="button secondary" type="submit">搜尋系統標籤</button></form><div id="source-results"></div><p id="source-note" class="help"></p></details>
+          <div class="section-title"><span class="step-number">01</span><h2>正確標籤照片</h2></div>
+          <div id="reference-drop" class="upload-zone"><div class="upload-symbol"><svg><use href="#i-upload"/></svg></div><h3>上傳已確認正確的標籤</h3><p>照片需完整包含品名、地址、產地及日期</p><div class="upload-actions"><button class="button primary" data-file="reference-file">選擇正確照片</button><button class="button secondary" data-file="reference-camera">拍照</button></div><small>JPG、PNG、WebP、HEIC · 最多 15 MB</small></div>
+          <input id="reference-file" class="file-input" type="file" accept="image/*,.heic,.heif"><input id="reference-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
+          <div id="reference-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>讀取標準照片文字中…</span></div>
+          <img id="reference-preview" class="reference-preview" alt="上傳的標準標籤照片" hidden>
+          <details id="reference-ocr" hidden><summary>查看照片辨識原文</summary><div class="ocr-lines" id="reference-lines"></div></details>
+        </div>
+        <form id="standard-form" class="panel">
+          <div class="section-title"><span class="step-number">02</span><h2>確認標準內容</h2></div>
+          <div class="note"><strong>請核對正確資料，確認每個字</strong><p>照片辨識及系統資料僅供填入參考，核准後才會成為比對標準。</p></div>
+          <fieldset id="standard-fields" disabled>
+            <label>標準名稱<input name="name" maxlength="200" required placeholder="例如：雙拼水果盒 265g"></label>
+            <label>品名<input name="product" maxlength="500" required></label>
+            <label>地址<textarea name="address" maxlength="500" rows="2" required></textarea></label>
+            <label>產地<input name="origin" maxlength="500" required placeholder="依標籤原文填寫，包含標點"></label>
+            <div class="form-divider"></div><label class="check-label"><input name="dates" type="checkbox" checked><span>檢查製造日期與有效日期</span></label>
+            <div id="reference-date-fields" class="form-row"><label>照片中的製造日期<input name="manufacture" placeholder="2026.11.10" maxlength="80" required></label><label>照片中的有效日期<input name="expiry" placeholder="2026.11.13" maxlength="80" required></label></div>
+            <label>保存天數 <span class="optional">選填</span><input name="keep_days" type="number" min="0" max="3650" step="1" placeholder="有效日與製造日相差幾天"></label>
+            <p class="help">例如 11/10 製造、11/13 到期，日期相差 3 天。照片日期只用於確認標準，不會拿來核對以後每一批。</p>
+            <label>確認人員<input name="approved_by" maxlength="100" required placeholder="請輸入姓名"></label>
+            <label class="check-label confirm-check"><input name="confirmed" type="checkbox" required><span>我已核對正確資料，確認以上文字及規則正確。</span></label>
+            <button class="button primary full" type="submit"><svg><use href="#i-check"/></svg>儲存並啟用標準</button>
+          </fieldset>
+        </form>
+      </div>
+    </section>
+    <section id="view-history" class="view" hidden>
+      <div class="heading"><div><p class="eyebrow">INSPECTION LOG</p><h1>檢查紀錄</h1><p class="lead">保留當時的標準版本、照片與人工複核結果。</p></div><select id="history-filter" aria-label="篩選檢查結果"><option value="">全部結果</option><option value="fail">有差異</option><option value="review">需複核</option><option value="pass">設定項目通過</option></select></div>
+      <div id="history-list" class="history-list"></div><div class="pagination"><button id="history-prev" class="button secondary">上一頁</button><span id="history-page">第 1 頁</span><button id="history-next" class="button secondary">下一頁</button></div>
+    </section>
+    <footer>以人工確認的標準逐字核對 · 辨識不確定時請對照原圖複核</footer>
+  </main>
+</div>
+<dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p>讓整張標籤清楚入鏡，確認對焦後拍下辨識。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+</body></html>

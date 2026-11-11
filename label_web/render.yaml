@@ -1,0 +1,36 @@
+# Deploy only the label web app. DB_0801 is referenced, not managed or recreated.
+services:
+  - type: web
+    name: fuhe-label-check
+    runtime: python
+    region: singapore
+    plan: 0.5c-512mb
+    rootDir: label_web
+    buildCommand: pip install -r requirements.txt && python prepare_models.py
+    startCommand: python run.py
+    healthCheckPath: /healthz
+    numInstances: 1
+    autoDeployTrigger: 'off'
+    disk:
+      name: label-photos
+      mountPath: /var/data
+      sizeGB: 5
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.12
+      - key: PYTHONUNBUFFERED
+        value: '1'
+      - key: LABELCHECK_HOST
+        value: 0.0.0.0
+      - key: LABELCHECK_HTTPS
+        value: '1'
+      - key: LABELCHECK_DATA_DIR
+        value: /var/data/labelcheck
+      - key: LABELCHECK_DATABASE_URL
+        fromDatabase:
+          name: DB_0801
+          property: connectionString
+      - key: LABELCHECK_PASSWORD
+        generateValue: true
+      - key: LABELCHECK_SECRET
+        generateValue: true
