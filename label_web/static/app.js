@@ -345,6 +345,7 @@ $("#standard-form").elements.dates.onchange=toggleDateFields;
 $("#history-filter").onchange=()=>{ state.page=1; loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-prev").onclick=()=>{ state.page=Math.max(1,state.page-1); loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-next").onclick=()=>{ state.page++; loadHistory().catch(e=>toast(e.message,true)); };
-$("#login-form").onsubmit=async e=>{ e.preventDefault(); const button=$("button",e.currentTarget); button.disabled=true; try { const result=await api("/api/login",{method:"POST",body:{password:e.currentTarget.elements.password.value}}); state.csrf=result.csrf; e.currentTarget.reset(); $("#login-error").textContent=""; await initialize(); } catch(error) { $("#login-error").textContent=error.message; } finally { button.disabled=false; } };
+$("#login-form").onsubmit=async e=>{ e.preventDefault(); const form=e.currentTarget, button=$("button",form); button.disabled=true; try { const result=await api("/api/login",{method:"POST",body:{password:form.elements.password.value}}); state.csrf=result.csrf; form.reset(); $("#login-error").textContent=""; await initialize(); } catch(error) { $("#login-error").textContent=error.message; } finally { button.disabled=false; } };
 $("#logout").onclick=async()=>{ if(state.busy) return toast("請等待目前辨識完成。"); try { await api("/api/logout",{method:"POST"}); location.reload(); } catch(e) { toast(e.message,true); } };
 initialize().catch(e=>toast(e.message,true));
+
