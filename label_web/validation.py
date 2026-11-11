@@ -4,16 +4,24 @@ from difflib import SequenceMatcher
 import re
 import unicodedata
 
-RULE_VERSION = "1.1"
-FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "manufacture": "製造日期", "expiry": "有效日期"}
+RULE_VERSION = "1.2"
+TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
+FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
+               "storage": "保存條件", "company": "公司名稱", "phone": "電話",
+               "manufacture": "製造日期", "expiry": "有效日期", "arrival": "到店日"}
 ALIASES = {
     "product": r"(?:產品名稱|商品名稱|產品品名|品名)",
     "address": r"(?:負責廠商地址|製造商地址|製造廠地址|公司地址|製造廠址|地址|住址|廠址)",
     "origin": r"(?:原料[產産产]地|原[產産产]地|原[產産产]國|[產産产]地)",
     "manufacture": r"(?:製造日期|製造日|生產日期|生產日)",
     "expiry": r"(?:有效日期|有效期限|有效日|保存期限至|最佳賞味期|賞味期限|到期日)",
+    "spec": r"(?:[規规]格)",
+    "storage": r"(?:保存條件|保存条件|保存方式|儲存條件|貯存條件|儲存方式)",
+    "company": r"(?:負責廠商名稱|製造廠商名稱|製造商名稱|公司名稱|廠商名稱|負責廠商|製造廠商|製造商)",
+    "phone": r"(?:免付費(?:服務)?[電电][話话]|客服[電电][話话]|服務[電电][話话]|聯絡[電电][話话]|客服專線|服務專線|[電电][話话])",
+    "arrival": r"(?:到\s*店\s*日\s*期|到\s*店\s*日|到貨日期|到貨日)",
 }
-ALL_KEYS = "|".join(ALIASES.values()) + r"|內容物|成分|淨重|重量|電話|負責廠商|保存方式|營養標示|食品業者登錄字號"
+ALL_KEYS = "|".join(ALIASES.values()) + r"|內容物|成分|淨重|重量|營養標示|食品業者登錄字號|貨號|入[數数]"
 
 
 def compact(text):
@@ -29,6 +37,8 @@ def parse_date(text):
     if not match:
         raise ValueError("日期須包含完整年月日；無法判讀的字元不會自動修正。")
     year, month, day = (int(match[i]) for i in (1, 2, 3))
+    if not roc and len(match[1]) == 3 and year >= 200:
+        raise ValueError("三碼年份可能有漏字；較大的民國年份須明確標示民國，不自動推測。")
     if roc or len(match[1]) == 3:
         year += 1911
     if not 1900 <= year <= 2200:
@@ -45,6 +55,69 @@ def _candidate(value, lines, ambiguous=False):
             "line_ids": [x["id"] for x in lines], "ambiguous": ambiguous}
 
 
+def _bounds(line):
+    box = line["box"]
+    return min(p[0] for p in box), min(p[1] for p in box), max(p[0] for p in box), max(p[1] for p in box)
+
+
+def _below_in_column(line, other):
+    x, y, right, bottom = _bounds(line)
+    nx, ny, nr, nb = _bounds(other)
+    height = max(bottom - y, nb - ny, 1)
+    overlap = max(0, min(right, nr) - max(x, nx))
+    aligned = overlap >= min(right - x, nr - nx) * .35 or abs(nx - x) < height * 1.5
+    return aligned and ny >= bottom - height * .4 and ny - bottom <= max(height * 1.5, 20)
+
+
+def _next_value(line, ordered):
+    """Use geometry, not OCR list order, so neighbouring columns stay separate."""
+    x, y, right, bottom = _bounds(line)
+    candidates = []
+    for other in ordered:
+        if other["id"] == line["id"] or re.search(ALL_KEYS, other["text"]):
+            continue
+        nx, ny, nr, nb = _bounds(other)
+        height = max(bottom-y, nb-ny, 1)
+        row_overlap = max(0, min(bottom, nb) - max(y, ny))
+        if row_overlap >= min(bottom-y, nb-ny) * .5 and 0 <= nx-right <= max(height * 4, 40):
+            candidates.append((0, nx-right, other))
+        elif _below_in_column(line, other):
+            candidates.append((1, max(0, ny-bottom), other))
+    return min(candidates, key=lambda item: item[:2])[2] if candidates else None
+
+
+def _join_address(value, evidence, ordered):
+    # Only close, aligned address fragments qualify; never append a company/phone column.
+    for _ in range(3):
+        candidates = []
+        for line in ordered:
+            text = compact(line["text"])
+            if line in evidence or re.search(ALL_KEYS, text) or not _below_in_column(evidence[-1], line):
+                continue
+            continuation = re.match(r"^[\d一二三四五六七八九十]+(?:段|巷|弄|號|樓)", text)
+            if not re.search(r"[路街]", compact(value)):
+                continuation = continuation or re.match(r"^[\u4e00-\u9fff]{1,15}[路街].*", text)
+            if continuation:
+                candidates.append(line)
+        if not candidates:
+            break
+        nxt = min(candidates, key=lambda line: _bounds(line)[1])
+        value += nxt["text"]
+        evidence.append(nxt)
+    return value, evidence
+
+
+def _located_by_expected(ordered, expected, excluded):
+    # Similarity locates evidence only; it never changes characters or accepts a match.
+    ranked = sorted(((SequenceMatcher(None, compact(x["text"]), compact(expected)).ratio(), x)
+                     for x in ordered if x["id"] not in excluded and not re.search(ALL_KEYS, x["text"])),
+                    key=lambda item: item[0], reverse=True)
+    if not ranked or ranked[0][0] < .55:
+        return None
+    score, line = ranked[0]
+    return _candidate(line["text"], [line], len(ranked) > 1 and score - ranked[1][0] < .04)
+
+
 def extract_fields(lines, expected=None):
     found = {}
     ordered = sorted(lines, key=lambda x: (min(p[1] for p in x["box"]), min(p[0] for p in x["box"])))
@@ -54,35 +127,62 @@ def extract_fields(lines, expected=None):
             match = re.search(alias + r"\s*[：:]?\s*", line["text"])
             if not match:
                 continue
+            # A shorter heading such as 製造商 must not consume 製造商地址.
+            if any(other != key and (longer := re.search(pattern, line["text"]))
+                   and longer.start() == match.start() and longer.end() > match.end()
+                   for other, pattern in ALIASES.items()):
+                continue
             value = re.split(ALL_KEYS, line["text"][match.end():], maxsplit=1)[0].strip(" ：:")
             evidence = [line]
             # A value may be detected as a separate box on the same row.
-            if not value and i + 1 < len(ordered):
-                nxt = ordered[i + 1]
-                h = max(p[1] for p in line["box"]) - min(p[1] for p in line["box"])
-                gap = min(p[1] for p in nxt["box"]) - max(p[1] for p in line["box"])
-                if gap <= max(h, 15) and not re.search(ALL_KEYS, nxt["text"]):
+            if not value:
+                nxt = _next_value(line, ordered)
+                if nxt is not None:
                     value = nxt["text"]
                     evidence.append(nxt)
             # Join a wrapped address only where the continuation is close and address-like.
-            if key == "address" and value and i + 1 < len(ordered):
-                nxt = ordered[i + 1]
-                gap = min(p[1] for p in nxt["box"]) - max(p[1] for p in evidence[-1]["box"])
-                if nxt not in evidence and 0 <= gap < 30 and re.match(r"^[\d一二三四五六七八九十]+(?:段|巷|弄|號|樓)", nxt["text"]) and not re.search(ALL_KEYS, nxt["text"]):
-                    value += nxt["text"]
-                    evidence.append(nxt)
+            if key == "address" and value:
+                value, evidence = _join_address(value, evidence, ordered)
             if value:
                 candidates.append(_candidate(value, evidence))
         if candidates:
             found[key] = dict(candidates[0], ambiguous=len(candidates) > 1)
     if "address" not in found:
-        addresses = [x for x in ordered if re.search(r"[市縣].{1,20}[區鄉鎮市].{1,35}[路街].{0,20}號", compact(x["text"]))]
+        addresses = [x for x in ordered if not re.search(ALL_KEYS, x["text"])
+                     and re.search(r"[市縣].{1,20}(?:[區鄉鎮市]|[路街])", compact(x["text"]))]
         if addresses:
-            found["address"] = _candidate(addresses[0]["text"], [addresses[0]], len(addresses) > 1)
+            value, evidence = _join_address(addresses[0]["text"], [addresses[0]], ordered)
+            found["address"] = _candidate(value, evidence, len(addresses) > 1)
+    if "company" not in found:
+        companies = [x for x in ordered if not re.search(ALL_KEYS, x["text"])
+                     and re.search(r"(?:公司|企業社|商行)$", compact(x["text"]))]
+        if companies:
+            line = companies[0]
+            evidence = [line]
+            if re.fullmatch(r"(?:股份)?有限公司", compact(line["text"])):
+                prefixes = [x for x in ordered if x["id"] != line["id"] and _below_in_column(x, line)
+                            and not re.search(ALL_KEYS, x["text"]) and not re.search(r"[市縣區路街號\d]", x["text"])]
+                if prefixes:
+                    evidence.insert(0, max(prefixes, key=lambda x: _bounds(x)[1]))
+            found["company"] = _candidate("".join(x["text"] for x in evidence), evidence, len(companies) > 1)
+    if "phone" not in found:
+        phones = [x for x in ordered if re.fullmatch(r"[（(]?0[\d()（）\-－–—. ]{6,20}(?:#\d+)?", x["text"].strip())
+                  and 8 <= len(re.sub(r"\D", "", x["text"])) <= 11]
+        if phones:
+            found["phone"] = _candidate(phones[0]["text"], [phones[0]], len(phones) > 1)
+    if expected:
+        for key in ("company", "address", "phone"):
+            if key not in found and expected.get(key):
+                excluded = {identifier for field in found.values() for identifier in field["line_ids"]}
+                located = _located_by_expected(ordered, expected[key], excluded)
+                if located:
+                    found[key] = located
     if "product" not in found:
+        excluded = {identifier for field in found.values() for identifier in field["line_ids"]}
         candidates = [x for x in ordered if len(compact(x["text"])) >= 3 and not re.search(ALL_KEYS, x["text"])
+                      and x["id"] not in excluded
                       and re.search(r"[\u4e00-\u9fff]", x["text"])
-                      and not re.search(r"\d{4}\s*[年./-]|清晨|上午|下午|鮮食\s|營養|熱量|蛋白質|脂肪|碳水|毫克|公克|客服", x["text"])]
+                      and not re.search(r"\d{4}\s*[年./-]|清晨|上午|下午|鮮食\s|營養|熱量|蛋白質|脂肪|碳水|毫克|公克|客服|公司|食用|清洗", x["text"])]
         if expected and expected.get("product") and candidates:
             # Similarity locates the line only. Acceptance always requires exact characters.
             ranked = sorted(candidates, key=lambda x: SequenceMatcher(None, compact(x["text"]), compact(expected["product"])).ratio(), reverse=True)
@@ -102,12 +202,14 @@ def diff_parts(expected, actual):
             for kind, i, j, k, l in SequenceMatcher(None, a, b, autojunk=False).get_opcodes()]
 
 
-def evaluate(lines, template, batch_date=""):
+def evaluate(lines, template, batch_date="", arrival_date=""):
     fields = extract_fields(lines, template["fields"])
     checks = []
     threshold = .94
-    for key in ("product", "address", "origin"):
-        expected = template["fields"][key]
+    for key in TEXT_FIELDS:
+        expected = template["fields"].get(key, "")
+        if key not in ("product", "address", "origin") and not expected:
+            continue
         field = fields.get(key, {})
         actual = field.get("value", "")
         status, reason = "pass", "逐字相符（忽略空白與換行）。"
@@ -123,9 +225,9 @@ def evaluate(lines, template, batch_date=""):
                        "expected": expected, "actual": actual, "diff": diff_parts(expected, actual),
                        "line_ids": field.get("line_ids", []), "score": field.get("score")})
     notes = []
+    parsed = {}
+    uncertain_dates = set()
     if template["rules"].get("dates", True):
-        parsed = {}
-        uncertain_dates = set()
         for key in ("manufacture", "expiry"):
             field = fields.get(key, {})
             value = field.get("value", "")
@@ -166,22 +268,74 @@ def evaluate(lines, template, batch_date=""):
             else:
                 notes.append("未指定本批製造日，未驗證兩個日期是否一起印錯。")
     else:
-        notes.append("此標準未啟用日期檢查。")
+        notes.append("此標準未啟用製造／有效日期檢查。")
+    if template["rules"].get("arrival", False) or arrival_date:
+        field = fields.get("arrival", {})
+        value = field.get("value", "")
+        status, reason = "pass", "年月日格式可辨識。"
+        try:
+            parsed["arrival"] = parse_date(value)
+        except (ValueError, TypeError):
+            status, reason = "review", "到店日未讀完整或日期不合法，請查看原圖。"
+        if field.get("ambiguous") or field.get("score", 0) < threshold:
+            status, reason = "review", "到店日辨識不確定，請查看原圖；不推測數字。"
+        if status != "pass":
+            uncertain_dates.add("arrival")
+        checks.append({"key": "arrival", "label": FIELD_NAMES["arrival"], "status": status, "reason": reason,
+                       "expected": "完整且合法的年月日", "actual": value,
+                       "line_ids": field.get("line_ids", []), "score": field.get("score")})
+        if arrival_date:
+            actual = str(parsed["arrival"]["date"]) if "arrival" in parsed else value
+            checks.append({"key": "arrival_expected", "label": "本批到店日",
+                           "status": "review" if "arrival" in uncertain_dates else "pass" if actual == arrival_date else "fail",
+                           "reason": "與本次指定的到店日核對；不沿用標準照片的日期。",
+                           "expected": arrival_date, "actual": actual, "line_ids": field.get("line_ids", [])})
+        else:
+            notes.append("未指定本批到店日，僅檢查日期格式與可辨識的日期先後，尚未確認到店日符合本批排程。")
+        if "arrival" in parsed:
+            for key, label, expected_order in (("manufacture", "到店與製造先後", "到店日 ≥ 製造日期"),
+                                                ("expiry", "到店與有效日期", "到店日 ≤ 有效日期")):
+                other = fields.get(key, {})
+                if not other.get("value"):
+                    continue
+                try:
+                    other_date = parse_date(other["value"])["date"]
+                except (ValueError, TypeError):
+                    continue
+                uncertain = ("arrival" in uncertain_dates or other.get("ambiguous")
+                             or other.get("score", 0) < threshold)
+                actual_date = parsed["arrival"]["date"]
+                bad = actual_date < other_date if key == "manufacture" else actual_date > other_date
+                reason = ("到店日早於製造日期。" if key == "manufacture" else "到店日晚於有效日期。") if bad else "日期先後符合設定。"
+                if uncertain:
+                    reason = ("辨識結果疑似" + reason + "請優先複核原圖。") if bad else "日期文字辨識不確定，請複核原圖。"
+                checks.append({"key": "arrival_" + key, "label": label,
+                               "status": "review" if uncertain else "fail" if bad else "pass", "reason": reason,
+                               "expected": expected_order, "actual": f"到店 {actual_date} / {FIELD_NAMES[key]} {other_date}",
+                               "line_ids": field.get("line_ids", []) + other.get("line_ids", [])})
     status = "fail" if any(x["status"] == "fail" for x in checks) else "review" if any(x["status"] == "review" for x in checks) else "pass"
     return {"status": status, "checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
             "counts": {k: sum(x["status"] == k for x in checks) for k in ("pass", "fail", "review")}}
 
 
-def recognize_only(lines, batch_date=""):
+def recognize_only(lines, batch_date="", arrival_date=""):
     """Date consistency is useful without a baseline; text correctness is unverified."""
-    result = evaluate(lines, {"fields": {k: "" for k in ("product", "address", "origin")},
-                              "rules": {"dates": True, "keep_days": None}}, batch_date)
-    for check in result["checks"]:
-        if check["key"] in {"product", "address", "origin"}:
-            check.update(status="review", expected="尚無已確認標準", diff=[],
-                         reason="僅辨識文字，尚未核對正確性。請對照原圖及正確資料確認。")
+    extracted = extract_fields(lines)
+    result = evaluate(lines, {"fields": {k: "" for k in TEXT_FIELDS},
+                              "rules": {"dates": bool(batch_date or "manufacture" in extracted or "expiry" in extracted),
+                                        "arrival": bool(arrival_date or "arrival" in extracted), "keep_days": None}},
+                      batch_date, arrival_date)
+    text_checks = []
+    for key in TEXT_FIELDS:
+        field = result["fields"].get(key, {})
+        text_checks.append({"key": key, "label": FIELD_NAMES[key], "status": "review", "expected": "尚無已確認標準",
+                            "actual": field.get("value", ""), "diff": [], "line_ids": field.get("line_ids", []),
+                            "score": field.get("score"),
+                            "reason": "僅辨識文字，尚未核對正確性。請對照原圖及正確資料確認。"})
+    result["checks"] = text_checks + [check for check in result["checks"] if check["key"] not in TEXT_FIELDS]
+    result["notes"] = [note for note in result["notes"] if note != "此標準未啟用製造／有效日期檢查。"]
     result["mode"] = "recognition"
     result["status"] = "fail" if any(c["status"] == "fail" for c in result["checks"]) else "review"
     result["counts"] = {k: sum(c["status"] == k for c in result["checks"]) for k in ("pass", "fail", "review")}
-    result["notes"].insert(0, "目前為先辨識模式：日期格式與先後可檢查；品名、地址、產地及保存期限是否正確，仍需已確認標準。")
+    result["notes"].insert(0, "目前為先辨識模式：日期格式與先後可檢查；品名、規格、保存條件、產地、公司名稱、地址、電話是否正確，仍需已確認標準。")
     return result

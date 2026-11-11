@@ -4,6 +4,8 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {csrf: "", templates: [], referenceJob: null, source: null, supersedes: null, busy: false, page: 1, inspection: null};
 const statusLabels = {pass: "設定項目通過", fail: "發現差異", review: "需要人工複核"};
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
+const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
+const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
 let toastTimer;
 
 function element(tag, className, text) {
@@ -46,6 +48,7 @@ function setBusy(busy, kind = "") {
   $("#source-search button").disabled = busy;
   $("#template-select").disabled = busy;
   $("#batch-date").disabled = busy;
+  $("#arrival-date").disabled = busy;
   $$("[data-action='new-standard']").forEach(x => { x.disabled = busy; });
   $("#inspect-progress").hidden = !busy || !["inspection", "recognition"].includes(kind);
   $("#reference-progress").hidden = !busy || kind !== "reference";
@@ -58,6 +61,10 @@ function selectedStandard() {
   if (standard) {
     if (standard.image) { const img = element("img"); img.src = standard.image.thumbnail; img.alt = "選定的標準照片"; node.append(img); }
     const info = element("div"); info.append(element("strong", "", standard.fields.product), element("p", "", `第 ${standard.version} 版 · ${standard.approved_by} 已確認`));
+    const checked = textFields.filter(key => standard.fields[key]).map(key => fieldLabels[key]);
+    if (standard.rules.dates) checked.push("製造／有效日期");
+    if (standard.rules.arrival) checked.push("到店日");
+    info.append(element("p", "help", `核對項目：${checked.join("、")}`));
     node.append(info);
   }
   setBusy(state.busy);
@@ -89,6 +96,9 @@ function toggleDateFields() {
   $("#reference-date-fields").hidden = !enabled;
   ["manufacture", "expiry"].forEach(k => { f.elements[k].required = enabled; });
   f.elements.keep_days.disabled = !f.elements.dates.checked;
+  const arrivalEnabled = f.elements.check_arrival.checked && !state.source;
+  $("#reference-arrival-field").hidden = !arrivalEnabled;
+  f.elements.arrival.required = arrivalEnabled;
 }
 function renderOCR(lines, container) {
   container.replaceChildren();
@@ -106,9 +116,10 @@ function fillReference(job) {
   $("#reference-preview").src = job.image.url; $("#reference-preview").hidden = false;
   $("#reference-ocr").hidden = false; renderOCR(job.result.ocr.lines, $("#reference-lines"));
   $("#standard-fields").disabled = false;
-  for (const key of ["product", "address", "origin", "manufacture", "expiry"]) form.elements[key].value = fields[key]?.value || "";
+  for (const key of [...textFields, "manufacture", "expiry", "arrival"]) form.elements[key].value = fields[key]?.value || "";
   form.elements.name.value = state.supersedes?.name || fields.product?.value || "";
-  form.elements.dates.checked = state.supersedes?.rules.dates ?? true;
+  form.elements.dates.checked = state.supersedes?.rules.dates ?? !(fields.arrival && !fields.manufacture && !fields.expiry);
+  form.elements.check_arrival.checked = state.supersedes ? !!state.supersedes.rules.arrival : !!fields.arrival;
   form.elements.keep_days.value = state.supersedes?.rules.keep_days ?? "";
   form.elements.confirmed.checked = false; toggleDateFields();
   toast("照片已辨識，請對照原圖逐欄確認。" );
@@ -136,7 +147,7 @@ async function upload(file, kind) {
   const template = $("#template-select").value;
   if (kind === "inspection" && !template) kind = "recognition";
   const form = new FormData(); form.append("photo", file); form.append("kind", kind);
-  if (kind !== "reference") { form.append("template_id", template); form.append("batch_date", $("#batch-date").value); clearResult(); }
+  if (kind !== "reference") { form.append("template_id", template); form.append("batch_date", $("#batch-date").value); form.append("arrival_date", $("#arrival-date").value); clearResult(); }
   else { state.referenceJob = null; state.source = null; $("#standard-fields").disabled = true; $("#reference-preview").hidden = true; $("#reference-ocr").hidden = true; }
   setBusy(true, kind);
   try {
@@ -151,9 +162,9 @@ async function saveStandard(event) {
   const form = event.currentTarget, button = $("button[type=submit]", form); button.disabled = true; setBusy(true);
   try {
     const body = {job_id: state.referenceJob?.id, source_code: state.source?.code, source_revision: state.source?.revision, name: form.elements.name.value.trim(),
-      fields: Object.fromEntries(["product", "address", "origin"].map(k => [k, form.elements[k].value.trim()])),
-      rules: {dates: form.elements.dates.checked, keep_days: form.elements.dates.checked && form.elements.keep_days.value !== "" ? Number(form.elements.keep_days.value) : null},
-      reference_dates: {manufacture: form.elements.manufacture.value, expiry: form.elements.expiry.value},
+      fields: Object.fromEntries(textFields.map(k => [k, form.elements[k].value.trim()])),
+      rules: {dates: form.elements.dates.checked, arrival: form.elements.check_arrival.checked, keep_days: form.elements.dates.checked && form.elements.keep_days.value !== "" ? Number(form.elements.keep_days.value) : null},
+      reference_dates: {manufacture: form.elements.manufacture.value, expiry: form.elements.expiry.value, arrival: form.elements.arrival.value},
       approved_by: form.elements.approved_by.value.trim(), confirmed: form.elements.confirmed.checked,
       supersedes_id: state.supersedes?.id || null};
     const standard = await api("/api/templates", {method: "POST", body});
@@ -172,7 +183,12 @@ function renderLibrary() {
   state.templates.forEach(standard => {
     const card = element("article", "panel library-card");
     if (standard.image) { const image = element("img"); image.src = standard.image.thumbnail; image.alt = `${standard.name} 標準照片`; image.loading = "lazy"; card.append(image); }
-    const content = element("div", "library-card-content"); content.append(badge("pass", `已確認 · 第 ${standard.version} 版`), element("h2", "", standard.name), element("p", "", standard.fields.product), element("p", "", `產地：${standard.fields.origin}`), element("p", "", `地址：${standard.fields.address}`), element("p", "", `${standard.approved_by} · ${when(standard.created_at)}`));
+    const content = element("div", "library-card-content"); content.append(badge("pass", `已確認 · 第 ${standard.version} 版`), element("h2", "", standard.name));
+    textFields.forEach(key => { if (standard.fields[key]) content.append(element("p", "", `${fieldLabels[key]}：${standard.fields[key]}`)); });
+    const dateRules = [];
+    if (standard.rules.dates) dateRules.push("製造／有效日期");
+    if (standard.rules.arrival) dateRules.push("到店日");
+    content.append(element("p", "help", dateRules.length ? `日期檢查：${dateRules.join("、")}` : "未啟用日期檢查"), element("p", "", `${standard.approved_by} · ${when(standard.created_at)}`));
     const actions = element("div", "library-actions"), use = element("button", "button primary", "用此標準檢查"), edit = element("button", "button secondary", "建立新版");
     use.onclick = () => { if(state.busy) return toast("請等待目前辨識完成。"); $("#template-select").value = standard.id; selectedStandard(); clearResult(); showView("inspect"); };
     edit.onclick = () => newStandard(standard); actions.append(use, edit); content.append(actions); card.append(content); list.append(card);
@@ -322,7 +338,10 @@ async function importSource(code) {
     state.source = source; state.referenceJob = null;
     const form = $("#standard-form"); form.reset(); $("#standard-fields").disabled = false;
     form.elements.name.value = state.supersedes?.name || `${source.code} · ${source.name}`;
-    ["product","address","origin"].forEach(key => { form.elements[key].value = source.fields[key] || ""; });
+    textFields.forEach(key => { form.elements[key].value = source.fields[key] || ""; });
+    const sourceDateText = (source.date_settings || []).map(item => item.content).join(" ").replace(/\s+/g, "");
+    form.elements.dates.checked = state.supersedes?.rules.dates ?? source.rules?.dates ?? /製造|生產|有效|到期|保存期限/.test(sourceDateText);
+    form.elements.check_arrival.checked = state.supersedes ? !!state.supersedes.rules.arrival : (source.rules?.arrival ?? /到店|到貨/.test(sourceDateText));
     form.elements.approved_by.value = sessionStorage.getItem("labelcheck-operator") || "";
     form.elements.keep_days.value = ""; toggleDateFields();
     $("#reference-preview").hidden = true; $("#reference-ocr").hidden = false;
@@ -339,13 +358,14 @@ for (const id of ["inspect-file","inspect-camera","reference-file","reference-ca
 for (const [id,kind] of [["inspect-drop","inspection"],["reference-drop","reference"]]) { const zone=$("#"+id); zone.ondragover=e=>{ e.preventDefault(); zone.classList.add("dragging"); }; zone.ondragleave=()=>zone.classList.remove("dragging"); zone.ondrop=e=>{ e.preventDefault(); zone.classList.remove("dragging"); upload(e.dataTransfer.files[0],kind); }; }
 $("#template-select").onchange=()=>{ selectedStandard(); clearResult(); };
 $("#batch-date").onchange=clearResult;
+$("#arrival-date").onchange=clearResult;
 $("#standard-form").onsubmit=saveStandard;
 $("#standard-form").addEventListener("input",event=>{if(event.target.name!=="confirmed") $("#standard-form").elements.confirmed.checked=false;});
 $("#standard-form").elements.dates.onchange=toggleDateFields;
+$("#standard-form").elements.check_arrival.onchange=toggleDateFields;
 $("#history-filter").onchange=()=>{ state.page=1; loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-prev").onclick=()=>{ state.page=Math.max(1,state.page-1); loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-next").onclick=()=>{ state.page++; loadHistory().catch(e=>toast(e.message,true)); };
 $("#login-form").onsubmit=async e=>{ e.preventDefault(); const form=e.currentTarget, button=$("button",form); button.disabled=true; try { const result=await api("/api/login",{method:"POST",body:{password:form.elements.password.value}}); state.csrf=result.csrf; form.reset(); $("#login-error").textContent=""; await initialize(); } catch(error) { $("#login-error").textContent=error.message; } finally { button.disabled=false; } };
 $("#logout").onclick=async()=>{ if(state.busy) return toast("請等待目前辨識完成。"); try { await api("/api/logout",{method:"POST"}); location.reload(); } catch(e) { toast(e.message,true); } };
 initialize().catch(e=>toast(e.message,true));
-

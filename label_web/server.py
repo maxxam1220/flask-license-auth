@@ -19,7 +19,7 @@ from werkzeug.utils import secure_filename
 
 import database as db
 from ocr_worker import IsolatedOCR
-from validation import extract_fields, evaluate, parse_date, recognize_only
+from validation import extract_fields, evaluate, parse_date, recognize_only, TEXT_FIELDS
 import label_source
 
 register_heif_opener()
@@ -196,13 +196,15 @@ def create_app(config=None, ocr=None):
         fields = body.get("fields", {})
         if not isinstance(fields, dict) or any(not isinstance(fields.get(k), str) or not fields[k].strip() or len(fields[k]) > 500 for k in ("product", "address", "origin")):
             abort(400, description="請完整確認品名、地址與產地，每欄最多 500 字。")
-        fields = {k: fields[k].strip() for k in ("product", "address", "origin")}
+        if any(not isinstance(fields.get(k, ""), str) or len(fields.get(k, "")) > 500 for k in TEXT_FIELDS):
+            abort(400, description="標準文字每欄最多 500 字。")
+        fields = {k: fields.get(k, "").strip() for k in TEXT_FIELDS}
         name = body.get("name", "").strip()
         approver = body.get("approved_by", "").strip()
         if not name or len(name) > 200 or not approver or len(approver) > 100:
             abort(400, description="請填寫標準名稱與確認人員。")
         rules = body.get("rules", {})
-        if not isinstance(rules, dict) or not isinstance(rules.get("dates"), bool):
+        if not isinstance(rules, dict) or not isinstance(rules.get("dates"), bool) or not isinstance(rules.get("arrival", False), bool):
             abort(400, description="請確認日期檢查設定。")
         keep_days = rules.get("keep_days")
         if keep_days is not None and (type(keep_days) is not int or not 0 <= keep_days <= 3650):
@@ -222,9 +224,16 @@ def create_app(config=None, ocr=None):
                     raise ValueError()
             except ValueError:
                 abort(400, description="標準照片的日期不完整、前後矛盾或不符合保存天數，請核對。")
+        if rules.get("arrival", False) and not source:
+            try:
+                arrival = parse_date(reference_dates.get("arrival", ""))
+                if rules["dates"] and not m["date"] <= arrival["date"] <= e["date"]:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                abort(400, description="標準照片的到店日不完整、不合法或與製造／有效日期矛盾，請核對。")
         row = dict(id=db.uid(), family_id=db.uid(), version=1, active=True, name=name,
-                   image_id=image_id, fields=fields, rules={"dates": rules["dates"], "keep_days": keep_days},
-                   reference_dates={k: str(reference_dates.get(k, ""))[:80] for k in ("manufacture", "expiry")},
+                   image_id=image_id, fields=fields, rules={"dates": rules["dates"], "keep_days": keep_days, "arrival": rules.get("arrival", False)},
+                   reference_dates={k: str(reference_dates.get(k, ""))[:80] for k in ("manufacture", "expiry", "arrival")},
                    approved_by=approver, created_at=db.now())
         if source:
             row["rules"]["source"] = {k: source[k] for k in ("code", "name", "revision", "keep_days", "date_settings")}
@@ -280,15 +289,17 @@ def create_app(config=None, ocr=None):
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="running"))
             with image_lock:
                 ocr_result = recognizer.recognize(data_dir / "images" / job["image_id"] / "image.jpg")
-            result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"])}
+            inputs = {"batch_date": job["batch_date"], "arrival_date": (job.get("result") or {}).get("request", {}).get("arrival_date", "")}
+            result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
             with engine.begin() as conn:
                 if job["kind"] in {"inspection", "recognition"}:
                     if job["kind"] == "inspection":
                         standard = dict(conn.execute(select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
-                        evaluation = evaluate(ocr_result["lines"], standard, job["batch_date"])
+                        evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
                     else:
                         standard = {"id": "", "name": "先辨識・尚未核對標準", "version": 0, "image_id": "", "mode": "recognition"}
-                        evaluation = recognize_only(ocr_result["lines"], job["batch_date"])
+                        evaluation = recognize_only(ocr_result["lines"], inputs["batch_date"], inputs["arrival_date"])
+                    evaluation["inputs"] = inputs
                     inspection_id = db.uid()
                     conn.execute(insert(db.inspections).values(id=inspection_id, image_id=job["image_id"],
                         template_id=standard["id"], template_snapshot=standard, status=evaluation["status"],
@@ -318,6 +329,13 @@ def create_app(config=None, ocr=None):
                 date.fromisoformat(batch)
             except ValueError:
                 abort(400, description="本批製造日期格式不正確。")
+        arrival = request.form.get("arrival_date", "")
+        if arrival:
+            try:
+                if date.fromisoformat(arrival).isoformat() != arrival:
+                    raise ValueError()
+            except ValueError:
+                abort(400, description="本批到店日期格式不正確。")
         if not slots.acquire(blocking=False):
             abort(429, description="目前等待辨識的照片較多，請稍後再試。")
         try:
@@ -328,7 +346,8 @@ def create_app(config=None, ocr=None):
             finally:
                 image_lock.release()
             row = dict(id=db.uid(), image_id=image["id"], kind=kind, template_id=template_id or None,
-                       batch_date=batch, state="pending", created_at=db.now())
+                       batch_date=batch, state="pending", created_at=db.now(),
+                       result={"request": {"batch_date": batch, "arrival_date": arrival}})
             with engine.begin() as conn:
                 conn.execute(insert(db.jobs).values(**row))
             worker.submit(process_job, row)

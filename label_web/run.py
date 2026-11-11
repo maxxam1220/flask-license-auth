@@ -11,8 +11,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     host = os.environ.get("LABELCHECK_HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "5083"))
-    if host not in {"127.0.0.1", "localhost", "::1"} and len(os.environ.get("LABELCHECK_PASSWORD", "")) < 12:
-        raise SystemExit("遠端使用請先設定至少 12 字元的 LABELCHECK_PASSWORD。")
+    if host not in {"127.0.0.1", "localhost", "::1"} and len(os.environ.get("LABELCHECK_PASSWORD", "")) < 8:
+        raise SystemExit("遠端使用請先設定至少 8 字元的 LABELCHECK_PASSWORD。")
     config = {}
     if args.existing_database:
         settings = configparser.ConfigParser(interpolation=None)

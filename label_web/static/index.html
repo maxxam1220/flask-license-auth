@@ -45,6 +45,8 @@
           <div id="selected-standard" class="selected-standard" hidden></div>
           <label for="batch-date">本批製造日期 <span class="optional">選填</span><input id="batch-date" type="date"></label>
           <p class="help">填入後會核對本批製造日，避免兩個日期同時印錯。</p>
+          <label for="arrival-date">本批到店日 <span class="optional">選填</span><input id="arrival-date" type="date"></label>
+          <p class="help">填入預定到店日，核對照片是否印對日期；未填時僅檢查日期格式及可判讀的先後關係。</p>
           <div class="section-title divided"><span class="step-number">02</span><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
             <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>讓整張標籤清楚入鏡</h3><p>正面拍攝，避開反光、手指與遮擋</p>
@@ -55,7 +57,7 @@
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
           <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
         </div>
-        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>核對結果將顯示在這裡</h2><p>逐字核對品名、地址、產地，<br>並檢查製造日期與有效日期。</p><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異</span><span class="badge review">需複核</span></div><p class="small muted">看不清楚的內容不會自動判定通過。</p></div>
+        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>核對結果將顯示在這裡</h2><p>逐字核對品名、規格、保存條件、產地，<br>以及公司名稱、地址、電話；<br>另依設定檢查製造日期、有效日期與到店日。</p><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異</span><span class="badge review">需複核</span></div><p class="small muted">看不清楚的內容不會自動判定通過。</p></div>
         <div id="result-area" hidden></div>
       </div>
     </section>
@@ -69,7 +71,7 @@
         <div class="panel">
           <details id="source-import"><summary>從既有標籤系統帶入參考</summary><p class="help">搜尋標籤代碼或品名，帶入後仍需逐欄確認。</p><form id="source-search"><label>標籤代碼或品名<input id="source-query" maxlength="100" required placeholder="例如：雙拼"></label><button class="button secondary" type="submit">搜尋系統標籤</button></form><div id="source-results"></div><p id="source-note" class="help"></p></details>
           <div class="section-title"><span class="step-number">01</span><h2>正確標籤照片</h2></div>
-          <div id="reference-drop" class="upload-zone"><div class="upload-symbol"><svg><use href="#i-upload"/></svg></div><h3>上傳已確認正確的標籤</h3><p>照片需完整包含品名、地址、產地及日期</p><div class="upload-actions"><button class="button primary" data-file="reference-file">選擇正確照片</button><button class="button secondary" data-file="reference-camera">拍照</button></div><small>JPG、PNG、WebP、HEIC · 最多 15 MB</small></div>
+          <div id="reference-drop" class="upload-zone"><div class="upload-symbol"><svg><use href="#i-upload"/></svg></div><h3>上傳已確認正確的標籤</h3><p>拍下完整標籤，包含右下角的公司名稱、地址及電話</p><div class="upload-actions"><button class="button primary" data-file="reference-file">選擇正確照片</button><button class="button secondary" data-file="reference-camera">拍照</button></div><small>JPG、PNG、WebP、HEIC · 最多 15 MB</small></div>
           <input id="reference-file" class="file-input" type="file" accept="image/*,.heic,.heif"><input id="reference-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <div id="reference-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>讀取標準照片文字中…</span></div>
           <img id="reference-preview" class="reference-preview" alt="上傳的標準標籤照片" hidden>
@@ -81,12 +83,20 @@
           <fieldset id="standard-fields" disabled>
             <label>標準名稱<input name="name" maxlength="200" required placeholder="例如：雙拼水果盒 265g"></label>
             <label>品名<input name="product" maxlength="500" required></label>
-            <label>地址<textarea name="address" maxlength="500" rows="2" required></textarea></label>
+            <label>規格 <span class="optional">選填</span><input name="spec" maxlength="500" placeholder="依標籤原文填寫，例如：1.8kg/盒"></label>
+            <label>保存條件 <span class="optional">選填</span><input name="storage" maxlength="500" placeholder="包含溫度、單位及符號，依原文填寫"></label>
             <label>產地<input name="origin" maxlength="500" required placeholder="依標籤原文填寫，包含標點"></label>
+            <label>公司名稱 <span class="optional">選填</span><input name="company" maxlength="500" placeholder="填寫完整公司名稱"></label>
+            <label>地址<textarea name="address" maxlength="500" rows="2" required></textarea></label>
+            <label>電話 <span class="optional">選填</span><input name="phone" maxlength="500" inputmode="tel" placeholder="依標籤原文填寫，包含連字號"></label>
+            <p class="help">規格、保存條件、公司名稱、電話填寫後會逐字核對；未填的項目不檢查。沒有「地址：」前綴也可辨識，仍請核對是否完整。</p>
             <div class="form-divider"></div><label class="check-label"><input name="dates" type="checkbox" checked><span>檢查製造日期與有效日期</span></label>
             <div id="reference-date-fields" class="form-row"><label>照片中的製造日期<input name="manufacture" placeholder="2026.11.10" maxlength="80" required></label><label>照片中的有效日期<input name="expiry" placeholder="2026.11.13" maxlength="80" required></label></div>
             <label>保存天數 <span class="optional">選填</span><input name="keep_days" type="number" min="0" max="3650" step="1" placeholder="有效日與製造日相差幾天"></label>
             <p class="help">例如 11/10 製造、11/13 到期，日期相差 3 天。照片日期只用於確認標準，不會拿來核對以後每一批。</p>
+            <label class="check-label"><input name="check_arrival" type="checkbox"><span>檢查到店日</span></label>
+            <label id="reference-arrival-field" hidden>照片中的到店日<input name="arrival" placeholder="2026.11.12" maxlength="80"></label>
+            <p class="help">啟用後檢查到店日格式；每批的正確日期請在「檢查標籤」填入「本批到店日」，不會沿用這張標準照片的日期。</p>
             <label>確認人員<input name="approved_by" maxlength="100" required placeholder="請輸入姓名"></label>
             <label class="check-label confirm-check"><input name="confirmed" type="checkbox" required><span>我已核對正確資料，確認以上文字及規則正確。</span></label>
             <button class="button primary full" type="submit"><svg><use href="#i-check"/></svg>儲存並啟用標準</button>

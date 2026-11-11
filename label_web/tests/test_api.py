@@ -31,8 +31,8 @@ class APITests(unittest.TestCase):
     def photo(self):
         file=io.BytesIO();Image.new("RGB",(500,500),"white").save(file,"PNG");file.seek(0);return file
 
-    def job(self, kind="reference", template_id=""):
-        response=self.client.post("/api/jobs",data={"kind":kind,"template_id":template_id,"photo":(self.photo(),"標籤.png")},headers=self.headers)
+    def job(self, kind="reference", template_id="", **inputs):
+        response=self.client.post("/api/jobs",data={"kind":kind,"template_id":template_id,"photo":(self.photo(),"標籤.png"),**inputs},headers=self.headers)
         self.assertEqual(response.status_code,202,response.json)
         for _ in range(100):
             job=self.client.get("/api/jobs/"+response.json["id"]).json
@@ -111,6 +111,20 @@ class APITests(unittest.TestCase):
     def test_local_source_search_does_not_invent_data(self):
         self.assertEqual(self.client.get("/api/source-labels?q=雙拼").json,{"available":False,"items":[]})
 
+    def test_source_arrival_only_requires_no_frozen_reference_date(self):
+        source = {"code":"1017","name":"系統標籤","revision":"current","keep_days":0,
+                  "date_settings":[{"content":"到 店 日:","shift_days":1}]}
+        body = {"source_code":"1017","source_revision":"current","name":"到店日來源測試",
+                "fields":dict(STANDARD["fields"],phone="0800-200-859"),
+                "rules":{"dates":False,"arrival":True,"keep_days":None},
+                "approved_by":"測試員","confirmed":True}
+        with patch("server.label_source.available",return_value=True), patch("server.label_source.draft",return_value=source):
+            response = self.client.post("/api/templates",json=body,headers=self.headers)
+        self.assertEqual(response.status_code,201,response.json)
+        self.assertEqual(response.json["reference_dates"]["arrival"],"")
+        self.assertTrue(response.json["rules"]["arrival"])
+        self.assertFalse(response.json["rules"]["dates"])
+
     def test_busy_upload_does_not_block_health_requests(self):
         started, release = threading.Event(), threading.Event()
         def slow_ocr(_path):
@@ -136,6 +150,42 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/media/{job['image_id']}/original").status_code,404)
         with self.client.get(job["image"]["url"]) as response:
             self.assertEqual(response.status_code,200)
+
+    def test_extended_fields_and_arrival_are_saved_and_versioned(self):
+        fields = dict(STANDARD["fields"], spec="1.8kg/盒", storage="7℃~18℃",
+                      company="福和生鮮農產股份有限公司", phone="0800-200-859")
+        rules = {"dates": False, "arrival": True, "keep_days": None}
+        response = self.standard(fields=fields, rules=rules, reference_dates={"arrival":"2026.11.12"})
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertEqual(response.json["fields"], fields)
+        self.assertTrue(response.json["rules"]["arrival"])
+        self.assertEqual(response.json["reference_dates"]["arrival"], "2026.11.12")
+        job = self.job("inspection", response.json["id"], arrival_date="2026-11-14")
+        self.assertEqual(job["result"]["request"]["arrival_date"], "2026-11-14")
+        result = self.client.get("/api/inspections/" + job["result"]["inspection_id"]).json
+        self.assertEqual(result["template_snapshot"]["fields"]["phone"], fields["phone"])
+        self.assertEqual(result["result"]["inputs"]["arrival_date"], "2026-11-14")
+        self.assertNotEqual(result["status"], "pass")
+
+    def test_invalid_optional_fields_and_arrival_are_rejected(self):
+        self.assertEqual(self.standard(fields=dict(STANDARD["fields"], phone=123)).status_code, 400)
+        self.assertEqual(self.standard(fields=dict(STANDARD["fields"], company="x"*501)).status_code, 400)
+        self.assertEqual(self.standard(rules={"dates":False,"arrival":True}, reference_dates={"arrival":"2026.02.30"}).status_code,400)
+        self.assertEqual(self.standard(rules={"dates":True,"arrival":True}, reference_dates={"manufacture":"2026.11.10","expiry":"2026.11.13","arrival":"2026.11.14"}).status_code,400)
+        response = self.client.post("/api/jobs",data={"kind":"recognition","arrival_date":"2026-02-30","photo":(self.photo(),"label.png")},headers=self.headers)
+        self.assertEqual(response.status_code, 400)
+
+    def test_eight_character_password_and_attempt_limit(self):
+        self.app.config["APP_PASSWORD"] = "testpass"
+        response = self.client.post("/api/login", json={"password":"testpass"}, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.headers = {"X-CSRF-Token":response.json["csrf"]}
+        self.client.post("/api/logout",json={},headers=self.headers)
+        self.headers = {"X-CSRF-Token":self.client.get("/api/session").json["csrf"]}
+        # The successful sign-in above is also one attempt in the five-minute window.
+        for _ in range(9):
+            self.assertEqual(self.client.post("/api/login",json={"password":"wrong"},headers=self.headers).status_code,401)
+        self.assertEqual(self.client.post("/api/login",json={"password":"wrong"},headers=self.headers).status_code,429)
 
     def test_auth_media_and_api_protection(self):
         self.app.config["APP_PASSWORD"]="a-test-password"
