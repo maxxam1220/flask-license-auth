@@ -17,10 +17,25 @@ import sys
 import time
 
 from memory_cleanup import release_unused_memory
+from model_cache import advise_model_cache
 
 
 _MIB = 1024 * 1024
 _POLL_SECONDS = .01
+
+
+def _read_model_diagnostics(path):
+    try:
+        with Path(path).open("rb") as stream:
+            encoded = stream.read(8193)
+        if len(encoded) > 8192:
+            return {"status":"unavailable"}
+        value = json.loads(encoded)
+        if not isinstance(value, dict) or not isinstance(value.get("stage"), str) or len(value["stage"]) > 80:
+            return {"status":"unavailable"}
+        return {"stage":value["stage"], "last_advice":value.get("last_advice")}
+    except (OSError, ValueError, TypeError):
+        return {"status":"unavailable"}
 
 
 class OCRMemoryLimitError(RuntimeError):
@@ -282,7 +297,7 @@ class IsolatedOCR:
     def recognize(self, image_path):
         with self.lock, TemporaryDirectory(prefix="labelcheck-ocr-") as folder:
             deadline = time.monotonic() + self.timeout
-            recovery = {"attempts": 0, "automatic_retry": False, "reason": "", "cleanups": []}
+            recovery = {"attempts": 0, "automatic_retry": False, "reason": "", "cleanups": [], "model_cache": [], "model_loading": []}
             try:
                 recovery["cleanups"].append(release_unused_memory())
                 for attempt in (1, 2):
@@ -290,14 +305,26 @@ class IsolatedOCR:
                     # An earlier worker may leave partial JSON. The retry uses
                     # a new output path and can never accept that earlier file.
                     output = Path(folder) / f"result-{attempt}.json"
+                    diagnostics = Path(folder) / "diagnostics.json"
+                    diagnostics.unlink(missing_ok=True)
                     command = [sys.executable, str(Path(__file__).with_name("ocr_engine.py")),
                                str(Path(image_path).resolve()), "--model-dir", str(self.model_dir),
+                               "--diagnostics", str(diagnostics),
                                "--output", str(output)]
                     try:
+                        recovery["model_cache"].append({"stage":"before_attempt", "attempt":attempt,
+                                                        **advise_model_cache(self.model_dir)})
                         if time.monotonic() >= deadline:
                             raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
                         guard = self._memory_guard()
-                        returncode = self._run(command, guard, deadline=deadline)
+                        try:
+                            returncode = self._run(command, guard, deadline=deadline)
+                        finally:
+                            recovery["model_loading"].append({"attempt":attempt, **_read_model_diagnostics(diagnostics)})
+                            # _run always kills/reaps a started worker before
+                            # this advice; keep the same total timeout deadline.
+                            recovery["model_cache"].append({"stage":"after_attempt", "attempt":attempt,
+                                                            **advise_model_cache(self.model_dir)})
                     except OCRMemoryLimitError as error:
                         # _run's finally block kills/reaps the first worker
                         # before control reaches here. Only service pressure is

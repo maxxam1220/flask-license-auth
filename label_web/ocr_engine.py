@@ -1,8 +1,54 @@
 """Local OCR: preserve the printed characters; never spell-correct the evidence."""
 from pathlib import Path
+import json
 import re
 import threading
 import time
+
+from memory_cleanup import release_unused_memory
+from model_cache import advise_model_cache
+
+
+def _write_model_diagnostic(path, stage, last_advice=None):
+    """Bounded operational checkpoint; no photo, OCR text, or exception details."""
+    if path is None:
+        return
+    try:
+        encoded = json.dumps({"stage":stage, "last_advice":last_advice}, ensure_ascii=True)
+        if len(encoded) > 8192:
+            return
+        destination = Path(path)
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(encoded, encoding="ascii")
+        temporary.replace(destination)
+    except (OSError, TypeError, ValueError):
+        pass  # Optional diagnostics never prevent inference or change the guard.
+
+
+def _install_model_cache_cleanup(engine, model_dir, diagnostics, diagnostic_path=None):
+    """Keep RapidOCR's lazy order, advising clean model cache after each load.
+
+RapidOCR 3.10 is pinned. Preloading all sessions would raise the detector peak;
+these wrappers leave each model's first-use timing and its return value intact.
+"""
+    def wrap(loader, attribute, stage):
+        def load():
+            was_loaded = getattr(engine, attribute, None) is not None
+            if not was_loaded:
+                _write_model_diagnostic(diagnostic_path, stage.replace("after_", "before_"),
+                                        diagnostics[-1] if diagnostics else None)
+            model = loader()
+            if not was_loaded and getattr(engine, attribute, None) is not None:
+                cleanup = release_unused_memory()
+                diagnostics.append({"stage":stage, "heap_cleanup":cleanup, **advise_model_cache(model_dir)})
+                _write_model_diagnostic(diagnostic_path, stage, diagnostics[-1])
+            return model
+        return load
+    for kind in ("det", "cls", "rec"):
+        name = f"_load_{kind}_model"
+        loader = getattr(engine, name, None)
+        if callable(loader):
+            setattr(engine, name, wrap(loader, f"text_{kind}", f"after_{kind}_load"))
 
 
 def prepare_small_image(image):
@@ -81,14 +127,17 @@ def merge_retry(preferred, other):
 
 
 class OCREngine:
-    def __init__(self, model_dir):
+    def __init__(self, model_dir, diagnostics_path=None):
         self.model_dir = Path(model_dir)
         self.lock = threading.Lock()
         self.engine = None
+        self.model_cache = []
+        self.diagnostics_path = diagnostics_path
 
     def recognize(self, image_path):
         with self.lock:
             if self.engine is None:
+                _write_model_diagnostic(self.diagnostics_path, "before_engine_init")
                 import cv2
                 from rapidocr import RapidOCR, EngineType, LangDet, LangRec, ModelType, OCRVersion
                 cv2.setNumThreads(1)
@@ -114,6 +163,11 @@ class OCREngine:
                     "Rec.ocr_version": OCRVersion.PPOCRV6,
                     "Rec.rec_batch_num": 1,
                 })
+                cleanup = release_unused_memory()
+                self.model_cache.append({"stage":"after_engine_init", "heap_cleanup":cleanup,
+                                         **advise_model_cache(self.model_dir)})
+                _write_model_diagnostic(self.diagnostics_path, "after_engine_init", self.model_cache[-1])
+                _install_model_cache_cleanup(self.engine, self.model_dir, self.model_cache, self.diagnostics_path)
             import cv2
             start = time.monotonic()
             # Use RapidOCR's existing EXIF/alpha/color loader, then pass a BGR array.
@@ -121,7 +175,9 @@ class OCREngine:
             original_shape = original.shape[:2]
             prepared, scale_x, scale_y = prepare_small_image(original)
             del original
+            _write_model_diagnostic(self.diagnostics_path, "before_inference", self.model_cache[-1] if self.model_cache else None)
             result = self.engine(prepared, use_det=True, use_cls=True, use_rec=True)
+            _write_model_diagnostic(self.diagnostics_path, "after_inference", self.model_cache[-1] if self.model_cache else None)
             lines = _read_lines(result, scale_x, scale_y, original_shape)
             del result
             passes, rotation = 1, 0
@@ -136,7 +192,9 @@ class OCREngine:
                     retry_y *= new_height / height
                 rotated = cv2.rotate(retry_source, cv2.ROTATE_90_CLOCKWISE)
                 del retry_source, prepared
+                _write_model_diagnostic(self.diagnostics_path, "before_rotation_retry", self.model_cache[-1] if self.model_cache else None)
                 retry_result = self.engine(rotated, use_det=True, use_cls=True, use_rec=True)
+                _write_model_diagnostic(self.diagnostics_path, "after_rotation_retry", self.model_cache[-1] if self.model_cache else None)
                 retry = _read_lines(retry_result, retry_x, retry_y, original_shape, rotation=90)
                 del retry_result, rotated
                 passes = 2
@@ -146,6 +204,7 @@ class OCREngine:
                     lines = merge_retry(lines, retry)
             characters = set(self.engine.text_rec.postprocess_op.character) if self.engine.text_rec is not None else set()
             return {"lines": lines, "engine": "RapidOCR 3.10 / PP-OCRv6 small-det + medium-rec",
+                    "model_cache": self.model_cache,
                     "preprocessing": {"scale_x": round(scale_x, 4), "scale_y": round(scale_y, 4),
                                       "passes": passes, "selected_rotation": rotation},
                     "capabilities": {
@@ -163,9 +222,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("image")
     parser.add_argument("--output")
+    parser.add_argument("--diagnostics")
     parser.add_argument("--model-dir", default=str(Path(__file__).parent / "models"))
     args = parser.parse_args()
-    result = OCREngine(Path(args.model_dir)).recognize(args.image)
+    result = OCREngine(Path(args.model_dir), diagnostics_path=args.diagnostics).recognize(args.image)
     # Operational evidence for the one-shot Linux worker, not an OCR confidence score.
     try:
         import resource

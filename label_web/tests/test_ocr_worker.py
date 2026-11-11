@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
-from ocr_worker import IsolatedOCR, OCRMemoryLimitError, _MemoryGuard, _MIB
+from ocr_worker import IsolatedOCR, OCRMemoryLimitError, _MemoryGuard, _MIB, _read_model_diagnostics
 
 
 class FakeProcess:
@@ -41,6 +41,8 @@ class IsolatedOCRTests(unittest.TestCase):
         no_guard.start(); self.addCleanup(no_guard.stop)
         cleanup = patch("ocr_worker.release_unused_memory", return_value={"status": "test_cleanup"})
         self.cleanup = cleanup.start(); self.addCleanup(cleanup.stop)
+        cache = patch("ocr_worker.advise_model_cache", return_value={"status":"test_cache"})
+        self.cache = cache.start(); self.addCleanup(cache.stop)
         def kill_group(pid, _signal):
             next(process for process in FakeProcess.instances if process.pid == pid).kill()
         safe_signal = patch("ocr_worker.os.killpg", side_effect=kill_group, create=True)
@@ -63,7 +65,10 @@ class IsolatedOCRTests(unittest.TestCase):
             result = IsolatedOCR("models").recognize("a photo.jpg")
             self.assertEqual({key: value for key, value in result.items() if key != "recovery"}, expected)
             self.assertEqual(result["recovery"], {"attempts": 1, "automatic_retry": False,
-                "reason": "", "cleanups": [{"status": "test_cleanup"}]})
+                "reason": "", "cleanups": [{"status": "test_cleanup"}],
+                "model_cache": [{"stage":"before_attempt", "attempt":1, "status":"test_cache"},
+                                {"stage":"after_attempt", "attempt":1, "status":"test_cache"}],
+                "model_loading":[{"attempt":1, "status":"unavailable"}]})
         for key in ("LABELCHECK_DATABASE_URL", "LABELCHECK_PASSWORD", "LABELCHECK_SECRET",
                     "PGPASSWORD", "OPENAI_API_KEY", "RENDER_API_TOKEN"):
             self.assertNotIn(key, observed["env"])
@@ -156,7 +161,7 @@ class IsolatedOCRTests(unittest.TestCase):
         self.assertTrue(caught.exception.recovery["automatic_retry"])
 
     def test_service_pressure_reaps_worker_before_cleanup_and_retries_original_once(self):
-        commands, processes, cleanup_states = [], [], []
+        commands, processes, cleanup_states, cache_states = [], [], [], []
         first_guard, retry_guard = Mock(), Mock()
         first_guard.observe.side_effect = [None, OCRMemoryLimitError("service_budget", 417*_MIB, 416*_MIB)]
         retry_guard.metadata.return_value = {"worker_rss_peak_mb": 270}
@@ -164,10 +169,15 @@ class IsolatedOCRTests(unittest.TestCase):
             cleanup_states.append([(p.killed, p.waited) for p in processes])
             return {"status": "test_cleanup"}
         self.cleanup.side_effect = cleanup
+        def cache(_directory):
+            cache_states.append([(p.killed, p.waited) for p in processes])
+            return {"status":"test_cache"}
+        self.cache.side_effect = cache
         def launch(command, **kwargs):
             commands.append(command)
             first = len(commands) == 1
             Path(command[-1]).write_text(json.dumps({"lines": [], "engine": "FIRST" if first else "SECOND", "elapsed": .1}))
+            Path(command[command.index("--diagnostics")+1]).write_text(json.dumps({"stage":"before_rec_load" if first else "after_inference", "last_advice":{"status":"ok"}}))
             process = FakeProcess(None if first else 0)
             processes.append(process)
             return process
@@ -177,12 +187,26 @@ class IsolatedOCRTests(unittest.TestCase):
             result = worker.recognize("same original photo.jpg")
         self.assertEqual(result["engine"], "SECOND")
         self.assertEqual(cleanup_states, [[], [(True, True)]])
+        self.assertEqual(cache_states, [[], [(True, True)], [(True, True)], [(True, True), (os.name == "posix", True)]])
         self.assertEqual(commands[0][:-1], commands[1][:-1])
         self.assertNotEqual(commands[0][-1], commands[1][-1])
         self.assertEqual(result["recovery"]["attempts"], 2)
         self.assertTrue(result["recovery"]["automatic_retry"])
         self.assertEqual(result["recovery"]["reason"], "service_budget")
+        self.assertEqual([item["stage"] for item in result["recovery"]["model_loading"]],["before_rec_load","after_inference"])
         self.assertTrue(all(not Path(command[-1]).parent.exists() for command in commands))
+
+    def test_cache_advice_does_not_extend_deadline_or_start_expired_attempt(self):
+        now = [10.]
+        def cache(_directory):
+            now[0] = 12.
+            return {"status":"test_cache"}
+        self.cache.side_effect = cache
+        worker = IsolatedOCR("models", timeout=1)
+        with patch("ocr_worker.time.monotonic", side_effect=lambda: now[0]), patch.object(worker, "_run") as run:
+            with self.assertRaisesRegex(RuntimeError, "exceeded"):
+                worker.recognize("photo.jpg")
+        run.assert_not_called()
 
     def test_retry_cannot_reuse_first_attempts_complete_json(self):
         calls = []
@@ -190,6 +214,7 @@ class IsolatedOCRTests(unittest.TestCase):
             calls.append(command)
             if len(calls) == 1:
                 Path(command[-1]).write_text('{"lines":[],"engine":"DO NOT ACCEPT","elapsed":0.1}')
+                Path(command[command.index("--diagnostics")+1]).write_text('{"stage":"before_rec_load"}')
                 raise OCRMemoryLimitError("service_budget", 417*_MIB, 416*_MIB)
             return 0  # Retry exits without its own result.
         worker = IsolatedOCR("models")
@@ -198,7 +223,20 @@ class IsolatedOCRTests(unittest.TestCase):
                 worker.recognize("photo.jpg")
         self.assertEqual(len(calls), 2)
         self.assertEqual(caught.exception.recovery["attempts"], 2)
+        self.assertEqual(caught.exception.recovery["model_loading"][1],{"attempt":2,"status":"unavailable"})
         self.assertTrue(all(not Path(command[-1]).parent.exists() for command in calls))
+
+    def test_model_diagnostics_are_bounded_and_optional(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/"diagnostics.json"
+            for payload in (None,"x"*8193,"not JSON","[]",'{"stage":3}'):
+                if payload is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(payload)
+                self.assertEqual(_read_model_diagnostics(path),{"status":"unavailable"})
+            path.write_text('{"stage":"before_rec_load","last_advice":{"status":"ok"}}')
+            self.assertEqual(_read_model_diagnostics(path),{"stage":"before_rec_load","last_advice":{"status":"ok"}})
 
     def test_worker_budget_and_unavailable_monitor_are_not_retried(self):
         for kind in ("worker_budget", "monitor_unavailable"):
