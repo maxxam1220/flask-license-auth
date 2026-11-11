@@ -153,6 +153,52 @@ class IsolatedOCRTests(unittest.TestCase):
                 IsolatedOCR("models")._run(["TEST ONLY"], guard)
         self.assertTrue(process.killed and process.waited)
 
+    def test_vmrss_exit_race_waits_briefly_and_accepts_only_complete_result(self):
+        for reason in ("worker_status_missing", "worker_rss_missing"):
+            with self.subTest(reason=reason):
+                guard = Mock()
+                guard.observe.side_effect = [None, OCRMemoryLimitError("monitor_unavailable", reason=reason)]
+                guard.metadata.return_value = {"worker_rss_peak_mb": 200}
+                process = FakeProcess(None)
+                timeouts = []
+                def finish(timeout=None):
+                    timeouts.append(timeout)
+                    process.returncode = 0
+                    process.waited = True
+                    return 0
+                process.wait = finish
+                def launch(command, **kwargs):
+                    Path(command[-1]).write_text('{"lines":[],"engine":"TEST","elapsed":0.1}', encoding="utf-8")
+                    return process
+                worker = IsolatedOCR("models")
+                with patch.object(worker, "_memory_guard", return_value=guard), \
+                        patch("ocr_worker.subprocess.Popen", side_effect=launch):
+                    result = worker.recognize("photo.jpg")
+                self.assertEqual(result["engine"], "TEST")
+                self.assertEqual(timeouts[0], .05)
+
+    def test_missing_vmrss_that_does_not_exit_still_fails_closed(self):
+        guard = Mock()
+        guard.observe.side_effect = [None, OCRMemoryLimitError("monitor_unavailable", reason="worker_rss_missing")]
+        process = FakeProcess(None)
+        with patch("ocr_worker.subprocess.Popen", return_value=process):
+            with self.assertRaises(OCRMemoryLimitError) as caught:
+                IsolatedOCR("models")._run(["TEST ONLY"], guard)
+        self.assertEqual(caught.exception.reason, "worker_rss_missing")
+        self.assertTrue(process.killed and process.waited)
+
+    def test_cgroup_read_error_never_gets_exit_grace(self):
+        guard = Mock()
+        guard.observe.side_effect = [None, OCRMemoryLimitError("monitor_unavailable", reason="cgroup_usage_read")]
+        process = FakeProcess(None)
+        original_wait = process.wait
+        process.wait = Mock(side_effect=original_wait)
+        with patch("ocr_worker.subprocess.Popen", return_value=process):
+            with self.assertRaises(OCRMemoryLimitError):
+                IsolatedOCR("models")._run(["TEST ONLY"], guard)
+        self.assertTrue(process.killed)
+        self.assertEqual(process.wait.call_args_list[0].kwargs["timeout"], 5)
+
     def test_allocators_are_bounded_without_overwriting_other_tunables(self):
         with patch("ocr_worker.sys.platform", "linux"), patch.dict(os.environ, {
             "GLIBC_TUNABLES": "glibc.malloc.check=3:glibc.malloc.arena_max=9:glibc.cpu.hwcaps=-AVX2"}):
@@ -231,8 +277,24 @@ class MemoryGuardTests(unittest.TestCase):
         _, usage = self.fixture(location="/", mount_root="/host/service")
         guard = self.guard()
         (self.mount / usage).unlink()
-        with self.assertRaisesRegex(OCRMemoryLimitError, "monitor_unavailable"):
+        with self.assertRaisesRegex(OCRMemoryLimitError, "monitor_unavailable") as caught:
             guard.observe()
+        self.assertEqual(caught.exception.reason, "cgroup_usage_read")
+        self.assertEqual(caught.exception.monitor_detail["exception"], "FileNotFoundError")
+
+    def test_missing_child_memory_map_preserves_diagnostic_reason_and_state(self):
+        self.fixture()
+        guard = self.guard()
+        with self.assertRaises(OCRMemoryLimitError) as caught:
+            guard.observe(123)
+        self.assertEqual(caught.exception.reason, "worker_status_missing")
+        child = self.proc / "123"; child.mkdir()
+        (child / "status").write_text("Name:\tTEST\nState:\tZ (zombie)\n")
+        with self.assertRaises(OCRMemoryLimitError) as caught:
+            guard.observe(123)
+        self.assertEqual(caught.exception.reason, "worker_rss_missing")
+        self.assertEqual(caught.exception.monitor_detail["worker_state"], "Z")
+        self.assertIn("worker_rss_missing", str(caught.exception))
 
     def test_child_rss_and_diagnostic_file_cache_preserve_conservative_limit(self):
         _, usage = self.fixture()

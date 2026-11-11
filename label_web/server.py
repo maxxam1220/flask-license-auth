@@ -353,6 +353,8 @@ def create_app(config=None, ocr=None):
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="done", result=result))
         except Exception as error:
             app.logger.exception("OCR job failed")
+            if isinstance(error, OCRMemoryLimitError) and error.memory_guard:
+                app.logger.warning("OCR memory guard sample: %s", error.memory_guard)
             message = ("這張照片的辨識用量超過目前服務可用記憶體，已停止本次辨識。請裁切至單張標籤後重試。"
                        if isinstance(error, OCRMemoryLimitError)
                        else "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")

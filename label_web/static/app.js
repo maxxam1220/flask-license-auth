@@ -19,6 +19,14 @@ function toast(message, error = false) {
   const node = $("#toast"); node.textContent = message; node.className = `toast${error ? " error" : ""}`; node.hidden = false;
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { node.hidden = true; }, error ? 9000 : 4500);
 }
+function setUploadError(kind, message = "") {
+  const node = $(kind === "reference" ? "#reference-upload-error" : "#inspect-upload-error");
+  node.textContent = message; node.hidden = !message;
+}
+function reportUploadFailure(kind, error) {
+  const message = (typeof error === "string" ? error : error?.message) || "照片辨識未完成，請稍後重試。";
+  setUploadError(kind, message); toast(message, true);
+}
 async function api(path, options = {}) {
   const headers = {...options.headers};
   if (options.method && options.method !== "GET") headers["X-CSRF-Token"] = state.csrf;
@@ -181,11 +189,12 @@ async function pollJob(jobId, kind) {
 }
 async function upload(file, kind) {
   if (!file || state.busy) return;
-  if (file.size > maxPhotoBytes) return toast("照片超過 15 MB，請改選較小的 JPG 照片，並保留標籤文字清晰。", true);
+  setUploadError(kind);
+  if (file.size > maxPhotoBytes) return reportUploadFailure(kind, "照片超過 15 MB，請改選較小的 JPG 照片，並保留標籤文字清晰。");
   const sourceCode = state.inspectSource?.code || "";
   const template = sourceCode ? "" : $("#template-select").value;
   if (kind === "inspection" && !template) kind = "recognition";
-  if (kind !== "reference" && !validBaseDate()) return;
+  if (kind !== "reference" && !validBaseDate()) { setUploadError(kind, "請設定本批基準日後再上傳。"); return; }
   const form = new FormData(); form.append("photo", file); form.append("kind", kind);
   if (kind !== "reference") { form.append("template_id", template); form.append("source_code", sourceCode); form.append("base_date", $("#base-date").value); form.append("batch_date", $("#batch-date").value); form.append("arrival_date", $("#arrival-date").value); clearResult(); }
   else { state.referenceJob = null; state.source = null; $("#standard-fields").disabled = true; $("#reference-preview").hidden = true; $("#reference-ocr").hidden = true; }
@@ -194,7 +203,7 @@ async function upload(file, kind) {
     const job = await api("/api/jobs", {method: "POST", body: form});
     sessionStorage.setItem("labelcheck-pending", JSON.stringify({id: job.id, kind, supersedes_id:kind === "reference" ? state.supersedes?.id || null : null}));
     await pollJob(job.id, kind);
-  } catch (error) { toast(error.message, true); }
+  } catch (error) { reportUploadFailure(kind, error); }
   finally { setBusy(false); }
 }
 async function saveStandard(event) {
@@ -441,7 +450,7 @@ async function initialize() {
       $("#standard-heading").textContent=`建立新版標準 · 第 ${state.supersedes.version+1} 版`;
     }
     showView(pending.kind === "reference" ? "standard" : "inspect"); setBusy(true,pending.kind);
-    try { await pollJob(pending.id,pending.kind); } catch(e) { toast(e.message,true); } finally { setBusy(false); }
+    try { await pollJob(pending.id,pending.kind); } catch(e) { reportUploadFailure(pending.kind, e); } finally { setBusy(false); }
   }
 }
 let cameraStream = null, cameraRequest = 0;

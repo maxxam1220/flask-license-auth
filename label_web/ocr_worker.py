@@ -24,12 +24,16 @@ _POLL_SECONDS = .01
 class OCRMemoryLimitError(RuntimeError):
     """The OCR job was stopped without accepting any partial recognition."""
 
-    def __init__(self, kind, observed_bytes=None, limit_bytes=None):
+    def __init__(self, kind, observed_bytes=None, limit_bytes=None, reason=None):
         self.kind = kind
+        self.reason = reason
+        self.monitor_detail = None
         self.observed_mb = round(observed_bytes / _MIB, 1) if observed_bytes is not None else None
         self.limit_mb = round(limit_bytes / _MIB, 1) if limit_bytes is not None else None
         self.memory_guard = None
         detail = f" ({self.observed_mb} MiB / {self.limit_mb} MiB)" if self.observed_mb is not None else ""
+        if reason:
+            detail += f" [{reason}]"
         super().__init__(f"OCR memory protection: {kind}{detail}; worker stopped to preserve the web service")
 
 
@@ -100,13 +104,14 @@ class _MemoryGuard:
                     current = current.parent
             if not limits:
                 raise ValueError("no finite readable memory cgroup")
-        except (OSError, ValueError, IndexError):
+        except (OSError, ValueError, IndexError) as cause:
             if require_cgroup:
-                raise OCRMemoryLimitError("monitor_unavailable") from None
+                raise OCRMemoryLimitError("monitor_unavailable", reason=f"cgroup_discovery:{type(cause).__name__}") from None
             limits = []  # Local Linux without a service cgroup still gets an RSS cap.
         return cls(limits, worker_limit_bytes, reserve_bytes, proc_root)
 
     def observe(self, pid=None):
+        phase, state = "cgroup_usage_read", None
         try:
             for index, (path, limit) in enumerate(self.limits):
                 used = int(path.read_text().strip())
@@ -127,7 +132,11 @@ class _MemoryGuard:
                 if used >= threshold:
                     raise OCRMemoryLimitError("service_budget", used, max(0, threshold))
             if pid is not None:
+                phase = "worker_status_read"
                 status = (self.proc_root / str(pid) / "status").read_text()
+                state_match = re.search(r"^State:\s+(\S)", status, re.MULTILINE)
+                state = state_match[1] if state_match else None
+                phase = "worker_rss_missing"
                 match = re.search(r"^VmRSS:\s+(\d+)\s+kB$", status, re.MULTILINE)
                 if match is None:
                     raise ValueError("missing RSS counter")
@@ -138,8 +147,16 @@ class _MemoryGuard:
         except OCRMemoryLimitError as error:
             error.memory_guard = self.metadata()
             raise
-        except (OSError, ValueError):
-            raise OCRMemoryLimitError("monitor_unavailable") from None
+        except (OSError, ValueError) as cause:
+            if phase == "worker_status_read" and isinstance(cause, FileNotFoundError):
+                phase = "worker_status_missing"
+            error = OCRMemoryLimitError("monitor_unavailable", reason=phase)
+            # Do not log /proc contents, photo text, or arbitrary exception paths.
+            error.monitor_detail = {"operation": phase, "exception": type(cause).__name__,
+                                    "errno": getattr(cause, "errno", None), "worker_state": state}
+            error.memory_guard = self.metadata()
+            error.args = (f"{error}; monitor={json.dumps(error.monitor_detail, separators=(',', ':'))}",)
+            raise error from None
 
     def prefer_worker_for_oom(self, pid):
         # Raising our child's score needs no privilege. This is defense in depth,
@@ -234,10 +251,18 @@ class IsolatedOCR:
                     try:
                         guard.observe(process.pid)
                     except OCRMemoryLimitError as error:
-                        # /proc disappears at normal exit; an unreadable monitor
-                        # while the child is still running must fail closed.
-                        if error.kind != "monitor_unavailable" or process.poll() is None:
-                            raise
+                        # During exit Linux can remove the memory map (and VmRSS)
+                        # before waitpid can reap the child. Only that child-/proc
+                        # race gets a bounded grace period. A cgroup read failure
+                        # remains fail-closed, even if the child has just exited.
+                        if error.kind == "monitor_unavailable" and error.reason in {
+                                "worker_status_missing", "worker_rss_missing"}:
+                            try:
+                                process.wait(timeout=.05)
+                            except subprocess.TimeoutExpired:
+                                raise error from None
+                            break
+                        raise
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")

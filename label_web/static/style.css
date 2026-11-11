@@ -12,6 +12,7 @@
 #camera-video{display:block;width:100%;max-height:55dvh;background:#102820;border-radius:12px;object-fit:contain}
 #camera-message{min-height:2.6em;font-size:14px}
 .camera-guidance{font-size:12px;line-height:1.8;margin:12px 0}.upload-zone .photo-guidance{font-size:10px;margin:0 0 7px;line-height:1.7}
+.upload-error{margin:14px 0 0;padding:12px 14px;border:1px solid #ebccc6;border-left:3px solid #bb473b;border-radius:7px;background:#fff5f2;color:#983b31;font-size:12px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}
 #source-import{margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid #e1e5df}
 .source-option{display:block;width:100%;text-align:left;background:#f0f5ee;border:1px solid #d5e0d4;border-radius:9px;padding:12px;margin-top:8px;cursor:pointer;color:#173f35;overflow-wrap:anywhere}
 .source-option:hover{background:#dfeadc}
