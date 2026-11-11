@@ -16,6 +16,8 @@ import threading
 import sys
 import time
 
+from memory_cleanup import release_unused_memory
+
 
 _MIB = 1024 * 1024
 _POLL_SECONDS = .01
@@ -235,14 +237,17 @@ class IsolatedOCR:
                 process.kill()
         process.wait(timeout=5)
 
-    def _run(self, command, guard):
+    def _run(self, command, guard, deadline=None):
+        if deadline is None:
+            deadline = time.monotonic() + self.timeout
+        elif time.monotonic() >= deadline:
+            raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
         if guard is not None:
             guard.observe()  # No model process is started under existing pressure.
         process = subprocess.Popen(command, shell=False,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=self._environment(), close_fds=True, start_new_session=os.name == "posix",
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-        deadline = time.monotonic() + self.timeout
         try:
             if guard is not None:
                 guard.prefer_worker_for_oom(process.pid)
@@ -276,24 +281,48 @@ class IsolatedOCR:
 
     def recognize(self, image_path):
         with self.lock, TemporaryDirectory(prefix="labelcheck-ocr-") as folder:
-            output = Path(folder) / "result.json"
-            command = [sys.executable, str(Path(__file__).with_name("ocr_engine.py")),
-                       str(Path(image_path).resolve()), "--model-dir", str(self.model_dir),
-                       "--output", str(output)]
-            guard = self._memory_guard()
-            returncode = self._run(command, guard)
-            if returncode != 0:
-                raise RuntimeError(f"OCR worker exited with code {returncode}")
+            deadline = time.monotonic() + self.timeout
+            recovery = {"attempts": 0, "automatic_retry": False, "reason": "", "cleanups": []}
             try:
-                if output.stat().st_size > 4 * 1024 * 1024:
-                    raise ValueError("oversized result")
-                result = json.loads(output.read_text(encoding="utf-8"))
-                if not isinstance(result, dict) or not isinstance(result.get("lines"), list):
-                    raise ValueError("invalid result")
-                if not isinstance(result.get("engine"), str) or not isinstance(result.get("elapsed"), (int, float)):
-                    raise ValueError("missing result metadata")
-            except (OSError, ValueError):
-                raise RuntimeError("OCR worker did not produce a valid result") from None
-            if guard is not None:
-                result["memory_guard"] = guard.metadata()
-            return result
+                recovery["cleanups"].append(release_unused_memory())
+                for attempt in (1, 2):
+                    recovery["attempts"] = attempt
+                    # An earlier worker may leave partial JSON. The retry uses
+                    # a new output path and can never accept that earlier file.
+                    output = Path(folder) / f"result-{attempt}.json"
+                    command = [sys.executable, str(Path(__file__).with_name("ocr_engine.py")),
+                               str(Path(image_path).resolve()), "--model-dir", str(self.model_dir),
+                               "--output", str(output)]
+                    try:
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
+                        guard = self._memory_guard()
+                        returncode = self._run(command, guard, deadline=deadline)
+                    except OCRMemoryLimitError as error:
+                        # _run's finally block kills/reaps the first worker
+                        # before control reaches here. Only service pressure is
+                        # recoverable by freeing unused memory in this process.
+                        if error.kind != "service_budget" or attempt == 2:
+                            raise
+                        recovery.update(automatic_retry=True, reason="service_budget")
+                        recovery["cleanups"].append(release_unused_memory())
+                        continue
+                    if returncode != 0:
+                        raise RuntimeError(f"OCR worker exited with code {returncode}")
+                    try:
+                        if output.stat().st_size > 4 * 1024 * 1024:
+                            raise ValueError("oversized result")
+                        result = json.loads(output.read_text(encoding="utf-8"))
+                        if not isinstance(result, dict) or not isinstance(result.get("lines"), list):
+                            raise ValueError("invalid result")
+                        if not isinstance(result.get("engine"), str) or not isinstance(result.get("elapsed"), (int, float)):
+                            raise ValueError("missing result metadata")
+                    except (OSError, ValueError):
+                        raise RuntimeError("OCR worker did not produce a valid result") from None
+                    if guard is not None:
+                        result["memory_guard"] = guard.metadata()
+                    result["recovery"] = recovery
+                    return result
+            except Exception as error:
+                error.recovery = recovery
+                raise

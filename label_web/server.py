@@ -19,6 +19,7 @@ from werkzeug.utils import secure_filename
 
 import database as db
 from ocr_worker import IsolatedOCR, OCRMemoryLimitError
+from memory_cleanup import release_unused_memory
 from validation import extract_fields, evaluate, parse_date, TEXT_FIELDS
 from source_validation import evaluate_source, RULE_VERSION
 from source_rules import prepare_source
@@ -54,6 +55,7 @@ def create_app(config=None, ocr=None):
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="label-ocr")
     slots = threading.BoundedSemaphore(12)
     image_lock = threading.Lock()
+    retry_lock = threading.Lock()
     recognizer = ocr or IsolatedOCR(ROOT / "models")
     app.extensions.update(label_engine=engine, label_worker=worker)
     with engine.begin() as conn:
@@ -312,13 +314,16 @@ def create_app(config=None, ocr=None):
         folder = data_dir / "images" / identifier
         folder.mkdir(parents=True)
         (folder / "original").write_bytes(raw)
-        normalized.thumbnail((2400, 2400))
-        normalized.save(folder / "image.jpg", quality=95)
-        thumbnail = normalized.copy()
-        thumbnail.thumbnail((420, 420))
-        thumbnail.save(folder / "thumb.jpg", quality=85)
-        row = dict(id=identifier, created_at=db.now(), filename=(upload.filename or "photo")[:255],
-                   sha256=hashlib.sha256(raw).hexdigest(), width=normalized.width, height=normalized.height)
+        try:
+            normalized.thumbnail((2400, 2400))
+            normalized.save(folder / "image.jpg", quality=95)
+            with normalized.copy() as thumbnail:
+                thumbnail.thumbnail((420, 420))
+                thumbnail.save(folder / "thumb.jpg", quality=85)
+            row = dict(id=identifier, created_at=db.now(), filename=(upload.filename or "photo")[:255],
+                       sha256=hashlib.sha256(raw).hexdigest(), width=normalized.width, height=normalized.height)
+        finally:
+            normalized.close()
         with engine.begin() as conn:
             conn.execute(insert(db.images).values(**row))
         return row
@@ -334,6 +339,9 @@ def create_app(config=None, ocr=None):
                       "source_code": saved_request.get("source_code", ""),
                       "base_date": saved_request.get("base_date") or taiwan_today()}
             result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
+            for key in ("retry_of", "retry_root"):
+                if (job.get("result") or {}).get(key):
+                    result[key] = job["result"][key]
             source_evaluation = None
             if job["kind"] == "recognition":
                 source_evaluation = check_source(ocr_result["lines"], inputs, ocr_result)
@@ -355,15 +363,23 @@ def create_app(config=None, ocr=None):
             app.logger.exception("OCR job failed")
             if isinstance(error, OCRMemoryLimitError) and error.memory_guard:
                 app.logger.warning("OCR memory guard sample: %s", error.memory_guard)
-            message = ("這張照片的辨識用量超過目前服務可用記憶體，已停止本次辨識。請裁切至單張標籤後重試。"
+            message = ("這次辨識的可用記憶體仍不足，照片已保留。可按「重新辨識這張照片」再試一次；若持續發生，請拍近單張標籤。"
                        if isinstance(error, OCRMemoryLimitError)
                        else "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")
             if isinstance(error, OCRMemoryLimitError) and error.kind == "monitor_unavailable":
                 message = "目前暫時無法安全啟動辨識，請稍後再試。照片已保留。"
+            failed_result = dict(job.get("result") or {})
+            if isinstance(error, OCRMemoryLimitError):
+                failed_result["memory_guard"] = error.memory_guard
+                failed_result["recovery"] = getattr(error, "recovery", None)
             with engine.begin() as conn:
-                conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="failed", error=message))
+                conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="failed", error=message, result=failed_result))
         finally:
-            slots.release()
+            try:
+                with image_lock:
+                    release_unused_memory()
+            finally:
+                slots.release()
 
     @app.post("/api/jobs")
     def create_job():
@@ -399,6 +415,74 @@ def create_app(config=None, ocr=None):
             slots.release()
             raise
         return jsonify(id=row["id"], image=image_payload(image["id"])), 202
+
+    @app.get("/api/jobs/failed")
+    def failed_jobs():
+        # Shared workspace, like inspection history. Show only the newest failed
+        # attempt in each retry chain, and hide chains already resumed/completed.
+        limit = request.args.get("limit", 5, type=int)
+        limit = min(10, max(1, limit or 5))
+        with engine.connect() as conn:
+            candidates = [dict(row) for row in conn.execute(select(db.jobs).where(
+                db.jobs.c.state == "failed", db.jobs.c.kind.in_(["recognition", "inspection"])
+            ).order_by(db.jobs.c.created_at.desc()).limit(100)).mappings()]
+            resumed = set(conn.execute(select(db.jobs.c.result["retry_root"].as_string()).where(
+                db.jobs.c.state.in_(["pending", "running", "done"]),
+                db.jobs.c.result["retry_root"].as_string().is_not(None))).scalars())
+        items, seen = [], set()
+        for row in candidates:
+            root = (row.get("result") or {}).get("retry_root") or row["id"]
+            if root in resumed or root in seen:
+                continue
+            seen.add(root)
+            if not (data_dir / "images" / row["image_id"] / "image.jpg").is_file():
+                continue
+            items.append({key: row[key] for key in ("id", "kind", "created_at", "error")})
+            items[-1].update(image=image_payload(row["image_id"]), request=(row.get("result") or {}).get("request", {}))
+            if len(items) >= limit:
+                break
+        return jsonify(items=items)
+
+    @app.post("/api/jobs/<identifier>/retry")
+    def retry_job(identifier):
+        with retry_lock:
+            original = get_one(db.jobs, identifier)
+            if original["state"] != "failed":
+                abort(409, description="這張照片並非失敗狀態，請查看原本辨識結果。")
+            root = (original.get("result") or {}).get("retry_root") or original["id"]
+            with engine.connect() as conn:
+                existing = conn.execute(select(db.jobs).where(
+                    db.jobs.c.result["retry_root"].as_string() == root,
+                    db.jobs.c.state.in_(["pending", "running", "done"])
+                ).order_by(db.jobs.c.created_at.desc()).limit(1)).mappings().first()
+            if existing:
+                return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
+            if not (data_dir / "images" / original["image_id"] / "image.jpg").is_file():
+                abort(404, description="原照片已不存在，請重新上傳。")
+            if original["kind"] == "inspection":
+                standard = get_one(db.templates, original["template_id"])
+                if not standard["active"]:
+                    abort(409, description="原標準已更新，請選擇新版標準後重新上傳。")
+            inputs = dict((original.get("result") or {}).get("request") or {})
+            if not inputs.get("base_date"):
+                inputs["base_date"] = datetime.fromisoformat(original["created_at"]).astimezone(
+                    timezone(timedelta(hours=8))).date().isoformat()
+            if not slots.acquire(blocking=False):
+                abort(429, description="目前等待辨識的照片較多，請稍後再試。")
+            try:
+                if not image_lock.acquire(timeout=0.1):
+                    abort(429, description="正在處理上一張照片，請稍後再試。")
+                image_lock.release()
+                row = dict(id=db.uid(), image_id=original["image_id"], kind=original["kind"],
+                    template_id=original["template_id"], batch_date=original["batch_date"], state="pending",
+                    created_at=db.now(), result={"request":inputs, "retry_of":identifier, "retry_root":root})
+                with engine.begin() as conn:
+                    conn.execute(insert(db.jobs).values(**row))
+                worker.submit(process_job, row)
+            except Exception:
+                slots.release()
+                raise
+            return jsonify(id=row["id"], image=image_payload(row["image_id"])), 202
 
     @app.get("/api/jobs/<identifier>")
     def job_status(identifier):

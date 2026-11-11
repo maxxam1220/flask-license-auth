@@ -6,6 +6,8 @@ import threading
 from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
+from sqlalchemy import select, func
+import database as db
 from server import create_app
 from ocr_worker import OCRMemoryLimitError
 from test_validation import make_lines, STANDARD
@@ -212,7 +214,7 @@ class APITests(unittest.TestCase):
                 app.extensions["label_worker"].submit(lambda: None).result(timeout=3)
                 failed = client.get("/api/jobs/" + response.json["id"]).json
                 self.assertEqual(failed["state"], "failed")
-                self.assertEqual(failed["error"], "這張照片的辨識用量超過目前服務可用記憶體，已停止本次辨識。請裁切至單張標籤後重試。")
+                self.assertEqual(failed["error"], "這次辨識的可用記憶體仍不足，照片已保留。可按「重新辨識這張照片」再試一次；若持續發生，請拍近單張標籤。")
                 self.assertNotIn("worker_budget", str(failed))
                 self.assertNotIn("361", str(failed["error"]))
                 self.assertNotIn("inspection_id", failed["result"])
@@ -241,6 +243,112 @@ class APITests(unittest.TestCase):
         self.assertEqual(failed["state"], "failed")
         self.assertEqual(failed["error"], "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")
         self.assertNotIn("private model", str(failed))
+
+    def completed_response_job(self, response):
+        self.assertEqual(response.status_code, 202, response.json)
+        self.app.extensions["label_worker"].submit(lambda: None).result(timeout=3)
+        return self.client.get("/api/jobs/" + response.json["id"]).json
+
+    def failed_photo_job(self, **inputs):
+        with patch.object(FakeOCR, "recognize", side_effect=RuntimeError("test failure")), patch.object(self.app.logger, "exception"):
+            response = self.client.post("/api/jobs", data={"kind":"recognition", "base_date":"2026-11-10",
+                                        "photo":(self.photo(),"retry-label.png"), **inputs}, headers=self.headers)
+            failed = self.completed_response_job(response)
+        self.assertEqual(failed["state"], "failed", failed)
+        return failed
+
+    def table_count(self, table):
+        with self.app.extensions["label_engine"].connect() as conn:
+            return conn.execute(select(func.count()).select_from(table)).scalar_one()
+
+    def test_retry_reuses_photo_preserves_inputs_and_keeps_failed_evidence(self):
+        inputs = {"base_date":"2026-11-10", "batch_date":"2026-11-09",
+                  "arrival_date":"2026-11-11", "source_code":"list:1659"}
+        failed = self.failed_photo_job(**inputs)
+        self.assertEqual(self.table_count(db.images), 1)
+        listed = self.client.get("/api/jobs/failed?limit=5").json["items"]
+        self.assertEqual([item["id"] for item in listed], [failed["id"]])
+        self.assertEqual(listed[0]["request"], inputs)
+        image_path = Path(self.temp.name)/"images"/failed["image_id"]/"image.jpg"
+        original_bytes = image_path.read_bytes()
+        retried = self.completed_response_job(self.client.post("/api/jobs/" + failed["id"] + "/retry", headers=self.headers))
+        self.assertEqual(retried["state"], "done", retried)
+        self.assertNotEqual(retried["id"], failed["id"])
+        self.assertEqual(retried["image_id"], failed["image_id"])
+        self.assertEqual(retried["batch_date"], failed["batch_date"])
+        self.assertEqual(retried["template_id"], failed["template_id"])
+        self.assertEqual(retried["kind"], failed["kind"])
+        self.assertEqual(retried["result"]["request"], inputs)
+        self.assertEqual(retried["result"]["retry_of"], failed["id"])
+        self.assertEqual(retried["result"]["retry_root"], failed["id"])
+        inspection = self.client.get("/api/inspections/" + retried["result"]["inspection_id"]).json
+        self.assertEqual(inspection["result"]["inputs"], inputs)
+        self.assertEqual(self.client.get("/api/jobs/" + failed["id"]).json, failed)
+        self.assertEqual(self.table_count(db.images), 1)
+        self.assertEqual(self.table_count(db.jobs), 2)
+        self.assertEqual(image_path.read_bytes(), original_bytes)
+        self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
+
+    def test_retry_chain_shows_latest_failure_and_deduplicates_running_and_done(self):
+        first = self.failed_photo_job()
+        with patch.object(FakeOCR, "recognize", side_effect=RuntimeError("second attempt failed")), patch.object(self.app.logger, "exception"):
+            second = self.completed_response_job(self.client.post("/api/jobs/" + first["id"] + "/retry", headers=self.headers))
+        self.assertEqual(second["state"], "failed")
+        self.assertEqual(second["result"]["retry_root"], first["id"])
+        self.assertEqual([item["id"] for item in self.client.get("/api/jobs/failed").json["items"]], [second["id"]])
+        started, release = threading.Event(), threading.Event()
+        def slow_success(_path):
+            started.set()
+            release.wait(5)
+            return {"lines":make_lines(), "engine":"TEST ONLY", "elapsed":.01}
+        with patch.object(FakeOCR, "recognize", side_effect=slow_success):
+            try:
+                third_response = self.client.post("/api/jobs/" + second["id"] + "/retry", headers=self.headers)
+                self.assertEqual(third_response.status_code, 202, third_response.json)
+                self.assertTrue(started.wait(2))
+                third_id = third_response.json["id"]
+                self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
+                for ancestor in (first, second):
+                    duplicate = self.client.post("/api/jobs/" + ancestor["id"] + "/retry", headers=self.headers)
+                    self.assertEqual(duplicate.status_code, 202, duplicate.json)
+                    self.assertEqual(duplicate.json["id"], third_id)
+                self.assertEqual(self.table_count(db.jobs), 3)
+            finally:
+                release.set()
+            third = self.completed_response_job(third_response)
+        self.assertEqual(third["state"], "done", third)
+        self.assertEqual(third["result"]["retry_of"], second["id"])
+        self.assertEqual(third["result"]["retry_root"], first["id"])
+        self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
+        for ancestor in (first, second):
+            duplicate = self.client.post("/api/jobs/" + ancestor["id"] + "/retry", headers=self.headers)
+            self.assertEqual(duplicate.status_code, 202, duplicate.json)
+            self.assertEqual(duplicate.json["id"], third_id)
+            self.assertEqual(self.client.get("/api/jobs/" + ancestor["id"]).json, ancestor)
+        self.assertEqual(self.client.post("/api/jobs/" + third_id + "/retry", headers=self.headers).status_code, 409)
+        self.assertEqual(self.table_count(db.jobs), 3)
+        self.assertEqual(self.table_count(db.images), 1)
+        self.assertEqual(self.table_count(db.inspections), 1)
+
+    def test_retry_requires_csrf_and_original_photo_and_leaves_failed_job_unchanged(self):
+        failed = self.failed_photo_job()
+        retry_url = "/api/jobs/" + failed["id"] + "/retry"
+        self.assertEqual(self.client.post(retry_url).status_code, 403)
+        self.assertEqual(self.client.post(retry_url, headers={"X-CSRF-Token":"wrong"}).status_code, 403)
+        self.assertEqual(self.table_count(db.jobs), 1)
+        (Path(self.temp.name)/"images"/failed["image_id"]/"image.jpg").unlink()
+        self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
+        self.assertEqual(self.client.post(retry_url, headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.get("/api/jobs/" + failed["id"]).json, failed)
+        self.assertEqual(self.table_count(db.jobs), 1)
+        self.assertEqual(self.table_count(db.images), 1)
+
+    def test_failed_jobs_and_retry_require_authentication(self):
+        failed = self.failed_photo_job()
+        self.app.config["APP_PASSWORD"] = "testpass"
+        self.assertEqual(self.client.get("/api/jobs/failed").status_code, 401)
+        self.assertEqual(self.client.post("/api/jobs/" + failed["id"] + "/retry", headers=self.headers).status_code, 401)
+        self.assertEqual(self.table_count(db.jobs), 1)
 
     def test_invalid_history_page_and_original_access(self):
         self.assertEqual(self.client.get("/api/inspections?page=bad").status_code,400)

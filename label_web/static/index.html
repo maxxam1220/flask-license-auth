@@ -50,6 +50,8 @@
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
           <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
           <p id="inspect-upload-error" class="upload-error" role="alert" hidden></p>
+          <div id="inspect-retry" hidden><div class="upload-actions"><button id="inspect-retry-button" class="button secondary" type="button">重新辨識這張照片</button></div><p class="help">照片已保留，將沿用原本比對設定。</p></div>
+          <details id="failed-jobs-panel" class="scan-options" hidden><summary>未完成的辨識</summary><p id="failed-jobs-note" class="muted small">照片已保留，可沿用原本設定重新辨識。</p><div id="failed-jobs-list" class="history-list"></div></details>
           <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填覆蓋</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對製造日。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對到店日；未填時依基準日與系統設定檢查。</p></details>
           <details id="template-options" class="scan-options"><summary>其他比對設定 <span class="optional">選用</span></summary><form id="inspect-source-search"><label for="inspect-source-query">選擇系統標籤或清單<input id="inspect-source-query" maxlength="100" required placeholder="搜尋標籤代碼、條碼或品名"></label><button class="button secondary" type="submit">搜尋比對資料</button></form><div id="inspect-source-results" class="source-results"></div><p id="inspect-source-note" class="help source-search-note"></p><div id="inspect-source-selected" class="selected-system-source" hidden></div><div class="form-divider"></div><label for="template-select">照片標準<select id="template-select"><option value="">自動對應系統標籤與清單</option></select></label><p id="recognition-help" class="help">不必先上傳正確照片。清單僅核對已知欄位；找到多筆可能資料時可手動選定。</p><div id="selected-standard" class="selected-standard" hidden></div><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立選用標準</button></details>
         </div>
@@ -71,6 +73,8 @@
           <input id="reference-file" class="file-input" type="file" accept="image/*,.heic,.heif"><input id="reference-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <div id="reference-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>讀取標準照片文字中…</span></div>
           <p id="reference-upload-error" class="upload-error" role="alert" hidden></p>
+          <div id="reference-retry" hidden><div class="upload-actions"><button id="reference-retry-button" class="button secondary" type="button">重新辨識這張照片</button></div><p class="help">照片已保留，將沿用原本設定。</p></div>
+          <p id="reference-recovery" class="muted small" role="status" hidden></p>
           <img id="reference-preview" class="reference-preview" alt="上傳的標準標籤照片" hidden>
           <details id="reference-ocr" hidden><summary>查看照片辨識原文</summary><div class="ocr-lines" id="reference-lines"></div></details>
         </div>

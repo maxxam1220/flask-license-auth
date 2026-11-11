@@ -1,7 +1,7 @@
 "use strict";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = {csrf: "", templates: [], referenceJob: null, source: null, inspectSource: null, inspectSearchRequest: 0, supersedes: null, busy: false, page: 1, inspection: null, resultDirty: false};
+const state = {csrf: "", templates: [], referenceJob: null, source: null, inspectSource: null, inspectSearchRequest: 0, supersedes: null, busy: false, page: 1, inspection: null, resultDirty: false, retryJobs: {}, failedJobs: [], failedJobsRequest: 0};
 const statusLabels = {pass: "已核對項目相符", fail: "發現差異", review: "需要人工複核", read: "僅辨識"};
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
 const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
@@ -26,6 +26,96 @@ function setUploadError(kind, message = "") {
 function reportUploadFailure(kind, error) {
   const message = (typeof error === "string" ? error : error?.message) || "照片辨識未完成，請稍後重試。";
   setUploadError(kind, message); toast(message, true);
+}
+function retrySlot(kind) { return kind === "reference" ? "reference" : "inspect"; }
+function retryIsPending(id) {
+  try { return !!id && JSON.parse(sessionStorage.getItem("labelcheck-pending") || "null")?.retry_of === id; }
+  catch { return false; }
+}
+function renderRetryJob(kind) {
+  const slot = retrySlot(kind), item = state.retryJobs[slot], button = $(`#${slot}-retry-button`);
+  $(`#${slot}-retry`).hidden = !item;
+  button.disabled = state.busy || retryIsPending(item?.id); button.onclick = () => retryFailedJob(item);
+}
+function setRetryJob(kind, item = null) {
+  const slot = retrySlot(kind);
+  if (item) state.retryJobs[slot] = item;
+  else delete state.retryJobs[slot];
+  sessionStorage.setItem("labelcheck-failed-jobs", JSON.stringify(state.retryJobs));
+  renderRetryJob(kind);
+}
+function restoreRetryJobs() {
+  let saved;
+  try { saved = JSON.parse(sessionStorage.getItem("labelcheck-failed-jobs") || "{}"); } catch { saved = {}; }
+  for (const slot of ["inspect", "reference"]) {
+    const item = saved?.[slot];
+    if (item?.state !== "failed" || typeof item.id !== "string" || !["inspection", "recognition", "reference"].includes(item.kind)) continue;
+    state.retryJobs[retrySlot(item.kind)] = item;
+    renderRetryJob(item.kind); setUploadError(item.kind, item.error || "上次辨識未完成，可以使用已保留的照片重試。");
+  }
+}
+function rememberFailedJob(job, kind) {
+  let pending;
+  try { pending = JSON.parse(sessionStorage.getItem("labelcheck-pending") || "null"); } catch { pending = null; }
+  setRetryJob(kind, {id:job.id,kind,state:"failed",error:job.error,image:job.image,created_at:job.created_at,
+    supersedes_id:pending?.id === job.id ? pending.supersedes_id || null : null});
+  loadFailedJobs();
+}
+function renderFailedJobs() {
+  const list = $("#failed-jobs-list"); list.replaceChildren();
+  $("#failed-jobs-panel").hidden = !state.failedJobs.length;
+  for (const item of state.failedJobs) {
+    const row = element("div", "history-row"), info = element("span");
+    if (item.image?.thumbnail) {
+      const image = element("img"); image.src = item.image.thumbnail; image.alt = "未完成辨識的照片"; image.loading = "lazy"; row.append(image);
+    }
+    info.append(element("strong", "", item.kind === "reference" ? "標準照片" : "標籤照片"),
+      element("small", "", item.created_at ? when(item.created_at) : "未完成辨識"));
+    const button = element("button", "button secondary", retryIsPending(item.id) ? "辨識中" : "重新辨識"); button.type = "button";
+    button.dataset.retryJob = item.id; button.disabled = state.busy || retryIsPending(item.id); button.onclick = () => retryFailedJob(item);
+    row.append(info, button); list.append(row);
+  }
+}
+async function loadFailedJobs() {
+  const request = ++state.failedJobsRequest;
+  try {
+    const data = await api("/api/jobs/failed?limit=5");
+    if (request !== state.failedJobsRequest) return;
+    state.failedJobs = (Array.isArray(data.items) ? data.items : []).filter(item =>
+      item && typeof item.id === "string" && ["inspection", "recognition", "reference"].includes(item.kind)).slice(0, 5);
+    $("#failed-jobs-note").textContent = "照片已保留，可沿用原本設定重新辨識。";
+    renderFailedJobs();
+  } catch (_) {
+    if (request !== state.failedJobsRequest) return;
+    $("#failed-jobs-panel").hidden = false;
+    $("#failed-jobs-note").textContent = "暫時無法讀取未完成的辨識，請稍後重新整理。";
+  }
+}
+function recoveryMessage(ocr) {
+  const recovery = ocr?.recovery;
+  return recovery?.automatic_retry === true && Number(recovery.attempts) >= 2 ? "系統已自動重試並完成文字辨識。" : "";
+}
+async function retryFailedJob(item) {
+  if (state.busy || !item?.id || !["inspection", "recognition", "reference"].includes(item.kind)) return;
+  if (retryIsPending(item.id)) return toast("這張照片已開始辨識，請重新整理接續查看結果。");
+  const kind = item.kind, saved = state.retryJobs[retrySlot(kind)], supersedesId = item.supersedes_id || (saved?.id === item.id ? saved.supersedes_id : null);
+  if (kind === "reference") {
+    const previous = supersedesId ? state.templates.find(template => template.id === supersedesId) : null;
+    if (supersedesId && !previous) { showView("standard"); reportUploadFailure(kind, "原標準已更新，請重新選擇最新標準再建立新版。"); return; }
+    newStandard(previous);
+    $("#reference-recovery").hidden = true;
+  } else { showView("inspect"); clearResult(); }
+  setUploadError(kind); setBusy(true, kind);
+  const progress = $(`#${retrySlot(kind)}-progress span:last-child`);
+  progress.textContent = "正在使用已保留的照片重新辨識…";
+  try {
+    const job = await api(`/api/jobs/${encodeURIComponent(item.id)}/retry`, {method:"POST"});
+    sessionStorage.setItem("labelcheck-pending", JSON.stringify({id:job.id,kind,supersedes_id:supersedesId || null,retry_of:item.id}));
+    setRetryJob(kind);
+    if (kind === "reference" && job.image?.url) { $("#reference-preview").src = job.image.url; $("#reference-preview").hidden = false; }
+    await pollJob(job.id, kind);
+  } catch (error) { reportUploadFailure(kind, error); }
+  finally { setBusy(false); }
 }
 async function api(path, options = {}) {
   const headers = {...options.headers};
@@ -64,6 +154,8 @@ function setBusy(busy, kind = "") {
   $("#batch-date").disabled = busy;
   $("#arrival-date").disabled = busy;
   if ($("#recheck-button")) $("#recheck-button").disabled = busy;
+  $$("[data-retry-job]").forEach(button => { button.disabled = busy || retryIsPending(button.dataset.retryJob); });
+  for (const slot of ["inspect", "reference"]) $(`#${slot}-retry-button`).disabled = busy || retryIsPending(state.retryJobs[slot]?.id);
   $$("[data-action='new-standard']").forEach(x => { x.disabled = busy; });
   $("#inspect-progress").hidden = !busy || !["inspection", "recognition"].includes(kind);
   $("#reference-progress").hidden = !busy || kind !== "reference";
@@ -132,6 +224,7 @@ function newStandard(previous = null) {
   $("#source-results").replaceChildren(); $("#source-note").textContent = "";
   $("#standard-form").reset(); $("#standard-fields").disabled = true;
   $("#reference-preview").hidden = true; $("#reference-preview").removeAttribute("src");
+  $("#reference-recovery").hidden = true;
   $("#reference-ocr").hidden = true; $("#reference-lines").replaceChildren();
   $("#standard-heading").textContent = previous ? `建立新版標準 · 第 ${previous.version + 1} 版` : "建立標準標籤";
   $("#standard-form").elements.approved_by.value = sessionStorage.getItem("labelcheck-operator") || "";
@@ -160,6 +253,7 @@ function fillReference(job) {
   $("#source-note").textContent = "";
   const form = $("#standard-form"), fields = job.result.fields;
   $("#reference-preview").src = job.image.url; $("#reference-preview").hidden = false;
+  $("#reference-recovery").textContent = recoveryMessage(job.result.ocr); $("#reference-recovery").hidden = !$("#reference-recovery").textContent;
   $("#reference-ocr").hidden = false; renderOCR(job.result.ocr.lines, $("#reference-lines"));
   $("#standard-fields").disabled = false;
   for (const key of [...textFields, "manufacture", "expiry", "arrival"]) form.elements[key].value = fields[key]?.value || "";
@@ -173,9 +267,10 @@ function fillReference(job) {
 async function pollJob(jobId, kind) {
   for (let attempts = 0; attempts < 600; attempts++) {
     const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
-    if (job.state === "failed") { sessionStorage.removeItem("labelcheck-pending"); throw new Error(job.error); }
+    if (job.state === "failed") { rememberFailedJob({...job,id:job.id || jobId}, kind); sessionStorage.removeItem("labelcheck-pending"); throw new Error(job.error || "照片辨識未完成，可以使用已保留的照片重試。"); }
     if (job.state === "done") {
       sessionStorage.removeItem("labelcheck-pending");
+      setRetryJob(kind); setUploadError(kind); loadFailedJobs();
       if (kind === "reference") fillReference(job);
       else await loadInspection(job.result.inspection_id);
       return;
@@ -189,7 +284,8 @@ async function pollJob(jobId, kind) {
 }
 async function upload(file, kind) {
   if (!file || state.busy) return;
-  setUploadError(kind);
+  setUploadError(kind); setRetryJob(kind);
+  if (kind === "reference") $("#reference-recovery").hidden = true;
   if (file.size > maxPhotoBytes) return reportUploadFailure(kind, "照片超過 15 MB，請改選較小的 JPG 照片，並保留標籤文字清晰。");
   const sourceCode = state.inspectSource?.code || "";
   const template = sourceCode ? "" : $("#template-select").value;
@@ -402,6 +498,8 @@ function renderInspection(inspection) {
     if (count) counts.append(element("span", `count-${status}`, `${label} ${count}`));
   }
   header.append(counts); area.append(header);
+  const recovery = recoveryMessage(inspection.ocr);
+  if (recovery) { const notice = element("p", "result-notes", recovery); notice.setAttribute("role", "status"); area.append(notice); }
   renderSourceMatch(result.source_match, area, result.inputs?.base_date);
   renderRecheckControls(area);
   renderResultLines(rows, area);
@@ -440,7 +538,7 @@ async function initialize() {
   $("#logout").hidden=!session.requires_login;
   $("#login").hidden=session.authenticated; $("#app-shell").hidden=!session.authenticated;
   if (!session.authenticated) return;
-  await Promise.all([loadTemplates(),loadScanConfig()]); showView(location.hash.slice(1));
+  await Promise.all([loadTemplates(),loadScanConfig(),loadFailedJobs()]); restoreRetryJobs(); showView(location.hash.slice(1));
   const stored = sessionStorage.getItem("labelcheck-pending");
   if (stored) {
     let pending; try { pending=JSON.parse(stored); } catch { sessionStorage.removeItem("labelcheck-pending"); return; }

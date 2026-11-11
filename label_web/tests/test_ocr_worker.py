@@ -39,6 +39,8 @@ class IsolatedOCRTests(unittest.TestCase):
         FakeProcess.instances = []
         no_guard = patch.object(IsolatedOCR, "_memory_guard", return_value=None)
         no_guard.start(); self.addCleanup(no_guard.stop)
+        cleanup = patch("ocr_worker.release_unused_memory", return_value={"status": "test_cleanup"})
+        self.cleanup = cleanup.start(); self.addCleanup(cleanup.stop)
         def kill_group(pid, _signal):
             next(process for process in FakeProcess.instances if process.pid == pid).kill()
         safe_signal = patch("ocr_worker.os.killpg", side_effect=kill_group, create=True)
@@ -58,7 +60,10 @@ class IsolatedOCRTests(unittest.TestCase):
         with patch.dict(os.environ, {"LABELCHECK_DATABASE_URL": "private", "LABELCHECK_PASSWORD": "private",
                 "LABELCHECK_SECRET": "private", "PGPASSWORD": "private", "OPENAI_API_KEY": "private",
                 "RENDER_API_TOKEN": "private"}), patch("ocr_worker.subprocess.Popen", side_effect=launch):
-            self.assertEqual(IsolatedOCR("models").recognize("a photo.jpg"), expected)
+            result = IsolatedOCR("models").recognize("a photo.jpg")
+            self.assertEqual({key: value for key, value in result.items() if key != "recovery"}, expected)
+            self.assertEqual(result["recovery"], {"attempts": 1, "automatic_retry": False,
+                "reason": "", "cleanups": [{"status": "test_cleanup"}]})
         for key in ("LABELCHECK_DATABASE_URL", "LABELCHECK_PASSWORD", "LABELCHECK_SECRET",
                     "PGPASSWORD", "OPENAI_API_KEY", "RENDER_API_TOKEN"):
             self.assertNotIn(key, observed["env"])
@@ -81,7 +86,7 @@ class IsolatedOCRTests(unittest.TestCase):
         worker = IsolatedOCR("models", timeout=.1)
         with patch("ocr_worker.subprocess.Popen", side_effect=launch):
             for _ in range(2):
-                with patch("ocr_worker.time.monotonic", side_effect=[0, 1]):
+                with patch("ocr_worker.time.monotonic", side_effect=[0, 0, 0, 1]):
                     with self.assertRaisesRegex(RuntimeError, "exceeded"):
                         worker.recognize("photo.jpg")
         self.assertTrue(all(process.killed and process.waited for process in FakeProcess.instances))
@@ -129,6 +134,8 @@ class IsolatedOCRTests(unittest.TestCase):
         self.assertEqual(caught.exception.observed_mb, 361)
         self.assertTrue(FakeProcess.instances[0].killed)
         self.assertTrue(FakeProcess.instances[0].waited)
+        self.assertEqual(caught.exception.recovery["attempts"], 1)
+        self.assertFalse(caught.exception.recovery["automatic_retry"])
         self.assertFalse(paths[0].parent.exists())
         self.assertFalse(worker.lock.locked())
         with patch("ocr_worker.subprocess.Popen", side_effect=launch):
@@ -139,10 +146,102 @@ class IsolatedOCRTests(unittest.TestCase):
         guard.observe.side_effect = OCRMemoryLimitError("service_budget", 417*_MIB, 416*_MIB)
         worker = IsolatedOCR("models")
         with patch.object(worker, "_memory_guard", return_value=guard), patch("ocr_worker.subprocess.Popen") as launch:
-            with self.assertRaises(OCRMemoryLimitError):
+            with self.assertRaises(OCRMemoryLimitError) as caught:
                 worker.recognize("photo.jpg")
         launch.assert_not_called()
         self.assertFalse(worker.lock.locked())
+        self.assertEqual(guard.observe.call_count, 2)
+        self.assertEqual(self.cleanup.call_count, 2)
+        self.assertEqual(caught.exception.recovery["attempts"], 2)
+        self.assertTrue(caught.exception.recovery["automatic_retry"])
+
+    def test_service_pressure_reaps_worker_before_cleanup_and_retries_original_once(self):
+        commands, processes, cleanup_states = [], [], []
+        first_guard, retry_guard = Mock(), Mock()
+        first_guard.observe.side_effect = [None, OCRMemoryLimitError("service_budget", 417*_MIB, 416*_MIB)]
+        retry_guard.metadata.return_value = {"worker_rss_peak_mb": 270}
+        def cleanup():
+            cleanup_states.append([(p.killed, p.waited) for p in processes])
+            return {"status": "test_cleanup"}
+        self.cleanup.side_effect = cleanup
+        def launch(command, **kwargs):
+            commands.append(command)
+            first = len(commands) == 1
+            Path(command[-1]).write_text(json.dumps({"lines": [], "engine": "FIRST" if first else "SECOND", "elapsed": .1}))
+            process = FakeProcess(None if first else 0)
+            processes.append(process)
+            return process
+        worker = IsolatedOCR("models")
+        with patch.object(worker, "_memory_guard", side_effect=[first_guard, retry_guard]), \
+                patch("ocr_worker.subprocess.Popen", side_effect=launch):
+            result = worker.recognize("same original photo.jpg")
+        self.assertEqual(result["engine"], "SECOND")
+        self.assertEqual(cleanup_states, [[], [(True, True)]])
+        self.assertEqual(commands[0][:-1], commands[1][:-1])
+        self.assertNotEqual(commands[0][-1], commands[1][-1])
+        self.assertEqual(result["recovery"]["attempts"], 2)
+        self.assertTrue(result["recovery"]["automatic_retry"])
+        self.assertEqual(result["recovery"]["reason"], "service_budget")
+        self.assertTrue(all(not Path(command[-1]).parent.exists() for command in commands))
+
+    def test_retry_cannot_reuse_first_attempts_complete_json(self):
+        calls = []
+        def run(command, guard, deadline=None):
+            calls.append(command)
+            if len(calls) == 1:
+                Path(command[-1]).write_text('{"lines":[],"engine":"DO NOT ACCEPT","elapsed":0.1}')
+                raise OCRMemoryLimitError("service_budget", 417*_MIB, 416*_MIB)
+            return 0  # Retry exits without its own result.
+        worker = IsolatedOCR("models")
+        with patch.object(worker, "_run", side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, "valid result") as caught:
+                worker.recognize("photo.jpg")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(caught.exception.recovery["attempts"], 2)
+        self.assertTrue(all(not Path(command[-1]).parent.exists() for command in calls))
+
+    def test_worker_budget_and_unavailable_monitor_are_not_retried(self):
+        for kind in ("worker_budget", "monitor_unavailable"):
+            with self.subTest(kind=kind):
+                worker = IsolatedOCR("models")
+                with patch.object(worker, "_run", side_effect=OCRMemoryLimitError(kind)) as run:
+                    with self.assertRaises(OCRMemoryLimitError) as caught:
+                        worker.recognize("photo.jpg")
+                self.assertEqual(run.call_count, 1)
+                self.assertEqual(caught.exception.recovery["attempts"], 1)
+                self.assertFalse(caught.exception.recovery["automatic_retry"])
+
+    def test_retry_uses_the_original_total_timeout_deadline(self):
+        now, deadlines = [10.], []
+        def run(command, guard, deadline=None):
+            deadlines.append(deadline)
+            if len(deadlines) == 1:
+                now[0] = 10.8
+                raise OCRMemoryLimitError("service_budget")
+            Path(command[-1]).write_text('{"lines":[],"engine":"TEST","elapsed":0.1}')
+            return 0
+        worker = IsolatedOCR("models", timeout=1)
+        with patch("ocr_worker.time.monotonic", side_effect=lambda: now[0]), patch.object(worker, "_run", side_effect=run):
+            result = worker.recognize("photo.jpg")
+        self.assertEqual(deadlines, [11., 11.])
+        self.assertEqual(result["recovery"]["attempts"], 2)
+
+    def test_cleanup_does_not_extend_timeout_or_launch_an_expired_retry(self):
+        now, cleanups = [10.], []
+        def cleanup():
+            cleanups.append(True)
+            if len(cleanups) == 2:
+                now[0] = 12.
+            return {"status": "test_cleanup"}
+        self.cleanup.side_effect = cleanup
+        worker = IsolatedOCR("models", timeout=1)
+        with patch("ocr_worker.time.monotonic", side_effect=lambda: now[0]), \
+                patch.object(worker, "_run", side_effect=OCRMemoryLimitError("service_budget")) as run:
+            with self.assertRaisesRegex(RuntimeError, "exceeded") as caught:
+                worker.recognize("photo.jpg")
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(caught.exception.recovery["attempts"], 2)
+        self.assertTrue(caught.exception.recovery["automatic_retry"])
 
     def test_monitor_loss_stops_a_running_worker(self):
         guard = Mock()
