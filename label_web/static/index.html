@@ -34,20 +34,11 @@
   <main>
     <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><span class="top-badge">掃描辨識 · 標準核對</span></header>
     <section id="view-inspect" class="view">
-      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>檢查標籤</h1><p class="lead">拍下完整標籤，核對每一個重要欄位。</p></div><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立標準標籤</button></div>
-      <div class="steps" aria-label="檢查流程"><span><b>1</b>選擇標準</span><i></i><span><b>2</b>拍照或上傳</span><i></i><span><b>3</b>查看差異</span></div>
-      <div id="no-standards" class="notice"><svg><use href="#i-library"/></svg><div><strong>還沒有標準，也能先掃描</strong><p>先讀取文字、檢查日期先後；建立已確認標準後，就能逐字核對。</p></div><button class="button primary" data-action="new-standard">建立標準 <svg><use href="#i-arrow"/></svg></button></div>
+      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">不必先上傳正確照片，拍照後即可檢查固定文字與日期。</p></div></div>
+      <div class="steps" aria-label="檢查流程"><span><b>1</b>拍照或選照片</span><i></i><span><b>2</b>自動辨識核對</span><i></i><span><b>3</b>查看相符與差異</span></div>
       <div class="inspect-grid">
         <div class="panel inspect-input">
-          <div class="section-title"><span class="step-number">01</span><h2>選擇核對標準</h2></div>
-          <label for="template-select">辨識方式與標準<select id="template-select"><option value="">先辨識，不比對標準</option></select></label>
-          <p id="recognition-help" class="help">尚無核對標準：可讀出文字、檢查日期矛盾，不能據此確認整張標籤正確。</p>
-          <div id="selected-standard" class="selected-standard" hidden></div>
-          <label for="batch-date">本批製造日期 <span class="optional">選填</span><input id="batch-date" type="date"></label>
-          <p class="help">填入後會核對本批製造日，避免兩個日期同時印錯。</p>
-          <label for="arrival-date">本批到店日 <span class="optional">選填</span><input id="arrival-date" type="date"></label>
-          <p class="help">填入預定到店日，核對照片是否印對日期；未填時僅檢查日期格式及可判讀的先後關係。</p>
-          <div class="section-title divided"><span class="step-number">02</span><h2>拍攝待檢查標籤</h2></div>
+          <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
             <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>讓整張標籤清楚入鏡</h3><p>正面拍攝，避開反光、手指與遮擋</p>
             <div class="upload-actions"><button id="scan-button" class="button primary capture-button"><svg><use href="#i-camera"/></svg>掃描標籤</button><button class="button secondary" data-file="inspect-file"><svg><use href="#i-upload"/></svg>選擇照片</button></div>
@@ -56,8 +47,11 @@
           <input id="inspect-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
           <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
+          <section id="scan-baseline" class="scan-baseline" aria-labelledby="scan-baseline-heading"><h3 id="scan-baseline-heading">自動核對的固定文字</h3><div id="scan-standards" class="scan-standards"><p class="muted">正在載入固定文字…</p></div><p class="help">其他內容會列出辨識文字；沒有比對依據的項目，不會判定為相符。</p></section>
+          <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後會核對本批製造日，避免兩個日期同時印錯。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入預定到店日，核對照片是否印對日期；未填時僅檢查日期格式及可判讀的先後關係。</p></details>
+          <details id="template-options" class="scan-options"><summary>其他比對設定 <span class="optional">選用</span></summary><label for="template-select">辨識方式與標準<select id="template-select"><option value="">直接掃描（固定文字與日期檢查）</option></select></label><p id="recognition-help" class="help">直接掃描會使用上方固定文字，不需要正確照片。</p><div id="selected-standard" class="selected-standard" hidden></div><p class="help">若需比對特定商品的品名、規格或保存條件，可另建一份人工確認的標準。</p><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立選用標準</button></details>
         </div>
-        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>核對結果將顯示在這裡</h2><p>逐字核對品名、規格、保存條件、產地，<br>以及公司名稱、地址、電話；<br>另依設定檢查製造日期、有效日期與到店日。</p><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異</span><span class="badge review">需複核</span></div><p class="small muted">看不清楚的內容不會自動判定通過。</p></div>
+        <div id="result-placeholder" class="panel result-placeholder"><div class="outline-label"><span></span><span></span><span></span><span class="barcode-art"></span></div><h2>掃描後，結果會分組顯示</h2><div class="result-legend"><span class="badge pass">相符</span><span class="badge fail">有差異／需確認</span></div><p class="small muted">其他已辨識文字會另外列出，不會當成已確認正確。</p></div>
         <div id="result-area" hidden></div>
       </div>
     </section>

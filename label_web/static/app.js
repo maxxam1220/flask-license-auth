@@ -2,7 +2,7 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const state = {csrf: "", templates: [], referenceJob: null, source: null, supersedes: null, busy: false, page: 1, inspection: null};
-const statusLabels = {pass: "設定項目通過", fail: "發現差異", review: "需要人工複核"};
+const statusLabels = {pass: "已核對項目相符", fail: "發現差異", review: "需要人工複核", read: "僅辨識"};
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
 const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
 const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
@@ -59,6 +59,7 @@ function selectedStandard() {
   const node = $("#selected-standard"); node.replaceChildren(); node.hidden = !standard;
   $("#recognition-help").hidden = !!standard;
   if (standard) {
+    $("#template-options").open = true;
     if (standard.image) { const img = element("img"); img.src = standard.image.thumbnail; img.alt = "選定的標準照片"; node.append(img); }
     const info = element("div"); info.append(element("strong", "", standard.fields.product), element("p", "", `第 ${standard.version} 版 · ${standard.approved_by} 已確認`));
     const checked = textFields.filter(key => standard.fields[key]).map(key => fieldLabels[key]);
@@ -73,12 +74,20 @@ async function loadTemplates(selectedId) {
   const payload = await api("/api/templates"); state.templates = payload.items;
   const select = $("#template-select"), previous = selectedId || select.value;
   select.replaceChildren();
-  select.append(new Option("先辨識，不比對標準", ""));
+  select.append(new Option("直接掃描（固定文字與日期檢查）", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
   $("#nav-count").textContent = String(state.templates.length);
-  $("#no-standards").hidden = state.templates.length > 0;
   selectedStandard(); renderLibrary();
+}
+async function loadScanConfig() {
+  const config = await api("/api/scan-config"), list = $("#scan-standards");
+  list.replaceChildren();
+  config.standards.forEach(item => {
+    const row = element("p", "fixed-standard");
+    row.append(element("span", "fixed-standard-label", item.label), element("span", "", item.value));
+    list.append(row);
+  });
 }
 function newStandard(previous = null) {
   if (state.busy) return toast("請等待目前照片完成辨識。");
@@ -213,7 +222,7 @@ function drawEvidence(canvas, inspection) {
   const image = new Image(); image.onload = () => {
     canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
     const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0);
-    const ids = new Map(); inspection.result.checks.forEach(c => { if (c.status !== "pass") c.line_ids.forEach(id => ids.set(id, c.status)); });
+    const ids = new Map(); inspection.result.checks.forEach(c => { if (["fail", "review"].includes(c.status)) (c.line_ids || []).forEach(id => { if (ids.get(id) !== "fail") ids.set(id, c.status); }); });
     for (const line of inspection.ocr.lines) {
       if (!ids.has(line.id)) continue;
       ctx.strokeStyle = ids.get(line.id) === "fail" ? "#c84232" : "#cc981e"; ctx.lineWidth = Math.max(3, image.width / 240);
@@ -221,17 +230,70 @@ function drawEvidence(canvas, inspection) {
     }
   }; image.src = inspection.image.url;
 }
+function resultLine(check, expandable) {
+  const row = element(expandable ? "details" : "div", `result-line ${check.status}`);
+  const body = expandable ? element("summary", "result-line-summary") : row;
+  const title = element("div", "result-line-title");
+  title.append(element("span", "result-line-label", check.label || "辨識文字"), badge(check.status, {pass:"相符",fail:"有差異",review:"需確認",read:"僅辨識"}[check.status]));
+  const shown = check.display_actual ?? check.display_text ?? check.actual;
+  body.append(title, element("p", "result-line-text", shown || "未辨識到"));
+  if (!expandable && check.status === "pass" && /日期|到店/.test(check.label || "") && check.reason) body.append(element("p", "result-line-reason", check.reason));
+  if (expandable) {
+    body.append(element("span", "result-line-expand", "展開查看原因與原文")); row.append(body);
+    const detail = element("div", "result-line-detail");
+    if (check.reason) detail.append(element("p", "check-reason", check.reason));
+    if (check.conversion_changed) detail.append(element("p", "display-note", "上方以繁體顯示；下方保留 OCR 原文，請對照照片確認。"));
+    for (const [key, label] of [["expected", "標準"], ["actual", "原文"]]) {
+      if (key === "expected" && !check.expected) continue;
+      const comparison = element("div", "comparison-row"); comparison.append(element("span", "", label), diffNode(check, key)); detail.append(comparison);
+    }
+    if (check.source_lines?.length) {
+      const original = element("details", "source-lines"), list = element("div", "ocr-lines");
+      original.append(element("summary", "", "對應照片的完整原文"), list); renderOCR(check.source_lines, list); detail.append(original);
+    }
+    row.append(detail);
+  }
+  return row;
+}
+function renderResultGroups(result, ocrLines, area) {
+  const groups = element("div", "result-groups"); groups.id = "result-groups";
+  for (const [id, title, statuses, empty] of [
+    ["matched", "相符", ["pass"], "目前沒有可確認相符的項目。"],
+    ["attention", "有差異／需確認", ["fail", "review"], "目前沒有發現差異或待確認項目。"]
+  ]) {
+    const section = element("section", `result-group result-group-${id}`); section.id = `result-${id}`;
+    const checks = result.checks.filter(check => statuses.includes(check.status));
+    const heading = element("h2", "result-group-heading", title); heading.append(element("span", "group-count", String(checks.length))); section.append(heading);
+    if (!checks.length) section.append(element("p", "group-empty", empty));
+    checks.forEach(check => section.append(resultLine(check, id === "attention")));
+    groups.append(section);
+  }
+  area.append(groups);
+  const reads = result.checks.filter(check => check.status === "read");
+  const covered = new Set(result.checks.flatMap(check => check.line_ids || []));
+  // Older saved results may not account for text outside recognized fields.
+  const extra = ocrLines.filter(line => !covered.has(line.id)).map(line => ({key:`line-${line.id}`,label:"辨識文字",status:line.score < .94 ? "review" : "read",actual:line.text,display_actual:line.display_text ?? line.text,line_ids:[line.id],reason:"尚無比對依據，請對照原圖確認。"}));
+  const extraIssues = extra.filter(check => check.status === "review");
+  if (extraIssues.length) {
+    const attention = $("#result-attention", groups); $(".group-empty", attention)?.remove();
+    extraIssues.forEach(check => attention.append(resultLine(check, true)));
+    $(".group-count", attention).textContent = String(result.checks.filter(check => ["fail","review"].includes(check.status)).length + extraIssues.length);
+  }
+  const other = [...reads, ...extra.filter(check => check.status === "read")];
+  if (other.length) {
+    const section = element("section", "result-read"); section.id = "result-read";
+    const heading = element("h2", "result-group-heading", "其他已辨識文字"); heading.append(element("span", "group-count", String(other.length)));
+    section.append(heading, element("p", "read-help", "以下僅完成文字辨識，尚無比對依據，不能據此確認正確。"));
+    other.forEach(check => section.append(resultLine(check, false))); area.append(section);
+  }
+}
 function renderInspection(inspection) {
   const area = $("#result-area"); area.replaceChildren(); area.hidden = false; $("#result-placeholder").hidden = true;
   const result = inspection.result, header = element("div", `result-header ${result.status}`);
-  header.append(badge(result.status), element("h2", "", result.status === "pass" ? "已設定的檢查項目相符" : result.status === "fail" ? "請確認標示差異" : result.mode === "recognition" ? "文字已辨識，尚未核對標準" : "部分內容需要再確認"), element("p", "", `${inspection.template_snapshot.name}${inspection.template_snapshot.version ? ` · 第 ${inspection.template_snapshot.version} 版` : ""} · ${when(inspection.created_at)}`));
-  const counts = element("div", "result-counts"); counts.append(element("span", "", `${result.counts.pass} 項相符`), element("span", "", `${result.counts.fail} 項差異`), element("span", "", `${result.counts.review} 項待確認`)); header.append(counts); area.append(header);
-  result.checks.forEach(check => {
-    const card = element("article", "panel check-card"), title = element("div", "check-title");
-    title.append(element("strong", "", check.label), badge(check.status, {pass:"相符",fail:"有差異",review:"需複核"}[check.status])); card.append(title);
-    for (const [key, label] of [["expected", "標準"], ["actual", "照片"]]) { const row = element("div", "comparison-row"); row.append(element("span", "", label), diffNode(check, key)); card.append(row); }
-    card.append(element("p", "check-reason", check.reason)); area.append(card);
-  });
+  header.append(badge(result.status), element("h2", "", result.status === "pass" ? "已核對的項目相符" : result.status === "fail" ? "請確認標示差異" : "有內容需要再確認"), element("p", "", `${inspection.template_snapshot.name}${inspection.template_snapshot.version ? ` · 第 ${inspection.template_snapshot.version} 版` : ""} · ${when(inspection.created_at)}`));
+  const counts = element("div", "result-counts"); counts.append(element("span", "", `${result.counts.pass} 項相符`), element("span", "", `${result.counts.fail} 項差異`), element("span", "", `${result.counts.review} 項待確認`));
+  if (result.counts.read) counts.append(element("span", "", `${result.counts.read} 項僅辨識`)); header.append(counts); area.append(header);
+  renderResultGroups(result, inspection.ocr.lines, area);
   if (result.notes.length) { const notes = element("div", "result-notes"); result.notes.forEach(note => notes.append(element("p", "", note))); area.append(notes); }
   const evidence = element("div", "panel evidence"); evidence.append(element("h2", "", "對照原圖"));
   const pair = element("div", "photo-pair");
@@ -267,7 +329,7 @@ async function initialize() {
   $("#logout").hidden=!session.requires_login;
   $("#login").hidden=session.authenticated; $("#app-shell").hidden=!session.authenticated;
   if (!session.authenticated) return;
-  await loadTemplates(); showView(location.hash.slice(1));
+  await Promise.all([loadTemplates(), loadScanConfig()]); showView(location.hash.slice(1));
   const stored = sessionStorage.getItem("labelcheck-pending");
   if (stored) {
     let pending; try { pending=JSON.parse(stored); } catch { sessionStorage.removeItem("labelcheck-pending"); return; }

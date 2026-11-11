@@ -19,7 +19,7 @@ from werkzeug.utils import secure_filename
 
 import database as db
 from ocr_worker import IsolatedOCR
-from validation import extract_fields, evaluate, parse_date, recognize_only, TEXT_FIELDS
+from validation import extract_fields, evaluate, parse_date, recognize_only, TEXT_FIELDS, BUILTIN_STANDARDS, RULE_VERSION
 import label_source
 
 register_heif_opener()
@@ -159,6 +159,10 @@ def create_app(config=None, ocr=None):
             rows = conn.execute(select(db.templates).where(db.templates.c.active.is_(True)).order_by(db.templates.c.created_at.desc())).mappings().all()
         return jsonify(items=[template_payload(x) for x in rows])
 
+    @app.get("/api/scan-config")
+    def scan_config():
+        return jsonify(standards=BUILTIN_STANDARDS, version=RULE_VERSION)
+
     @app.get("/api/source-labels")
     def source_labels():
         if not label_source.available(engine):
@@ -297,7 +301,7 @@ def create_app(config=None, ocr=None):
                         standard = dict(conn.execute(select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
                         evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
                     else:
-                        standard = {"id": "", "name": "先辨識・尚未核對標準", "version": 0, "image_id": "", "mode": "recognition"}
+                        standard = {"id": "", "name": "直接掃描・固定文字與日期檢查", "version": 0, "image_id": "", "mode": "recognition"}
                         evaluation = recognize_only(ocr_result["lines"], inputs["batch_date"], inputs["arrival_date"])
                     evaluation["inputs"] = inputs
                     inspection_id = db.uid()

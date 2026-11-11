@@ -81,14 +81,28 @@ class APITests(unittest.TestCase):
         response=self.client.post("/api/jobs",data={"kind":"inspection","template_id":"missing","photo":(self.photo(),"label.png")},headers=self.headers)
         self.assertEqual(response.status_code,404)
 
-    def test_no_reference_recognition_is_saved_but_never_passes(self):
+    def test_direct_scan_persists_builtin_checks_and_full_text_without_photo_reference(self):
         job = self.job("recognition")
         result = self.client.get("/api/inspections/" + job["result"]["inspection_id"]).json
-        self.assertEqual(result["status"], "review")
+        self.assertEqual(result["status"], "fail")
         self.assertIsNone(result["reference_image"])
         self.assertEqual(result["result"]["fields"]["product"]["value"], STANDARD["fields"]["product"])
-        self.assertTrue(all(c["status"] == "review" for c in result["result"]["checks"][:3]))
+        address = next(c for c in result["result"]["checks"] if c["key"] == "address")
+        self.assertEqual(address["expected"], "新北市土城區中興路9號")
+        self.assertEqual(address["status"], "fail")
+        self.assertTrue(any(c["status"] == "read" for c in result["result"]["checks"]))
+        self.assertEqual(result["result"]["coverage"]["total_lines"], result["result"]["coverage"]["covered_lines"])
         self.assertEqual(self.client.get("/api/inspections").json["items"][0]["version"], 0)
+
+    def test_scan_config_exposes_confirmed_fixed_text_only_after_login(self):
+        self.app.config["APP_PASSWORD"] = "testpass"
+        self.assertEqual(self.client.get("/api/scan-config").status_code,401)
+        response = self.client.post("/api/login",json={"password":"testpass"},headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        response = self.client.get("/api/scan-config")
+        self.assertEqual(response.status_code,200)
+        standards = {x["key"]:x["value"] for x in response.json["standards"]}
+        self.assertEqual(standards, {"company":"福和生鮮農產股份有限公司", "address":"新北市土城區中興路9號", "phone":"0800-200-859", "advisory":"果皮上的白點為正常現象(保護果實避免曬傷的碳酸鈣粉)"})
 
     def test_source_standard_without_photo_and_stale_revision(self):
         source = {"code":"123", "name":"系統標籤", "revision":"revision1", "keep_days":9,

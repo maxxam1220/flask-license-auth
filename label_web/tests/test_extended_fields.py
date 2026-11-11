@@ -33,7 +33,9 @@ class ExtendedFieldsTests(unittest.TestCase):
         fields = extract_fields(sample())
         self.assertEqual({key: fields[key]["value"] for key in TEXT_FIELDS}, STANDARD["fields"])
         self.assertEqual(fields["arrival"]["value"], "2026.11.12")
-        self.assertEqual(evaluate(sample(), STANDARD, arrival_date="2026-11-12")["status"], "pass")
+        result = evaluate(sample(), STANDARD, arrival_date="2026-11-12")
+        self.assertTrue(all(check["status"] == "pass" for check in result["checks"] if check["key"] in TEXT_FIELDS))
+        self.assertEqual(result["status"], "review")  # Barcode and other unreferenced lines remain visible.
         self.assertEqual(fields["address"]["line_ids"], [8])
         self.assertEqual(fields["company"]["line_ids"], [7])
 
@@ -47,7 +49,8 @@ class ExtendedFieldsTests(unittest.TestCase):
         self.assertEqual(result["fields"]["phone"]["value"], "0800-200-859")
         check = next(c for c in result["checks"] if c["key"] == "company")
         self.assertEqual(check["actual"], "福和生鲜農產股份有限公司")
-        self.assertEqual(check["status"], "fail")
+        self.assertEqual(check["status"], "review")
+        self.assertEqual(check["raw_actual"], "福和生鲜農產股份有限公司")
 
     def test_each_new_text_typo_or_missing_character_is_flagged(self):
         for identifier, key, changed in ((6, "spec", "規格：1.9kg/盒"),
@@ -112,7 +115,8 @@ class ExtendedFieldsTests(unittest.TestCase):
         old["fields"] = {key: value for key, value in old["fields"].items() if key in ("product", "address", "origin")}
         old["rules"] = {"dates": False}
         checks = evaluate(sample(), old)["checks"]
-        self.assertEqual([check["key"] for check in checks], ["product", "address", "origin"])
+        self.assertEqual([check["key"] for check in checks if check.get("source") == "template"], ["product", "address", "origin"])
+        self.assertEqual({check["key"] for check in checks if check.get("source") == "builtin"}, {"company", "phone"})
 
     def test_arrival_changes_between_batches_are_not_frozen_to_reference(self):
         standard = deepcopy(STANDARD)
@@ -120,7 +124,7 @@ class ExtendedFieldsTests(unittest.TestCase):
         lines = sample()
         lines[11]["text"] = "到店日：2026.11.13"
         result = evaluate(lines, standard, arrival_date="2026-11-13")
-        self.assertEqual(result["status"], "pass")
+        self.assertEqual(next(c for c in result["checks"] if c["key"] == "arrival_expected")["status"], "pass")
         result = evaluate(lines, standard, arrival_date="2026-11-12")
         self.assertEqual(next(c for c in result["checks"] if c["key"] == "arrival_expected")["status"], "fail")
 
@@ -160,8 +164,10 @@ class ExtendedFieldsTests(unittest.TestCase):
     def test_recognition_only_shows_all_text_without_claiming_correctness(self):
         result = recognize_only(sample())
         self.assertEqual(result["status"], "review")
-        self.assertEqual({check["key"] for check in result["checks"] if check["key"] in TEXT_FIELDS}, set(TEXT_FIELDS))
-        self.assertTrue(all(check["status"] == "review" for check in result["checks"] if check["key"] in TEXT_FIELDS))
+        self.assertEqual({check["key"] for check in result["checks"] if check["key"] in TEXT_FIELDS}, {"company", "address", "phone"})
+        self.assertTrue(all(check["status"] == "pass" for check in result["checks"] if check["key"] in TEXT_FIELDS))
+        self.assertEqual(result["coverage"], {"total_lines": 12, "covered_lines": 12})
+        self.assertGreater(result["counts"]["read"], 0)
         self.assertNotIn("manufacture", [check["key"] for check in result["checks"]])
         self.assertIn("本批排程", "".join(result["notes"]))
 

@@ -1,14 +1,23 @@
 """Conservative field extraction and deterministic, versioned label checks."""
 from datetime import date, datetime
 from difflib import SequenceMatcher
+from functools import lru_cache
 import re
 import unicodedata
+from opencc import OpenCC
 
-RULE_VERSION = "1.2"
+RULE_VERSION = "1.3"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
-               "manufacture": "製造日期", "expiry": "有效日期", "arrival": "到店日"}
+               "manufacture": "製造日期", "expiry": "有效日期", "arrival": "到店日", "advisory": "果皮白點說明"}
+BUILTIN_STANDARDS = [
+    {"key": "company", "label": "公司名稱", "value": "福和生鮮農產股份有限公司"},
+    {"key": "address", "label": "地址", "value": "新北市土城區中興路9號"},
+    {"key": "phone", "label": "電話", "value": "0800-200-859"},
+    {"key": "advisory", "label": "果皮白點說明", "value": "果皮上的白點為正常現象(保護果實避免曬傷的碳酸鈣粉)"},
+]
+BUILTIN_FIELDS = {item["key"]: item["value"] for item in BUILTIN_STANDARDS}
 ALIASES = {
     "product": r"(?:產品名稱|商品名稱|產品品名|品名)",
     "address": r"(?:負責廠商地址|製造商地址|製造廠地址|公司地址|製造廠址|地址|住址|廠址)",
@@ -27,6 +36,16 @@ ALL_KEYS = "|".join(ALIASES.values()) + r"|內容物|成分|淨重|重量|營養
 def compact(text):
     # Do not fold 台/臺, Chinese variants, punctuation or confusable digits.
     return re.sub(r"\s+", "", unicodedata.normalize("NFC", str(text or "")))
+
+
+@lru_cache(maxsize=1)
+def _traditional_converter():
+    return OpenCC("s2t")
+
+
+def traditional_display(text):
+    """Reading aid only. Comparisons and persisted OCR evidence remain unchanged."""
+    return _traditional_converter().convert(str(text or "")).replace("臺灣", "台灣")
 
 
 def parse_date(text):
@@ -118,6 +137,41 @@ def _located_by_expected(ordered, expected, excluded):
     return _candidate(line["text"], [line], len(ranked) > 1 and score - ranked[1][0] < .04)
 
 
+def _advisory_candidate(ordered):
+    """Locate a present statement, including wrapped fragments; never invent absent text."""
+    expected = compact(BUILTIN_FIELDS["advisory"])
+    anchor = r"果皮.{0,8}(?:白|點)|白點.{0,8}正常|保護果實|碳酸鈣"
+    best = []
+    for first in ordered:
+        chain = [first]
+        for _ in range(6):
+            raw = "".join(item["text"] for item in chain)
+            located = compact(traditional_display(raw))
+            score = SequenceMatcher(None, located, expected).ratio()
+            if re.search(anchor, located) and score >= .32:
+                best.append((score, chain.copy()))
+            next_lines = [item for item in ordered if item not in chain
+                          and _below_in_column(chain[-1], item)
+                          and not re.search(ALL_KEYS, item["text"])]
+            if not next_lines:
+                break
+            # A close continuation must increase the match, rather than absorb an unrelated footer.
+            ranked = sorted(((SequenceMatcher(None, compact(traditional_display(raw + item["text"])), expected).ratio(), item)
+                             for item in next_lines), key=lambda item: item[0], reverse=True)
+            if ranked[0][0] <= score:
+                break
+            chain.append(ranked[0][1])
+    if not best:
+        return None
+    best.sort(key=lambda item: item[0], reverse=True)
+    score, chain = best[0]
+    # Competing disjoint statements require review; overlapping windows are the same evidence.
+    ids = {item["id"] for item in chain}
+    ambiguous = any(abs(score - other_score) < .04 and not ids.intersection(item["id"] for item in other)
+                    for other_score, other in best[1:])
+    return _candidate("".join(item["text"] for item in chain), chain, ambiguous)
+
+
 def extract_fields(lines, expected=None):
     found = {}
     ordered = sorted(lines, key=lambda x: (min(p[1] for p in x["box"]), min(p[0] for p in x["box"])))
@@ -174,9 +228,17 @@ def extract_fields(lines, expected=None):
         for key in ("company", "address", "phone"):
             if key not in found and expected.get(key):
                 excluded = {identifier for field in found.values() for identifier in field["line_ids"]}
-                located = _located_by_expected(ordered, expected[key], excluded)
+                eligible = ordered
+                if key == "phone":
+                    # An EAN barcode is not a telephone merely because some digits resemble it.
+                    eligible = [item for item in ordered if re.fullmatch(r"[()（）\d\-－–—. +#]+", item["text"].strip())
+                                and 7 <= len(re.sub(r"\D", "", item["text"])) <= 11]
+                located = _located_by_expected(eligible, expected[key], excluded)
                 if located:
                     found[key] = located
+    advisory = _advisory_candidate(ordered)
+    if advisory:
+        found["advisory"] = advisory
     if "product" not in found:
         excluded = {identifier for field in found.values() for identifier in field["line_ids"]}
         candidates = [x for x in ordered if len(compact(x["text"])) >= 3 and not re.search(ALL_KEYS, x["text"])
@@ -202,8 +264,107 @@ def diff_parts(expected, actual):
             for kind, i, j, k, l in SequenceMatcher(None, a, b, autojunk=False).get_opcodes()]
 
 
+def _fixed_check(key, field):
+    expected, actual = BUILTIN_FIELDS[key], field["value"]
+    status, reason = "pass", "與已確認固定文字逐字相符（忽略空白與換行）。"
+    if field.get("ambiguous"):
+        status, reason = "review", "偵測到多個候選內容，請對照原圖確認。"
+    elif field.get("score", 0) < .94:
+        status, reason = "review", "文字辨識把握不足，請對照原圖；不自動更正。"
+    elif compact(actual) != compact(expected):
+        status, reason = "fail", "與已確認固定文字不同，請確認錯字、漏字或多字。"
+    return {"key": key, "label": FIELD_NAMES[key], "status": status, "reason": reason,
+            "expected": expected, "actual": actual, "diff": diff_parts(expected, actual),
+            "line_ids": field.get("line_ids", []), "score": field.get("score"), "source": "builtin"}
+
+
+def _finish_result(lines, result):
+    """Cover all OCR evidence without claiming that unreferenced text is correct."""
+    checks = result["checks"]
+    checked_keys = {check["key"] for check in checks}
+    fields = result["fields"]
+    for key in BUILTIN_FIELDS:
+        if key not in checked_keys and fields.get(key, {}).get("value"):
+            checks.append(_fixed_check(key, fields[key]))
+    covered = {identifier for check in checks for identifier in check.get("line_ids", [])}
+    for line in lines:
+        if line["id"] not in covered:
+            continue
+        remainder = line["text"]
+        for check in checks:
+            if line["id"] not in check.get("line_ids", []):
+                continue
+            actual = check.get("actual", "")
+            if len(check.get("line_ids", [])) > 1 and compact(remainder) in compact(actual):
+                remainder = ""
+                break
+            if actual and actual in remainder:
+                remainder = remainder.replace(actual, "", 1)
+        # Already-compared values carry their own raw/difference evidence. Only unchecked
+        # text (including headings before removal) needs another source-line review.
+        changed = traditional_display(remainder) != remainder
+        remainder = re.sub(ALL_KEYS, "", remainder).strip(" ：:\t\r\n")
+        # Checking a phone's digits does not verify a misread heading on the same OCR line.
+        if remainder or changed:
+            checks.append({"key": f"source_line_{line['id']}", "label": "來源行文字",
+                           "status": "review" if changed or line.get("score", 0) < .94 else "read",
+                           "expected": "", "actual": line["text"], "diff": [], "line_ids": [line["id"]],
+                           "score": line.get("score"), "source": "ocr",
+                           "reason": ("來源行含繁簡轉換字形，繁體顯示僅供閱讀；請對照原圖確認。" if changed
+                                      else "此行仍有未核對的文字，請對照原圖；已核對的欄位不代表整行都正確。")})
+    date_pattern = r"(?:民國\s*)?[0-9０-９OoIl]{3,4}\s*[年./．-]\s*[0-9０-９OoIl]{1,2}\s*[月./．-]\s*[0-9０-９OoIl]{1,2}(?:\s*日)?"
+    for line in lines:
+        if line["id"] in covered or not line["text"].strip():
+            continue
+        # Other printed dates can be checked for validity, not for their business meaning.
+        for number, match in enumerate(re.finditer(date_pattern, line["text"])):
+            status, reason = "pass", "年月日格式可辨識；未核對這個日期的業務用途。"
+            try:
+                parse_date(match[0])
+            except (ValueError, TypeError):
+                status, reason = "review", "日期不完整或不合法，請確認數字是否漏印或辨識錯誤。"
+            if line.get("score", 0) < .94:
+                status, reason = "review", "日期辨識把握不足，請對照原圖確認。"
+            checks.append({"key": f"date_line_{line['id']}_{number}", "label": "其他日期格式", "status": status,
+                           "expected": "完整且合法的年月日", "actual": match[0], "reason": reason,
+                           "line_ids": [line["id"]], "score": line.get("score"), "source": "date"})
+        changed = traditional_display(line["text"]) != line["text"]
+        checks.append({"key": f"text_line_{line['id']}", "label": "其他辨識文字",
+                       "status": "read" if line.get("score", 0) >= .94 and not changed else "review", "expected": "",
+                       "actual": line["text"], "diff": [], "line_ids": [line["id"]], "score": line.get("score"),
+                       "source": "ocr", "reason": ("來源行含繁簡轉換字形，繁體顯示僅供閱讀；請對照原圖確認。" if changed
+                                                    else "已讀取文字，尚無核對依據，未判定內容正確。" if line.get("score", 0) >= .94
+                                                    else "文字辨識把握不足，請對照原圖確認；尚無核對依據。")})
+    indexed = {line["id"]: line for line in lines}
+    for check in checks:
+        actual, expected = check.get("actual", ""), check.get("expected", "")
+        check["raw_actual"] = actual
+        check["display_actual"] = traditional_display(actual)
+        check["display_expected"] = traditional_display(expected)
+        check["conversion_changed"] = check["display_actual"] != actual
+        check.setdefault("source", "template" if check["key"] in TEXT_FIELDS else "date")
+        # A script conversion is a reading aid, never evidence of an exact printed match.
+        if (check["status"] == "fail" and check.get("diff") and compact(actual) != compact(expected)
+                and _traditional_converter().convert(actual) != actual
+                and compact(_traditional_converter().convert(actual)) == compact(_traditional_converter().convert(expected))):
+            check.update(status="review", reason="辨識原文有繁簡字形差異；顯示為繁體僅方便閱讀，仍需對照原圖確認，未判定相符。")
+        check["source_lines"] = [{"id": identifier, "text": indexed[identifier]["text"],
+                                  "display_text": traditional_display(indexed[identifier]["text"]),
+                                  "conversion_changed": traditional_display(indexed[identifier]["text"]) != indexed[identifier]["text"],
+                                  "score": indexed[identifier].get("score")}
+                                 for identifier in check.get("line_ids", []) if identifier in indexed]
+    covered = {identifier for check in checks for identifier in check.get("line_ids", [])}
+    result["coverage"] = {"total_lines": len(lines), "covered_lines": len(covered.intersection(indexed))}
+    result["counts"] = {key: sum(check["status"] == key for check in checks) for key in ("pass", "fail", "review", "read")}
+    result["status"] = ("fail" if result["counts"]["fail"] else "review" if not checks or result["counts"]["review"] or result["counts"]["read"] else "pass")
+    result["verified_scope"] = "configured_checks"
+    if result["counts"]["read"] or any(check.get("source") == "ocr" for check in checks):
+        result["notes"].append("其他辨識文字沒有核對依據，僅提供閱讀；未判定整張標籤所有內容正確。")
+    return result
+
+
 def evaluate(lines, template, batch_date="", arrival_date=""):
-    fields = extract_fields(lines, template["fields"])
+    fields = extract_fields(lines, {**BUILTIN_FIELDS, **template["fields"]})
     checks = []
     threshold = .94
     for key in TEXT_FIELDS:
@@ -261,12 +422,15 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
                                "reason": "依標準設定的日期相差天數核對。", "expected": f"相差 {keep} 天", "actual": f"相差 {days} 天", "line_ids": []})
             else:
                 notes.append("此標準尚未設定保存天數，未核對有效期限長度。")
-            if batch_date:
-                expected_date = date.fromisoformat(batch_date)
-                checks.append({"key": "batch", "label": "本批製造日", "status": "review" if "manufacture" in uncertain_dates else "pass" if m["date"] == expected_date else "fail",
-                               "reason": "與本次指定的製造日核對。", "expected": batch_date, "actual": str(m["date"]), "line_ids": fields["manufacture"]["line_ids"]})
-            else:
-                notes.append("未指定本批製造日，未驗證兩個日期是否一起印錯。")
+        if batch_date:
+            expected_date = date.fromisoformat(batch_date)
+            actual_date = parsed.get("manufacture", {}).get("date")
+            checks.append({"key": "batch", "label": "本批製造日", "status": "review" if "manufacture" in uncertain_dates else "pass" if actual_date == expected_date else "fail",
+                           "reason": "與本次指定的製造日核對。", "expected": batch_date,
+                           "actual": str(actual_date) if actual_date else fields.get("manufacture", {}).get("value", ""),
+                           "line_ids": fields.get("manufacture", {}).get("line_ids", [])})
+        elif len(parsed) == 2:
+            notes.append("未指定本批製造日，未驗證兩個日期是否一起印錯。")
     else:
         notes.append("此標準未啟用製造／有效日期檢查。")
     if template["rules"].get("arrival", False) or arrival_date:
@@ -314,28 +478,23 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
                                "expected": expected_order, "actual": f"到店 {actual_date} / {FIELD_NAMES[key]} {other_date}",
                                "line_ids": field.get("line_ids", []) + other.get("line_ids", [])})
     status = "fail" if any(x["status"] == "fail" for x in checks) else "review" if any(x["status"] == "review" for x in checks) else "pass"
-    return {"status": status, "checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
-            "counts": {k: sum(x["status"] == k for x in checks) for k in ("pass", "fail", "review")}}
+    return _finish_result(lines, {"status": status, "checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION})
 
 
 def recognize_only(lines, batch_date="", arrival_date=""):
     """Date consistency is useful without a baseline; text correctness is unverified."""
-    extracted = extract_fields(lines)
+    extracted = extract_fields(lines, BUILTIN_FIELDS)
     result = evaluate(lines, {"fields": {k: "" for k in TEXT_FIELDS},
                               "rules": {"dates": bool(batch_date or "manufacture" in extracted or "expiry" in extracted),
                                         "arrival": bool(arrival_date or "arrival" in extracted), "keep_days": None}},
                       batch_date, arrival_date)
-    text_checks = []
-    for key in TEXT_FIELDS:
-        field = result["fields"].get(key, {})
-        text_checks.append({"key": key, "label": FIELD_NAMES[key], "status": "review", "expected": "尚無已確認標準",
-                            "actual": field.get("value", ""), "diff": [], "line_ids": field.get("line_ids", []),
-                            "score": field.get("score"),
-                            "reason": "僅辨識文字，尚未核對正確性。請對照原圖及正確資料確認。"})
-    result["checks"] = text_checks + [check for check in result["checks"] if check["key"] not in TEXT_FIELDS]
+    # Remove mandatory template placeholders and the first pass of whole-line rendering.
+    result["checks"] = [check for check in result["checks"]
+                        if check["key"] not in TEXT_FIELDS and not check["key"].startswith(("text_line_", "date_line_", "source_line_"))
+                        and (check.get("actual") or check["key"] in {"batch", "arrival_expected"})]
+    result["fields"] = extracted
     result["notes"] = [note for note in result["notes"] if note != "此標準未啟用製造／有效日期檢查。"]
     result["mode"] = "recognition"
-    result["status"] = "fail" if any(c["status"] == "fail" for c in result["checks"]) else "review"
-    result["counts"] = {k: sum(c["status"] == k for c in result["checks"]) for k in ("pass", "fail", "review")}
-    result["notes"].insert(0, "目前為先辨識模式：日期格式與先後可檢查；品名、規格、保存條件、產地、公司名稱、地址、電話是否正確，仍需已確認標準。")
-    return result
+    result["notes"] = [note for note in result["notes"] if not note.startswith("其他辨識文字")]
+    result["notes"].insert(0, "掃描時核對已確認的固定文字及日期；固定字句未出現時不報缺漏，其他文字僅供閱讀。")
+    return _finish_result(lines, result)
