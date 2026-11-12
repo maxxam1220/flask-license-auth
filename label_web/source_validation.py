@@ -5,9 +5,10 @@ import re
 import unicodedata
 
 from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
+from label_geometry import analyze_label_scope, scope_review_result, date_evidence
 
 
-RULE_VERSION = "1.8"
+RULE_VERSION = "1.9"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -283,21 +284,21 @@ def _date_fields(lines):
         key = _heading(line["text"])
         if key not in DATE_KEYS:
             continue
-        value, evidence = _raw_date_value(line["text"]), [line]
-        if not value:
-            nearby = [(distance, item) for item in lines if item["id"] != line["id"]
-                      and (distance := _following(line, item)) is not None and re.match(r"(?:民國)?[0-9０-９OoIl]", item["text"].strip())]
-            if nearby:
-                nxt = min(nearby, key=lambda item: item[0])[1]
-                value, evidence = nxt["text"], [line, nxt]
+        observed = date_evidence(line, _raw_date_value(line["text"]), lines)
+        value, evidence = observed["value"], observed["lines"]
         candidate = {"value": value, "line_ids": [item["id"] for item in evidence],
                      "score": min(float(item.get("score", 0)) for item in evidence),
-                     "ambiguous": any(item.get("human_uncertain") or (item.get("ambiguous", False) and not item.get("human_verified")) for item in evidence),
+                     "ambiguous": observed["ambiguous"] or any(item.get("human_uncertain") or (item.get("ambiguous", False) and not item.get("human_verified")) for item in evidence),
                      "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in evidence)}
         if key in found:
             found[key]["ambiguous"] = True
         else:
             found[key] = candidate
+    # A standalone number/date box must never fill two different date headings.
+    for first, field in found.items():
+        for second, other in found.items():
+            if first != second and set(field["line_ids"]) & set(other["line_ids"]):
+                field["ambiguous"] = other["ambiguous"] = True
     return found
 
 
@@ -429,6 +430,13 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         bad_reason = {"date_order": "有效日期早於製造日期。", "arrival_manufacture": "到店日早於製造日期。", "arrival_expiry": "到店日晚於有效日期。"}[key]
         add(key, label, "review" if low else "fail" if bad else "pass", bad_reason if bad else "日期先後順序合理。",
             expectation, f"{a['date']} → {b['date']}", fields[first]["line_ids"] + fields[second]["line_ids"])
+    if (source or {}).get("source_kind") == "manual" and source.get("keep_days") is not None and all(key in parsed for key in ("manufacture","expiry")):
+        days = (parsed["expiry"]["date"]-parsed["manufacture"]["date"]).days
+        low = any(_field_uncertain(fields[key]) for key in ("manufacture","expiry"))
+        same = days == source["keep_days"]
+        add("keep_days", "保存天數", "review" if low else "pass" if same else "fail",
+            "製造與有效日期的間隔符合人工確認的保存天數。" if same else "製造與有效日期的間隔不符合人工確認的保存天數。",
+            f"相差 {source['keep_days']} 天",f"相差 {days} 天",fields["manufacture"]["line_ids"]+fields["expiry"]["line_ids"])
     if base:
         if "expiry" in parsed:
             field = fields["expiry"]
@@ -508,6 +516,9 @@ def _decorate(result, lines):
 
 def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="", ocr_capabilities=None):
     """A source is a single database label snapshot, or None when it is unknown."""
+    scope = analyze_label_scope(lines)
+    if scope["blocked"]:
+        return scope_review_result(lines, scope, RULE_VERSION, traditional_display)
     # An explicit Code128 payload can look like a date, but it remains barcode data.
     barcode_groups = [group for group in _groups(_source_rows(source)) if group["kind"] == "barcode" and len(group["lines"]) == 1]
     literal_barcodes = {line["id"] for line in lines if any(_compared_text(group, line["text"]) == _compared_text(group, group["text"]) for group in barcode_groups)}
@@ -561,9 +572,11 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
         checks.append({"key":"standard_reference_stale", "label":"比對標準", "status":"review", "actual":"來源已變更",
                        "expected":"", "line_ids":[], "score":None, "source":"standard",
                        "reason":"原始來源資料已變更，先前人工比對標準已停用；請重新確認標準後再核對。"})
-    notes.insert(0, ("依清單核對已知品名、條碼及印出的保存天數；清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
+    manual_source = (source or {}).get("source_kind") == "manual"
+    notes.insert(0, ("依人工提供並確認的文字與日期規則核對；沒有完整印標版面，未提供的內容仍需確認。" if manual_source else
+                    "依清單核對已知品名、條碼及印出的保存天數；清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
                     f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))
     result = {"checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
-              "verified_scope": "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
+              "verified_scope": "manual_text" if manual_source else "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
     return _decorate(result, lines)

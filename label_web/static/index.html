@@ -52,6 +52,7 @@
           <p id="inspect-upload-error" class="upload-error" role="alert" hidden></p>
           <div id="inspect-retry" hidden><div class="upload-actions"><button id="inspect-retry-button" class="button secondary" type="button">重新辨識這張照片</button></div><p class="help">照片已保留，將沿用原本比對設定。</p></div>
           <details id="failed-jobs-panel" class="scan-options" hidden><summary>未完成的辨識</summary><p id="failed-jobs-note" class="muted small">照片已保留，可沿用原本設定重新辨識。</p><div id="failed-jobs-list" class="history-list"></div></details>
+          <details id="memory-panel" class="scan-options"><summary>服務記憶體 <span class="optional">狀態與清理</span></summary><p id="memory-status" class="help" role="status">展開後讀取目前用量。</p><div class="upload-actions"><button id="memory-refresh" class="button secondary" type="button">更新用量</button><button id="memory-cleanup" class="button secondary" type="button">清理閒置記憶體</button></div><p class="help">每次辨識後已自動釋放；手動清理只處理閒置記憶體，不刪除照片、標準或紀錄。辨識中需等完成再操作。</p><p id="memory-feedback" class="help" role="status"></p></details>
           <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填覆蓋</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對製造日。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對到店日；未填時依基準日與系統設定檢查。</p></details>
           <details id="template-options" class="scan-options"><summary>其他比對設定 <span class="optional">選用</span></summary><form id="inspect-source-search"><label for="inspect-source-query">選擇系統標籤或清單<input id="inspect-source-query" maxlength="100" required placeholder="搜尋標籤代碼、條碼或品名"></label><button class="button secondary" type="submit">搜尋比對資料</button></form><div id="inspect-source-results" class="source-results"></div><p id="inspect-source-note" class="help source-search-note"></p><div id="inspect-source-selected" class="selected-system-source" hidden></div><div class="form-divider"></div><label for="template-select">照片標準<select id="template-select"><option value="">自動對應系統標籤與清單</option></select></label><p id="recognition-help" class="help">不必先上傳正確照片。清單僅核對已知欄位；找到多筆可能資料時可手動選定。</p><div id="selected-standard" class="selected-standard" hidden></div><button class="button secondary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立選用標準</button></details>
         </div>
@@ -61,6 +62,7 @@
     </section>
     <section id="view-library" class="view" hidden>
       <div class="heading"><div><p class="eyebrow">REFERENCE LIBRARY</p><h1>標準標籤庫</h1><p class="lead">由正確照片或系統標籤建立，每份標準均需人員確認。</p></div><button class="button primary" data-action="new-standard"><svg><use href="#i-plus"/></svg>建立標準標籤</button></div>
+      <section class="panel manual-library"><h2>人工文字標準</h2><p class="help">由檢查紀錄新增的比對依據，可選用於後續掃描；已有的照片標準列在下方。</p><form id="manual-library-search" class="upload-actions"><label>搜尋人工文字標準<input id="manual-library-query" maxlength="100" placeholder="品名、貨號"></label><button class="button secondary" type="submit">搜尋</button></form><p id="manual-library-status" class="help" role="status"></p><div id="manual-library-list" class="library-grid"></div><div class="upload-actions"><button id="manual-library-prev" class="button secondary" type="button">上一頁</button><button id="manual-library-next" class="button secondary" type="button">下一頁</button></div></section>
       <div id="library-list" class="library-grid"></div>
     </section>
     <section id="view-standard" class="view" hidden>
@@ -130,6 +132,25 @@
     <div class="edit-actions"><button id="correction-save" class="button primary" type="submit">儲存訂正並重新判定</button><button id="correction-revoke" class="button secondary" type="button" hidden>撤回這行訂正</button></div>
     <p id="correction-revoke-help" class="help" hidden>撤回後會使用這行原始辨識文字，先前訂正紀錄仍保留。</p>
   </form>
+</dialog>
+<dialog id="manual-standard-dialog" class="edit-dialog" aria-labelledby="manual-standard-title">
+  <div class="edit-heading"><h2 id="manual-standard-title">建立文字比對標準</h2><button id="manual-standard-close" class="button secondary" type="button">關閉</button></div>
+  <p id="manual-standard-notice" class="help">適用於尚無比對資料的標籤。請對照正確資料，逐字確認後儲存。</p>
+  <form id="manual-standard-form" hidden>
+    <label>標準品名<input id="manual-standard-name" maxlength="200" required></label>
+    <label>貨號 <span class="optional">選填</span><input id="manual-standard-sku" maxlength="100"></label>
+    <label>正確標籤文字 <span class="optional">每行一項</span><textarea id="manual-standard-lines" rows="9" maxlength="20000" required></textarea></label>
+    <p class="help">以下帶入的是未核准的辨識原文，請修正錯字與漏字；保留公司、地址、電話、規格等固定文字，不要填入本批日期。</p>
+    <label>保存天數 <span class="optional">未知請留空</span><input id="manual-standard-days" type="number" min="0" max="3650" step="1"></label>
+    <details class="scan-options"><summary>日期排程 <span class="optional">知道規則再填</span></summary><p class="help">填相對本批基準日的天數，例如到店日 +1 填 1。留空只檢查可判讀的日期格式及順序，不推定排程。</p><label>製造日位移<input id="manual-standard-manufacture" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>有效日位移<input id="manual-standard-expiry" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>到店日位移<input id="manual-standard-arrival" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label></details>
+    <label>確認人員<input id="manual-standard-reviewer" maxlength="100" required></label>
+    <label>建立原因<textarea id="manual-standard-note" maxlength="2000" rows="2" required></textarea></label>
+    <button id="manual-standard-preview-button" class="button secondary" type="button">預覽比對標準</button>
+    <div id="manual-standard-preview" class="standard-preview" hidden></div>
+    <label id="manual-standard-confirm-label" class="check-label" hidden><input id="manual-standard-confirm" type="checkbox"><span>已逐字核對正確資料，同意作為日後此款標籤的比對依據。</span></label>
+    <button id="manual-standard-save" class="button primary" type="submit" hidden>儲存文字標準</button>
+  </form>
+  <p id="manual-standard-error" class="upload-error" role="alert" hidden></p>
 </dialog>
 <dialog id="standard-edit-dialog" class="edit-dialog" aria-labelledby="standard-edit-title">
   <div class="edit-heading"><h2 id="standard-edit-title">修正比對標準</h2><button id="standard-edit-close" class="button secondary" type="button">關閉</button></div>

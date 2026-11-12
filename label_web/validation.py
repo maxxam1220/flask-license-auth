@@ -5,8 +5,9 @@ from functools import lru_cache
 import re
 import unicodedata
 from opencc import OpenCC
+from label_geometry import analyze_label_scope, scope_review_result, date_evidence
 
-RULE_VERSION = "1.3"
+RULE_VERSION = "1.4"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
@@ -278,6 +279,12 @@ def extract_fields(lines, expected=None):
                 continue
             value = re.split(ALL_KEYS, line["text"][match.end():], maxsplit=1)[0].strip(" ：:")
             evidence = [line]
+            if key in ("manufacture", "expiry", "arrival"):
+                date_candidate = date_evidence(line, value, ordered)
+                value, evidence = date_candidate["value"], date_candidate["lines"]
+                if value:
+                    candidates.append(_candidate(value, evidence, date_candidate["ambiguous"]))
+                continue
             # A value may be detected as a separate box on the same row.
             if not value:
                 nxt = _next_value(line, ordered)
@@ -362,6 +369,12 @@ def extract_fields(lines, expected=None):
         elif candidates:
             best = candidates[0]
             found["product"] = _candidate(best["text"], best.get("_product_evidence", [best]), best.get("ambiguous", False))
+    for first, field in found.items():
+        if first not in ("manufacture", "expiry", "arrival"):
+            continue
+        for second, other in found.items():
+            if second in ("manufacture", "expiry", "arrival") and first != second and set(field["line_ids"]) & set(other["line_ids"]):
+                field["ambiguous"] = other["ambiguous"] = True
     return found
 
 
@@ -471,6 +484,9 @@ def _finish_result(lines, result):
 
 
 def evaluate(lines, template, batch_date="", arrival_date=""):
+    scope = analyze_label_scope(lines)
+    if scope["blocked"]:
+        return scope_review_result(lines, scope, RULE_VERSION, traditional_display)
     fields = extract_fields(lines, {**BUILTIN_FIELDS, **template["fields"]})
     checks = []
     threshold = .94
@@ -590,6 +606,9 @@ def evaluate(lines, template, batch_date="", arrival_date=""):
 
 def recognize_only(lines, batch_date="", arrival_date=""):
     """Date consistency is useful without a baseline; text correctness is unverified."""
+    scope = analyze_label_scope(lines)
+    if scope["blocked"]:
+        return scope_review_result(lines, scope, RULE_VERSION, traditional_display)
     extracted = extract_fields(lines, BUILTIN_FIELDS)
     result = evaluate(lines, {"fields": {k: "" for k in TEXT_FIELDS},
                               "rules": {"dates": bool(batch_date or "manufacture" in extracted or "expiry" in extracted),

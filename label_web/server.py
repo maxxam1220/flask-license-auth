@@ -7,6 +7,7 @@ import io
 import os
 import secrets
 import threading
+import time
 import warnings
 
 from flask import Flask, jsonify, request, session, send_from_directory, abort
@@ -23,6 +24,7 @@ from memory_cleanup import release_unused_memory
 from validation import extract_fields, evaluate, parse_date, TEXT_FIELDS
 from source_validation import evaluate_source, RULE_VERSION
 from source_rules import prepare_source
+from label_geometry import analyze_label_scope
 import label_source
 import corrections
 import standard_reference
@@ -61,6 +63,7 @@ def create_app(config=None, ocr=None):
     correction_lock = threading.Lock()
     recognizer = ocr or IsolatedOCR(ROOT / "models")
     app.extensions.update(label_engine=engine, label_worker=worker)
+    last_memory_cleanup = None
     with engine.begin() as conn:
         conn.execute(update(db.jobs).where(db.jobs.c.state.in_(["pending", "running"])).values(
             state="failed", error="服務重新啟動中斷了辨識，請重新上傳。"))
@@ -107,9 +110,12 @@ def create_app(config=None, ocr=None):
         return values
 
     def check_source(lines, inputs, ocr_info=None, match_lines=None):
-        match = label_source.resolve(engine, lines if match_lines is None else match_lines, inputs["source_code"])
+        scope = analyze_label_scope(lines)
+        match = ({"status": "scope_review", "reason": scope["reason"], "candidates": []}
+                 if scope["blocked"] else
+                 label_source.resolve(engine, lines if match_lines is None else match_lines, inputs["source_code"]))
         source = prepare_source(match.get("source"), inputs["base_date"])
-        prefix = "清單比對" if (source or {}).get("source_kind") == "catalog" else "系統標籤"
+        prefix = {"catalog": "清單比對", "manual": "人工文字標準"}.get((source or {}).get("source_kind"), "系統標籤")
         standard = {"id": "", "name": f"{prefix} {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
                     "version": 0, "image_id": "", "mode": "system_label", "source": source}
         result = evaluate_source(lines, source, inputs["batch_date"], inputs["arrival_date"], base_date=inputs["base_date"],
@@ -203,6 +209,41 @@ def create_app(config=None, ocr=None):
     @app.get("/api/scan-config")
     def scan_config():
         return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today())
+
+    def active_jobs():
+        with engine.connect() as conn:
+            return conn.execute(select(func.count()).select_from(db.jobs).where(
+                db.jobs.c.state.in_(["pending", "running"]))).scalar_one()
+
+    @app.get("/api/memory")
+    def memory_status():
+        if not hasattr(recognizer, "read_memory_status"):
+            return jsonify(status="unavailable", busy=False, notice="此辨識服務不提供記憶體管理。")
+        report = recognizer.read_memory_status()
+        report["queued_jobs"] = active_jobs()
+        report["busy"] = bool(report.get("busy") or report["queued_jobs"] or image_lock.locked())
+        return jsonify(report)
+
+    @app.post("/api/memory/cleanup")
+    def cleanup_memory():
+        nonlocal last_memory_cleanup
+        if not hasattr(recognizer, "cleanup_memory"):
+            abort(503, description="此辨識服務不提供記憶體管理。")
+        if not image_lock.acquire(blocking=False):
+            abort(409, description="目前正在處理照片，請等辨識完成後再清理。")
+        try:
+            if active_jobs():
+                abort(409, description="還有辨識工作等待處理，完成後才能清理。")
+            now = time.monotonic()
+            if last_memory_cleanup is not None and now - last_memory_cleanup < 30:
+                abort(429, description="剛完成記憶體清理，請至少間隔 30 秒再操作。")
+            report = recognizer.cleanup_memory()
+            if report.get("status") == "busy":
+                abort(409, description="目前正在辨識，請等辨識完成後再清理。")
+            last_memory_cleanup = time.monotonic()
+            return jsonify(report)
+        finally:
+            image_lock.release()
 
     @app.get("/api/source-labels")
     def source_labels():

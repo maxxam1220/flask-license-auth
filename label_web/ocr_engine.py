@@ -127,7 +127,10 @@ def merge_retry(preferred, other):
 
 
 class OCREngine:
-    def __init__(self, model_dir, diagnostics_path=None):
+    def __init__(self, model_dir, diagnostics_path=None, det_limit=1280):
+        if det_limit not in (1280, 1600):
+            raise ValueError("Unsupported OCR detection resolution")
+        self.det_limit = det_limit
         self.model_dir = Path(model_dir)
         self.lock = threading.Lock()
         self.engine = None
@@ -155,7 +158,7 @@ class OCREngine:
                     "Det.lang_type": LangDet.CH,
                     "Det.model_type": ModelType.SMALL,
                     "Det.ocr_version": OCRVersion.PPOCRV6,
-                    "Det.limit_side_len": 1280,
+                    "Det.limit_side_len": self.det_limit,
                     "Det.limit_type": "max",
                     "Rec.engine_type": EngineType.ONNXRUNTIME,
                     "Rec.lang_type": LangRec.CH,
@@ -184,8 +187,8 @@ class OCREngine:
             if _needs_retry(lines):
                 retry_source, retry_x, retry_y = prepared, scale_x, scale_y
                 height, width = prepared.shape[:2]
-                if max(height, width) > 1280:
-                    factor = 1280. / max(height, width)
+                if max(height, width) > self.det_limit:
+                    factor = self.det_limit / max(height, width)
                     new_width, new_height = round(width * factor), round(height * factor)
                     retry_source = cv2.resize(prepared, (new_width, new_height), interpolation=cv2.INTER_AREA)
                     retry_x *= new_width / width
@@ -205,7 +208,7 @@ class OCREngine:
             characters = set(self.engine.text_rec.postprocess_op.character) if self.engine.text_rec is not None else set()
             return {"lines": lines, "engine": "RapidOCR 3.10 / PP-OCRv6 small-det + medium-rec",
                     "model_cache": self.model_cache,
-                    "preprocessing": {"scale_x": round(scale_x, 4), "scale_y": round(scale_y, 4),
+                    "preprocessing": {"det_limit": self.det_limit, "scale_x": round(scale_x, 4), "scale_y": round(scale_y, 4),
                                       "passes": passes, "selected_rotation": rotation},
                     "capabilities": {
                         "unsupported_symbols": [symbol for symbol in ("※",) if characters and symbol not in characters],
@@ -223,9 +226,10 @@ if __name__ == "__main__":
     parser.add_argument("image")
     parser.add_argument("--output")
     parser.add_argument("--diagnostics")
+    parser.add_argument("--det-limit", type=int, choices=(1280, 1600), default=1280)
     parser.add_argument("--model-dir", default=str(Path(__file__).parent / "models"))
     args = parser.parse_args()
-    result = OCREngine(Path(args.model_dir), diagnostics_path=args.diagnostics).recognize(args.image)
+    result = OCREngine(Path(args.model_dir), diagnostics_path=args.diagnostics, det_limit=args.det_limit).recognize(args.image)
     # Operational evidence for the one-shot Linux worker, not an OCR confidence score.
     try:
         import resource

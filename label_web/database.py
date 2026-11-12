@@ -15,6 +15,13 @@ def now():
 
 
 metadata = MetaData()
+manual_sources = Table("labelcheck_manual_sources", metadata,
+    Column("code", String(80), primary_key=True), Column("name", String(200), nullable=False),
+    Column("inspection_id", String(32), nullable=False, unique=True),
+    Column("reference_hash", String(64), nullable=False, unique=True),
+    Column("snapshot", JSON, nullable=False), Column("active", Boolean, nullable=False, default=True),
+    Column("reviewer", String(100), nullable=False), Column("note", Text, nullable=False),
+    Column("created_at", String(40), nullable=False))
 catalog = Table("labelcheck_catalog", metadata,
     Column("code", String(80), primary_key=True), Column("name", Text, nullable=False),
     Column("barcode", Text, nullable=False, default=""), Column("keep_days", Integer),

@@ -16,7 +16,8 @@ import threading
 import sys
 import time
 
-from memory_cleanup import release_unused_memory
+from memory_cleanup import release_unused_memory, read_process_rss_mb
+from memory_runtime import memory_setting, select_memory_policy
 from model_cache import advise_model_cache
 
 
@@ -79,6 +80,7 @@ class _MemoryGuard:
         self.worker_current = 0
         self.cache_reclaims = []
         self.last_cache_reclaim = None
+        self.policy = None
 
     @classmethod
     def discover(cls, worker_limit_bytes, reserve_bytes, proc_root=Path("/proc"), require_cgroup=True):
@@ -135,7 +137,7 @@ class _MemoryGuard:
             limits = []  # Local Linux without a service cgroup still gets an RSS cap.
         return cls(limits, worker_limit_bytes, reserve_bytes, proc_root)
 
-    def observe(self, pid=None):
+    def observe(self, pid=None, *, check_budget=True):
         phase, state = "cgroup_usage_read", None
         try:
             for index, (path, limit) in enumerate(self.limits):
@@ -155,7 +157,7 @@ class _MemoryGuard:
                 working = used - self.inactive_file[index]
                 self.working_set_peaks[index] = max(self.working_set_peaks[index], working)
                 threshold = limit - self.reserve
-                if used >= threshold:
+                if check_budget and used >= threshold:
                     raise OCRMemoryLimitError("service_budget", used, max(0, threshold))
             if pid is not None:
                 phase = "worker_status_read"
@@ -169,7 +171,7 @@ class _MemoryGuard:
                 rss = int(match[1]) * 1024
                 self.worker_current = rss
                 self.worker_peak = max(self.worker_peak, rss)
-                if rss >= self.worker_limit:
+                if check_budget and rss >= self.worker_limit:
                     raise OCRMemoryLimitError("worker_budget", rss, self.worker_limit)
         except OCRMemoryLimitError as error:
             error.memory_guard = self.metadata()
@@ -219,6 +221,7 @@ class _MemoryGuard:
                 "reserve_mb": round(self.reserve / _MIB, 1), "poll_interval_ms": 10,
                 "oom_score_adj_applied": self.oom_score_applied,
                 "proactive_cache": self.cache_reclaims,
+                "policy": self.policy,
                 "cgroups": [{"peak_mb": round(peak / _MIB, 1),
                              "limit_mb": round(limit / _MIB, 1),
                              "stop_at_mb": round((limit - self.reserve) / _MIB, 1),
@@ -228,16 +231,18 @@ class _MemoryGuard:
 
 
 class IsolatedOCR:
-    def __init__(self, model_dir, timeout=180, worker_memory_mb=360, reserve_memory_mb=96):
+    def __init__(self, model_dir, timeout=180, worker_memory_mb=None, reserve_memory_mb=None):
         self.model_dir = Path(model_dir).resolve()
         self.timeout = timeout
-        # These are trusted deployment settings, never photo/request parameters.
-        # Keep accidental configuration changes within this service's 512MiB plan.
-        if not 128 <= worker_memory_mb <= 384 or not 64 <= reserve_memory_mb <= 192:
-            raise ValueError("OCR memory settings exceed the supported safety bounds")
-        self.worker_memory = int(worker_memory_mb * _MIB)
-        self.reserve_memory = int(reserve_memory_mb * _MIB)
+        # Only trusted process configuration is accepted, never request values.
+        self._worker_mb = memory_setting(worker_memory_mb if worker_memory_mb is not None else
+                                        os.environ.get("LABELCHECK_OCR_WORKER_MB"), "worker", 128, 1280)
+        self._reserve_mb = memory_setting(reserve_memory_mb if reserve_memory_mb is not None else
+                                         os.environ.get("LABELCHECK_OCR_RESERVE_MB"), "reserve", 96, 512)
+        self.worker_memory = 360 * _MIB
+        self.reserve_memory = 96 * _MIB
         self.lock = threading.Lock()
+        self._activity = "idle"
 
     @staticmethod
     def _environment():
@@ -262,9 +267,85 @@ class IsolatedOCR:
 
     def _memory_guard(self):
         if not sys.platform.startswith("linux"):
+            # An unknown/unmonitored host cannot authorize an increased budget.
+            select_memory_policy(None, self._worker_mb, self._reserve_mb)
             return None
         on_render = os.environ.get("RENDER", "").lower() == "true" or bool(os.environ.get("RENDER_SERVICE_ID"))
-        return _MemoryGuard.discover(self.worker_memory, self.reserve_memory, require_cgroup=on_render)
+        guard = _MemoryGuard.discover(360 * _MIB, 96 * _MIB, require_cgroup=on_render)
+        capacity = min((limit for _, limit in guard.limits), default=None)
+        try:
+            policy = select_memory_policy(capacity, self._worker_mb, self._reserve_mb)
+        except ValueError:
+            raise OCRMemoryLimitError("monitor_unavailable", reason="unsafe_memory_configuration") from None
+        guard.worker_limit = policy["worker_limit_mb"] * _MIB
+        guard.reserve = policy["reserve_mb"] * _MIB
+        guard.policy = policy
+        self.worker_memory, self.reserve_memory = guard.worker_limit, guard.reserve
+        return guard
+
+    def read_memory_status(self):
+        """Read current counters, without collecting, evicting, or stopping OCR."""
+        result = {"status": "ok", "busy": self.lock.locked(), "activity": self._activity,
+                  "platform": sys.platform, "parent_rss_mb": read_process_rss_mb(),
+                  "service_current_mb": None, "working_set_mb": None,
+                  "available_mb": None, "cgroups": [], "cgroups_truncated": False}
+        try:
+            guard = self._memory_guard()
+            if guard is None:
+                result.update(select_memory_policy(None, self._worker_mb, self._reserve_mb))
+                result.update(status="unsupported_platform", monitor_supported=False)
+                return result
+            result.update(guard.policy or select_memory_policy(None))
+            result["monitor_supported"] = bool(guard.limits)
+            # This read-only UI sample collects every ancestor even if one is
+            # under pressure. Every OCR execution still uses enforcing observe.
+            guard.observe(check_budget=False)
+            if any(current >= limit-guard.reserve for (_,limit),current in zip(guard.limits,guard.group_current)):
+                result["status"] = "pressure"
+            groups = [{"limit_mb": round(limit / _MIB, 1),
+                       "current_mb": round(current / _MIB, 1),
+                       "inactive_file_mb": round(inactive / _MIB, 1),
+                       "working_set_mb": round((current-inactive) / _MIB, 1),
+                       "stop_at_mb": round((limit-guard.reserve) / _MIB, 1)}
+                      for (_, limit), current, inactive in zip(guard.limits, guard.group_current, guard.inactive_file)]
+            result.update(cgroups=groups[:8], cgroups_truncated=len(groups) > 8)
+            if groups:
+                smallest = min(groups, key=lambda item: item["limit_mb"])
+                result.update(service_current_mb=smallest["current_mb"], working_set_mb=smallest["working_set_mb"],
+                              available_mb=max(0, round(min(x["stop_at_mb"]-x["current_mb"] for x in groups), 1)))
+            else:
+                result["status"] = "unavailable"
+            return result
+        except (OCRMemoryLimitError, OSError, ValueError):
+            # Never expose proc paths, deployment settings, or exception text.
+            result.update(status="unavailable", monitor_supported=False,
+                          service_limit_mb=None, worker_limit_mb=None, reserve_mb=None,
+                          service_stop_mb=None, det_limit=None, policy="unavailable")
+            return result
+
+    def cleanup_memory(self):
+        """Best effort, non-destructive cleanup, rejected while OCR owns the lock.
+
+The web caller must also hold its image-upload lock to exclude Pillow work.
+Only unreachable objects, unused heap pages, and fixed model file cache are
+eligible. No images, results, database data, or live worker are removed.
+"""
+        if not self.lock.acquire(blocking=False):
+            return {"status": "busy", "busy": True}
+        self._activity = "cleanup"
+        try:
+            before = self.read_memory_status()
+            heap = release_unused_memory()
+            cache = advise_model_cache(self.model_dir)
+            after = self.read_memory_status()
+            for snapshot in (before, after):
+                snapshot.update(busy=False, activity="idle")
+            complete = heap.get("status") in {"ok", "unsupported_platform", "trim_unavailable"} and cache.get("status") in {"ok", "unsupported"}
+            return {"status": "ok" if complete else "partial", "busy": False,
+                    "before": before, "after": after, "heap": heap, "model_cache": cache}
+        finally:
+            self._activity = "idle"
+            self.lock.release()
 
     @staticmethod
     def _stop(process):
@@ -349,6 +430,7 @@ class IsolatedOCR:
 
     def recognize(self, image_path):
         with self.lock, TemporaryDirectory(prefix="labelcheck-ocr-") as folder:
+            self._activity = "ocr"
             deadline = time.monotonic() + self.timeout
             recovery = {"attempts": 0, "automatic_retry": False, "reason": "", "cleanups": [], "model_cache": [], "model_loading": []}
             try:
@@ -360,16 +442,18 @@ class IsolatedOCR:
                     output = Path(folder) / f"result-{attempt}.json"
                     diagnostics = Path(folder) / "diagnostics.json"
                     diagnostics.unlink(missing_ok=True)
-                    command = [sys.executable, str(Path(__file__).with_name("ocr_engine.py")),
-                               str(Path(image_path).resolve()), "--model-dir", str(self.model_dir),
-                               "--diagnostics", str(diagnostics),
-                               "--output", str(output)]
                     try:
                         recovery["model_cache"].append({"stage":"before_attempt", "attempt":attempt,
                                                         **advise_model_cache(self.model_dir)})
                         if time.monotonic() >= deadline:
                             raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
                         guard = self._memory_guard()
+                        worker_limit = guard.worker_limit if isinstance(guard, _MemoryGuard) else self.worker_memory
+                        det_limit = 1600 if worker_limit >= 768 * _MIB else 1280
+                        command = [sys.executable, str(Path(__file__).with_name("ocr_engine.py")),
+                                   str(Path(image_path).resolve()), "--model-dir", str(self.model_dir),
+                                   "--diagnostics", str(diagnostics), "--det-limit", str(det_limit),
+                                   "--output", str(output)]
                         try:
                             returncode = self._run(command, guard, deadline=deadline)
                         finally:
@@ -409,3 +493,5 @@ class IsolatedOCR:
             except Exception as error:
                 error.recovery = recovery
                 raise
+            finally:
+                self._activity = "idle"

@@ -173,6 +173,10 @@ def changed_snapshot(base, current, changes):
         if barcode_ids:
             result["barcode_values"] = [rows[str(identifier)]["text"] for identifier in barcode_ids]
         result["known_fields"] = list(dict.fromkeys([*result.get("known_fields", []), *(["keep_days"] if result.get("keep_days") is not None else [])]))
+    elif result.get("source_kind") == "manual":
+        from manual_reference import fields_from_lines
+        result["fields"] = fields_from_lines(result.get("lines", []), result["name"])
+        result["known_fields"] = [key for key, value in result["fields"].items() if value]
     else:
         fields = extract_fields(result.get("lines", []))
         result["fields"] = {key: fields.get(key, {}).get("value", "") for key in TEXT_FIELDS}
@@ -197,8 +201,11 @@ def _context(engine, inspection):
     snapshot = inspection.get("template_snapshot") or {}
     source = snapshot.get("source")
     if not source or not source.get("code"):
+        from manual_reference import _context as manual_context
+        can_create, existing_code, _ = manual_context(engine, inspection)
         return None, {"editable": False, "kind": "photo_template" if inspection.get("template_id") else "unmatched",
             "photo_template_id": inspection.get("template_id") or "", "base_revision": 0, "history": [], "has_more": False,
+            "can_create_manual": can_create, "manual_reference_code": existing_code,
             "notice": "此紀錄使用照片標準，請從照片標準管理建立新版。" if inspection.get("template_id") else "請先選定唯一的比對來源，再修正標準。"}
     base = raw_draft(engine, str(source["code"]))
     if base is None:
@@ -226,7 +233,8 @@ def payload(engine, inspection):
     notice = effective.get("notice", "")
     if effective.get("standard_reference", {}).get("state") not in {"approved", "stale"}:
         notice = ("目前使用商品清單的已知資料作為比對依據；沒有版面的欄位與日期排程不會推造。"
-                  if base["source_kind"] == "catalog" else
+                  if base["source_kind"] == "catalog" else "目前使用人工確認的文字標準，只核對已列入內容及日期規則；沒有印標版面。"
+                  if base["source_kind"] == "manual" else
                   "目前使用標籤系統原始資料作為比對依據；有日期設定時會依本批基準日核對。修改後另存網站比對標準版本。")
     with engine.connect() as conn:
         history = conn.execute(select(versions.c.revision, versions.c.operation, versions.c.reviewer,
@@ -305,6 +313,9 @@ def save(engine, inspection, body):
                 snapshot = deepcopy(previous["snapshot"])
             else:
                 snapshot = changed_snapshot(base, effective, body.get("changes", {}))
+            if snapshot.get("source_kind") == "manual":
+                from manual_reference import validate_date_rules
+                validate_date_rules(snapshot)
             new_revision = current_revision + 1
             conn.execute(insert(versions).values(id=db.uid(), code=code, revision=new_revision,
                 source_revision=str(base["revision"]), operation=operation, snapshot=snapshot,
@@ -321,6 +332,8 @@ def save(engine, inspection, body):
 
 
 def register_routes(app, engine):
+    from manual_reference import register_routes as register_manual_routes
+    register_manual_routes(app, engine)
     @app.get("/api/inspections/<identifier>/standard")
     def get_comparison_standard(identifier):
         return jsonify(payload(engine, _inspection(engine, identifier)))

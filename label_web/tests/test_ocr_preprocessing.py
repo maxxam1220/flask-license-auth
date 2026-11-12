@@ -126,6 +126,29 @@ class OCRPreprocessingTests(unittest.TestCase):
         self.assertIn("PP-OCRv6 small-det + medium-rec", observed["engine"])
         self.assertNotIn("warnings", observed)
 
+    def test_larger_budget_preserves_detail_in_rotation_and_original_coordinates(self):
+        fake = FakeOCR(np.zeros((1800, 2400, 3), dtype=np.uint8),
+                      [result([], []), result(["客服電話0800-200-859"], [[[10, 10], [100, 10], [100, 30], [10, 30]]])])
+        engine = OCREngine("unused-model-directory", det_limit=1600)
+        engine.engine = fake
+        observed = engine.recognize("photo.jpg")
+        self.assertEqual(fake.calls[1][0], (1600, 1200, 3))
+        self.assertEqual(observed["preprocessing"]["det_limit"], 1600)
+        self.assertEqual(observed["lines"][0]["box"],
+                         [[15.0,1783.5],[15.0,1648.5],[45.0,1648.5],[45.0,1783.5]])
+        for x, y in observed["lines"][0]["box"]:
+            self.assertTrue(0 <= x <= 2400 and 0 <= y <= 1800)
+
+    def test_larger_detector_configuration_keeps_single_recognition_batch(self):
+        fake = FakeOCR(np.zeros((480, 640, 3), dtype=np.uint8),
+                      [result(["廠商地址新北市土城區中興路9號"], [[[40, 60], [240, 60], [240, 100], [40, 100]]])])
+        with TemporaryDirectory() as folder, patch("rapidocr.RapidOCR", return_value=fake) as factory:
+            OCREngine(folder, det_limit=1600).recognize("photo.png")
+        self.assertEqual(factory.call_args.kwargs["params"]["Det.limit_side_len"], 1600)
+        self.assertEqual(factory.call_args.kwargs["params"]["Rec.rec_batch_num"], 1)
+        with self.assertRaises(ValueError):
+            OCREngine("unused", det_limit=4096)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,11 @@ def _rss_mb():
     return None
 
 
+def read_process_rss_mb():
+    """Expose a read-only best-effort current-process measurement to the UI."""
+    return _rss_mb()
+
+
 @lru_cache(maxsize=1)
 def _malloc_trim():
     # The running process already has its allocator loaded. Do not invoke

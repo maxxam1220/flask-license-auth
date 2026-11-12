@@ -349,9 +349,162 @@ class IsolatedOCRTests(unittest.TestCase):
         self.assertEqual(env["GLIBC_TUNABLES"].count("arena_max="), 1)
 
     def test_unbounded_settings_are_rejected(self):
-        for kwargs in ({"worker_memory_mb": 512}, {"reserve_memory_mb": 0}):
+        for kwargs in ({"worker_memory_mb": 1281}, {"reserve_memory_mb": 0}, {"worker_memory_mb": True}):
             with self.assertRaises(ValueError):
                 IsolatedOCR("models", **kwargs)
+
+
+class RuntimeMemoryTests(unittest.TestCase):
+    def setUp(self):
+        environment=patch.dict(os.environ,{"LABELCHECK_OCR_WORKER_MB":"", "LABELCHECK_OCR_RESERVE_MB":""})
+        environment.start();self.addCleanup(environment.stop)
+
+    @staticmethod
+    def guard(*capacities):
+        return _MemoryGuard([(Path(f"unused-{i}"),size*_MIB) for i,size in enumerate(capacities)],360*_MIB,96*_MIB)
+
+    def test_auto_budget_follows_smallest_ancestor_and_refreshes_each_attempt(self):
+        large=self.guard(2048,4096)
+        smaller=self.guard(2048,512)
+        with patch("ocr_worker.sys.platform","linux"), \
+             patch.object(_MemoryGuard,"discover",side_effect=[large,smaller]) as discover:
+            worker=IsolatedOCR("models")
+            first=worker._memory_guard(); second=worker._memory_guard()
+        self.assertEqual((first.worker_limit,first.reserve),(1280*_MIB,256*_MIB))
+        self.assertEqual((second.worker_limit,second.reserve),(360*_MIB,96*_MIB))
+        self.assertEqual(len(second.limits),2)  # No ancestor usage protection is discarded.
+        self.assertEqual(discover.call_count,2)
+
+    def test_environment_may_tighten_but_not_expand_safe_budget(self):
+        with patch("ocr_worker.sys.platform","linux"), \
+             patch.object(_MemoryGuard,"discover",side_effect=lambda *a,**k:self.guard(2048)), \
+             patch.dict(os.environ,{"LABELCHECK_OCR_WORKER_MB":"768", "LABELCHECK_OCR_RESERVE_MB":"320"}):
+            guard=IsolatedOCR("models")._memory_guard()
+        self.assertEqual((guard.worker_limit,guard.reserve),(768*_MIB,320*_MIB))
+        with patch("ocr_worker.sys.platform","linux"), \
+             patch.object(_MemoryGuard,"discover",return_value=self.guard(512)), \
+             patch.dict(os.environ,{"LABELCHECK_OCR_WORKER_MB":"768"}), \
+             self.assertRaises(OCRMemoryLimitError) as caught:
+            IsolatedOCR("models")._memory_guard()
+        self.assertEqual(caught.exception.reason,"unsafe_memory_configuration")
+
+    def test_detector_argument_uses_each_actual_worker_budget(self):
+        for capacity,expected in ((512,"1280"),(2048,"1600")):
+            commands=[]
+            def run(command,guard,deadline=None):
+                commands.append(command)
+                Path(command[-1]).write_text('{"lines":[],"engine":"TEST","elapsed":0.1}',encoding="utf-8")
+                return 0
+            with self.subTest(capacity=capacity), patch("ocr_worker.sys.platform","linux"), \
+                 patch.object(_MemoryGuard,"discover",return_value=self.guard(capacity)), \
+                 patch.object(IsolatedOCR,"_run",side_effect=run), \
+                 patch("ocr_worker.release_unused_memory",return_value={"status":"ok"}), \
+                 patch("ocr_worker.advise_model_cache",return_value={"status":"ok"}):
+                worker=IsolatedOCR("models")
+                result=worker.recognize("photo.jpg")
+            command=commands[0]
+            self.assertEqual(command[command.index("--det-limit")+1],expected)
+            self.assertEqual(result["memory_guard"]["policy"]["det_limit"],int(expected))
+            self.assertFalse(worker.lock.locked())
+            self.assertEqual(worker._activity,"idle")
+
+    def test_status_is_readonly_reports_capacity_current_and_pressure(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/"memory.current"
+            path.write_text(str(400*_MIB))
+            path.with_name("memory.stat").write_text(f"inactive_file {100*_MIB}\n")
+            def discovered(*args,**kwargs):
+                return _MemoryGuard([(path,2048*_MIB)],360*_MIB,96*_MIB)
+            with patch("ocr_worker.sys.platform","linux"),patch.object(_MemoryGuard,"discover",side_effect=discovered), \
+                 patch("ocr_worker.read_process_rss_mb",return_value=81.2), \
+                 patch("ocr_worker.release_unused_memory") as cleanup,patch("ocr_worker.advise_model_cache") as advice:
+                worker=IsolatedOCR("models")
+                result=worker.read_memory_status()
+                self.assertEqual(result["status"],"ok")
+                self.assertEqual((result["service_limit_mb"],result["service_current_mb"],result["working_set_mb"]),(2048,400,300))
+                self.assertEqual((result["worker_limit_mb"],result["service_stop_mb"],result["det_limit"]),(1280,1792,1600))
+                self.assertNotIn(folder,str(result))
+                path.write_text(str(1800*_MIB))
+                self.assertEqual(worker.read_memory_status()["status"],"pressure")
+                path.unlink()
+                unavailable=worker.read_memory_status()
+                self.assertEqual(unavailable["status"],"unavailable")
+                self.assertIsNone(unavailable["service_current_mb"])
+            cleanup.assert_not_called();advice.assert_not_called()
+
+    def test_windows_status_explicitly_reports_no_cgroup_monitor(self):
+        with patch("ocr_worker.sys.platform","win32"),patch("ocr_worker.read_process_rss_mb",return_value=None):
+            result=IsolatedOCR("models").read_memory_status()
+        self.assertEqual(result["status"],"unsupported_platform")
+        self.assertFalse(result["monitor_supported"])
+        self.assertIsNone(result["service_limit_mb"])
+
+    def test_larger_capacity_enforces_its_new_rss_and_service_limits(self):
+        with TemporaryDirectory() as folder:
+            root=Path(folder);usage=root/"memory.current"
+            usage.write_text(str(1700*_MIB))
+            process=root/"123";process.mkdir()
+            status=process/"status";status.write_text(f"VmRSS:\t{1100*1024} kB\n")
+            original=_MemoryGuard([(usage,2048*_MIB)],360*_MIB,96*_MIB,root)
+            with patch("ocr_worker.sys.platform","linux"),patch.object(_MemoryGuard,"discover",return_value=original):
+                guard=IsolatedOCR("models")._memory_guard()
+            guard.observe(123)  # The larger plan is no longer capped at 360 MiB.
+            usage.write_text(str(1792*_MIB))
+            with self.assertRaises(OCRMemoryLimitError) as caught:
+                guard.observe(123)
+            self.assertEqual((caught.exception.kind,caught.exception.limit_mb),("service_budget",1792))
+            usage.write_text(str(1500*_MIB));status.write_text(f"VmRSS:\t{1280*1024} kB\n")
+            with self.assertRaises(OCRMemoryLimitError) as caught:
+                guard.observe(123)
+            self.assertEqual((caught.exception.kind,caught.exception.limit_mb),("worker_budget",1280))
+
+    def test_readonly_status_reports_every_ancestor_when_first_is_under_pressure(self):
+        with TemporaryDirectory() as folder:
+            root=Path(folder);leaf=root/"leaf";parent=root/"parent"
+            leaf.write_text(str(420*_MIB));parent.write_text(str(600*_MIB))
+            guard=_MemoryGuard([(leaf,512*_MIB),(parent,2048*_MIB)],360*_MIB,96*_MIB)
+            with patch("ocr_worker.sys.platform","linux"),patch.object(_MemoryGuard,"discover",return_value=guard):
+                result=IsolatedOCR("models").read_memory_status()
+            self.assertEqual(result["status"],"pressure")
+            self.assertEqual([row["current_mb"] for row in result["cgroups"]],[420,600])
+            self.assertEqual(result["available_mb"],0)
+
+    def test_cleanup_busy_never_collects_evicts_or_stops_a_worker(self):
+        worker=IsolatedOCR("models")
+        worker.lock.acquire()
+        try:
+            with patch("ocr_worker.release_unused_memory") as cleanup, \
+                 patch("ocr_worker.advise_model_cache") as advice,patch.object(worker,"_stop") as stop:
+                result=worker.cleanup_memory()
+            self.assertEqual(result,{"status":"busy","busy":True})
+            cleanup.assert_not_called();advice.assert_not_called();stop.assert_not_called()
+        finally:
+            worker.lock.release()
+
+    def test_cleanup_holds_lock_and_reports_actual_before_after_without_file_changes(self):
+        worker=IsolatedOCR("models")
+        def collect():
+            self.assertTrue(worker.lock.locked())
+            self.assertEqual(worker._activity,"cleanup")
+            return {"status":"ok","rss_before_mb":100,"rss_after_mb":100}
+        with patch.object(worker,"read_memory_status",side_effect=[{"service_current_mb":200},{"service_current_mb":201}]), \
+             patch("ocr_worker.release_unused_memory",side_effect=collect), \
+             patch("ocr_worker.advise_model_cache",return_value={"status":"partial","failed":["model"]}):
+            result=worker.cleanup_memory()
+        self.assertEqual(result["status"],"partial")
+        self.assertEqual(result["before"]["service_current_mb"],200)
+        self.assertEqual(result["after"]["service_current_mb"],201)  # No invented reclaimed amount.
+        self.assertFalse(worker.lock.locked())
+        self.assertEqual(worker._activity,"idle")
+
+    def test_cleanup_exception_always_releases_shared_lock(self):
+        worker=IsolatedOCR("models")
+        with patch.object(worker,"read_memory_status",return_value={}), \
+             patch("ocr_worker.release_unused_memory",side_effect=RuntimeError("TEST")), \
+             self.assertRaises(RuntimeError):
+            worker.cleanup_memory()
+        self.assertFalse(worker.lock.locked())
+        self.assertEqual(worker._activity,"idle")
 
     def test_exited_posix_leader_still_has_its_process_group_terminated(self):
         process = FakeProcess(0)

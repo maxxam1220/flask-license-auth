@@ -4,7 +4,7 @@ services:
     name: fuhe-label-check
     runtime: python
     region: singapore
-    plan: 0.5c-512mb
+    plan: 1c-2g
     rootDir: label_web
     buildCommand: pip install -r requirements.txt && python prepare_models.py
     startCommand: python run.py

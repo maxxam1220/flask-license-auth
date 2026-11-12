@@ -7,9 +7,10 @@ from copy import deepcopy
 from difflib import SequenceMatcher
 from sqlalchemy import text
 from validation import extract_fields, TEXT_FIELDS, traditional_display
-from source_validation import normalize_text
+from source_validation import normalize_text, _kind
 import reference_catalog
 import standard_reference
+import manual_reference
 
 
 _SKU_LABEL = r"(?:貨號|货号|商品編號|商品编号|品號|品号)"
@@ -51,7 +52,7 @@ def _desktop_available(engine):
 
 
 def available(engine):
-    return _desktop_available(engine) or reference_catalog.available(engine)
+    return _desktop_available(engine) or reference_catalog.available(engine) or manual_reference.available(engine)
 
 
 def search(engine, query):
@@ -66,6 +67,10 @@ def search(engine, query):
     items.extend({"code": reference_catalog.PREFIX + str(row["code"]), "name": row["name"], "source_kind": "catalog"}
                  for row in reference_catalog.records(engine)
                  if any(wanted in _identity_text(row.get(key)) for key in ("code", "name", "barcode")))
+    items.extend({"code": row["code"], "name": row["name"], "source_kind": "manual"}
+                 for row in manual_reference.records(engine)
+                 if any(wanted in _identity_text(value) for value in [row["code"], row["name"],
+                    *(line["text"] for line in row["snapshot"].get("lines", []))]))
     for code, version in standard_reference.current_versions(engine).items():
         base = raw_draft(engine, code)
         if base is None:
@@ -86,6 +91,8 @@ def draft(engine, code):
 
 def raw_draft(engine, code):
     """Current external source, without web overrides or per-inspection dates."""
+    if str(code).startswith(manual_reference.PREFIX):
+        return manual_reference.draft(engine, code)
     if str(code).startswith(reference_catalog.PREFIX):
         return reference_catalog.draft(engine, code)
     with engine.connect() as conn:
@@ -173,7 +180,7 @@ def raw_catalog(engine):
                 'FROM barcode53."BcDtl" WHERE LEFT("Attr", 1)=\'3\' AND "ObjContent" IS NOT NULL')).mappings().all()
     catalog = {str(row["code"]).strip(): {"code": str(row["code"]).strip(), "name": str(row["name"] or ""),
                 "sku": set(), "barcode": set(), "spec": set(), "origin": set(), "text": set(),
-                "source_kind": "desktop"} for row in masters}
+                "source_kind": "desktop", "text_by_kind": {}} for row in masters}
     for row in details:
         item = catalog.get(str(row["code"]).strip())
         if item is None:
@@ -185,6 +192,8 @@ def raw_catalog(engine):
             # A barcode's case, punctuation, and spaces are payload, not typography.
             if part.strip() and not _fixed_barcodes(part):
                 item["text"].add(normalize_text(part))
+                if kind := _kind(part):
+                    item["text_by_kind"].setdefault(kind, set()).add(normalize_text(part))
         for key, label in (("spec", r"(?:規格|规格)"), ("origin", r"(?:原料[產産产]地|原[產産产]地|[產産产]地)")):
             for part in content.splitlines():
                 match = re.search(label + r"\s*[:：]?\s*(.+)", part)
@@ -199,7 +208,27 @@ def raw_catalog(engine):
         catalog[code] = {"code": code, "name": row["name"], "sku": set(),
                          "barcode": {barcode} if barcode else set(), "spec": set(), "origin": set(),
                          "text": set(), "source_kind": "catalog", "catalog_record": row}
+    for row in manual_reference.records(engine):
+        source = row["snapshot"]
+        catalog[row["code"]] = _manual_catalog_item(source)
     return catalog
+
+
+def _manual_catalog_item(source):
+    item = {"code": source["code"], "name": source["name"], "sku": set(),
+            "barcode": set(source.get("barcode_values", [])), "spec": set(), "origin": set(),
+            "text": set(), "text_by_kind": {}, "source_kind": "manual"}
+    for line in source.get("lines", []):
+        value = line["text"]
+        item["sku"].update(_identifiers(value, _SKU_LABEL))
+        if not _fixed_barcodes(value):
+            item["text"].add(normalize_text(value))
+            if kind := _kind(value):
+                item["text_by_kind"].setdefault(kind, set()).add(normalize_text(value))
+    for key in ("spec", "origin"):
+        if value := source.get("fields", {}).get(key):
+            item[key].add(_identity_text(value))
+    return item
 
 
 def _catalog(engine):
@@ -214,18 +243,22 @@ def _catalog(engine):
         source = standard_reference.apply_current(engine, base, version)
         item = deepcopy(catalog[code])
         item["name"] = source["name"]
-        if source.get("source_kind") == "catalog":
+        if source.get("source_kind") == "manual":
+            item = _manual_catalog_item(source)
+        elif source.get("source_kind") == "catalog":
             barcode = next(iter(source.get("barcode_values", [])), "")
             item["barcode"] = set(source.get("barcode_values", []))
             item["catalog_record"] = dict(item["catalog_record"], name=source["name"], keep_days=source.get("keep_days"), barcode=barcode)
         else:
-            item.update(sku=set(), barcode=set(), spec=set(), origin=set(), text=set())
+            item.update(sku=set(), barcode=set(), spec=set(), origin=set(), text=set(), text_by_kind={})
             for row in source.get("lines", []):
                 value = row["text"]
                 item["sku"].update(_identifiers(value, _SKU_LABEL))
                 item["barcode"].update(_fixed_barcodes(value))
                 if not _fixed_barcodes(value):
                     item["text"].add(normalize_text(value))
+                    if kind := _kind(value):
+                        item["text_by_kind"].setdefault(kind, set()).add(normalize_text(value))
             for key in ("spec", "origin"):
                 value = source.get("fields", {}).get(key)
                 if value:
@@ -304,6 +337,8 @@ def resolve(engine, ocr_lines, source_code=""):
                         # a different barcode. Barcode-only discovery still uses
                         # affirmative known matches, never all blank records.
                         matched |= {code for code in name_candidates if not catalog[code]["barcode"]}
+                    if key == "sku" and matched & name_candidates and any(catalog[code].get("source_kind") == "manual" for code in name_candidates):
+                        matched |= {code for code in name_candidates if not catalog[code]["sku"]}
                     signals.append(matched)
         if signals:
             candidates = set.intersection(*signals)
@@ -348,6 +383,12 @@ def resolve(engine, ocr_lines, source_code=""):
                     if not matches:
                         continue
                     supported = matches | {code for code in original_candidates if catalog[code].get("source_kind") == "catalog"}
+                    if any(catalog[code].get("source_kind") == "manual" for code in original_candidates):
+                        # A partial manual reference cannot disprove an omitted field,
+                        # nor can its subset of text overrule an unknown peer field.
+                        kind = _kind(line["text"])
+                        supported |= {code for code in original_candidates
+                                      if not kind or not catalog[code].get("text_by_kind", {}).get(kind)}
                     # Explicit spec/origin already retain unknown competing values.
                     if any(observed == normalize_text(field.get("value", "")) for key, field in fields.items() if key in {"spec", "origin"}):
                         continue
