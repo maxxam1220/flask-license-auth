@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261112-readable">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261112-sidebar">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
@@ -23,14 +23,14 @@
 </div>
 <div id="app-shell" class="shell" hidden>
   <aside class="sidebar">
-    <a href="#inspect" class="brand"><span class="brand-mark"><svg><use href="#i-scan"/></svg></span><span>標籤核對<small>福和生鮮 · 品質管理</small></span></a>
+    <a href="#inspect" class="brand"><span class="brand-mark"><svg><use href="#i-scan"/></svg></span><span class="brand-copy">標籤核對<small>福和生鮮 · 品質管理</small></span></a>
     <p class="nav-label">工作區</p>
     <nav aria-label="主要功能">
       <button data-view="inspect" class="nav-item active"><svg><use href="#i-scan"/></svg><span>檢查標籤</span></button>
       <button data-view="library" class="nav-item"><svg><use href="#i-library"/></svg><span>標準標籤庫</span><span id="nav-count" class="nav-count">0</span></button>
       <button data-view="history" class="nav-item"><svg><use href="#i-clock"/></svg><span>檢查紀錄</span></button>
     </nav>
-    <div class="sidebar-bottom"><span class="status-dot"></span>第一版 · 逐字核對<button id="logout" class="quiet">登出</button></div>
+    <div class="sidebar-bottom"><span class="sidebar-status"><span class="status-dot"></span>第一版 · 逐字核對</span><button id="logout" class="quiet">登出</button></div>
   </aside>
   <main>
     <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><div class="header-tools"><span class="top-badge">掃描辨識 · 標準核對</span><div class="reading-size" role="group" aria-label="閱讀字級"><button type="button" data-text-size-choice="large" aria-pressed="true">大字</button><button type="button" data-text-size-choice="xl" aria-pressed="false">特大字</button></div></div></header>
