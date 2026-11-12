@@ -5,9 +5,10 @@ from functools import lru_cache
 import re
 import unicodedata
 from opencc import OpenCC
-from label_geometry import analyze_label_scope, scope_review_result, date_evidence
+from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
+                            date_evidence_overlaps, without_date_evidence, DATE_KINDS)
 
-RULE_VERSION = "1.4"
+RULE_VERSION = "1.5"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
@@ -265,8 +266,18 @@ def _advisory_candidate(ordered):
 def extract_fields(lines, expected=None):
     found = {}
     ordered = sorted(lines, key=lambda x: (min(p[1] for p in x["box"]), min(p[0] for p in x["box"])))
+    for observed in date_observations(ordered):
+        key = observed["kind"]
+        candidate = _candidate(observed["value"], observed["lines"], observed["ambiguous"])
+        candidate["evidence_spans"] = observed["evidence_spans"]
+        if key in found:
+            found[key]["ambiguous"] = True
+        else:
+            found[key] = candidate
     product_rows = product_row_candidates(ordered)
     for key, alias in ALIASES.items():
+        if key in DATE_KINDS:
+            continue
         candidates = []
         for i, line in enumerate(ordered):
             match = re.search(alias + r"\s*[：:]?\s*", line["text"])
@@ -279,12 +290,6 @@ def extract_fields(lines, expected=None):
                 continue
             value = re.split(ALL_KEYS, line["text"][match.end():], maxsplit=1)[0].strip(" ：:")
             evidence = [line]
-            if key in ("manufacture", "expiry", "arrival"):
-                date_candidate = date_evidence(line, value, ordered)
-                value, evidence = date_candidate["value"], date_candidate["lines"]
-                if value:
-                    candidates.append(_candidate(value, evidence, date_candidate["ambiguous"]))
-                continue
             # A value may be detected as a separate box on the same row.
             if not value:
                 nxt = _next_value(line, ordered)
@@ -373,7 +378,7 @@ def extract_fields(lines, expected=None):
         if first not in ("manufacture", "expiry", "arrival"):
             continue
         for second, other in found.items():
-            if second in ("manufacture", "expiry", "arrival") and first != second and set(field["line_ids"]) & set(other["line_ids"]):
+            if second in DATE_KINDS and first != second and date_evidence_overlaps(field, other):
                 field["ambiguous"] = other["ambiguous"] = True
     return found
 
@@ -410,7 +415,7 @@ def _finish_result(lines, result):
     for line in lines:
         if line["id"] not in covered:
             continue
-        remainder = line["text"]
+        remainder = without_date_evidence(line, {key: field for key, field in fields.items() if key in checked_keys})
         for check in checks:
             if line["id"] not in check.get("line_ids", []):
                 continue

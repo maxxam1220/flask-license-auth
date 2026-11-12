@@ -5,10 +5,11 @@ import re
 import unicodedata
 
 from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
-from label_geometry import analyze_label_scope, scope_review_result, date_evidence
+from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
+                            date_evidence_overlaps, without_date_evidence)
 
 
-RULE_VERSION = "1.9"
+RULE_VERSION = "1.10"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -280,13 +281,11 @@ def _raw_date_value(text):
 
 def _date_fields(lines):
     found = {}
-    for line in lines:
-        key = _heading(line["text"])
-        if key not in DATE_KEYS:
-            continue
-        observed = date_evidence(line, _raw_date_value(line["text"]), lines)
+    for observed in date_observations(lines):
+        key = observed["kind"]
         value, evidence = observed["value"], observed["lines"]
         candidate = {"value": value, "line_ids": [item["id"] for item in evidence],
+                     "evidence_spans": observed["evidence_spans"],
                      "score": min(float(item.get("score", 0)) for item in evidence),
                      "ambiguous": observed["ambiguous"] or any(item.get("human_uncertain") or (item.get("ambiguous", False) and not item.get("human_verified")) for item in evidence),
                      "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in evidence)}
@@ -297,7 +296,7 @@ def _date_fields(lines):
     # A standalone number/date box must never fill two different date headings.
     for first, field in found.items():
         for second, other in found.items():
-            if first != second and set(field["line_ids"]) & set(other["line_ids"]):
+            if first != second and date_evidence_overlaps(field, other):
                 field["ambiguous"] = other["ambiguous"] = True
     return found
 
@@ -357,7 +356,7 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
 
     def add(key, label, status, reason, expected, actual, identifiers, score=None, **extra):
         checks.append(dict(key=key, label=label, status=status, reason=reason, expected=expected, actual=actual,
-                           raw_actual=actual, line_ids=identifiers, score=score, source="date", **extra))
+                           raw_actual=actual, line_ids=list(dict.fromkeys(identifiers)), score=score, source="date", **extra))
 
     for key in DATE_KEYS:
         if key not in expected_keys:
@@ -430,12 +429,13 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         bad_reason = {"date_order": "有效日期早於製造日期。", "arrival_manufacture": "到店日早於製造日期。", "arrival_expiry": "到店日晚於有效日期。"}[key]
         add(key, label, "review" if low else "fail" if bad else "pass", bad_reason if bad else "日期先後順序合理。",
             expectation, f"{a['date']} → {b['date']}", fields[first]["line_ids"] + fields[second]["line_ids"])
-    if (source or {}).get("source_kind") == "manual" and source.get("keep_days") is not None and all(key in parsed for key in ("manufacture","expiry")):
+    if (source or {}).get("source_kind") in {"manual", "catalog"} and source.get("keep_days") is not None and all(key in parsed for key in ("manufacture","expiry")):
         days = (parsed["expiry"]["date"]-parsed["manufacture"]["date"]).days
         low = any(_field_uncertain(fields[key]) for key in ("manufacture","expiry"))
         same = days == source["keep_days"]
-        add("keep_days", "保存天數", "review" if low else "pass" if same else "fail",
-            "製造與有效日期的間隔符合人工確認的保存天數。" if same else "製造與有效日期的間隔不符合人工確認的保存天數。",
+        reference = "清單保存天數" if source["source_kind"] == "catalog" else "人工確認的保存天數"
+        add("keep_days", reference, "review" if low else "pass" if same else "fail",
+            "日期辨識不確定，無法確認保存天數間隔。" if low else f"製造與有效日期的間隔符合{reference}。" if same else f"製造與有效日期的間隔不符合{reference}。",
             f"相差 {source['keep_days']} 天",f"相差 {days} 天",fields["manufacture"]["line_ids"]+fields["expiry"]["line_ids"])
     if base:
         if "expiry" in parsed:
@@ -485,8 +485,9 @@ def _decorate(result, lines):
             matching = [check for check in result["checks"] if line["id"] in check.get("line_ids", [])]
             if any(check.get("source") == "database" for check in matching):
                 continue
-            remainder = line["text"]
-            for value in sorted({check.get("actual", "") for check in matching}, key=len, reverse=True):
+            remainder = without_date_evidence(line, result["fields"])
+            remaining_checks = [check for check in matching if remainder == line["text"] or check.get("source") != "date"]
+            for value in sorted({check.get("actual", "") for check in remaining_checks}, key=len, reverse=True):
                 if value:
                     remainder = remainder.replace(value, "", 1)
             if not normalize_text(remainder):
@@ -574,7 +575,7 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
                        "reason":"原始來源資料已變更，先前人工比對標準已停用；請重新確認標準後再核對。"})
     manual_source = (source or {}).get("source_kind") == "manual"
     notes.insert(0, ("依人工提供並確認的文字與日期規則核對；沒有完整印標版面，未提供的內容仍需確認。" if manual_source else
-                    "依清單核對已知品名、條碼及印出的保存天數；清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
+                    "依清單核對已知品名、條碼與保存天數；完整製造及有效日期可核對天數間隔，但清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
                     f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))
     result = {"checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,

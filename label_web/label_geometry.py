@@ -17,6 +17,80 @@ ANCHORS = {
 DATE_KINDS = {"manufacture", "expiry", "arrival"}
 
 
+def date_segments(line):
+    """Locate date headings and their raw, non-overlapping character ranges.
+
+    OCR can put several printed date fields in one box. Character positions,
+    unlike inferred sub-boxes or expected dates, identify their actual values.
+    """
+    text = str(line.get("text", ""))
+    headings = []
+    for kind in sorted(DATE_KINDS):
+        pattern = re.sub(r"[\u4e00-\u9fff]", lambda match: match[0] + r"\s*", ANCHORS[kind][1][1:])
+        headings.extend((match.start(), match.end(), kind) for match in re.finditer(pattern, text))
+    headings.sort()
+    segments = []
+    for position, (start, heading_end, kind) in enumerate(headings):
+        end = headings[position + 1][0] if position + 1 < len(headings) else len(text)
+        value_start, value_end = heading_end, end
+        while value_start < value_end and (text[value_start].isspace() or text[value_start] in ":："):
+            value_start += 1
+        while value_end > value_start and text[value_end - 1].isspace():
+            value_end -= 1
+        segments.append({"kind": kind, "value": text[value_start:value_end], "start": start, "end": end,
+                         "value_start": value_start, "value_end": value_end})
+    return segments
+
+
+def date_observations(lines):
+    """Share raw date evidence between both validators, without modifying OCR."""
+    observations = []
+    for line in lines:
+        segments = date_segments(line)
+        # Two headings with only one value cannot be assigned confidently from
+        # one shared box. Do not borrow a nearby value for either sub-heading.
+        shared_empty = len(segments) > 1 and any(not segment["value"] for segment in segments)
+        for segment in segments:
+            observed = (date_evidence(line, segment["value"], lines) if len(segments) == 1
+                        else {"value": segment["value"], "lines": [line], "ambiguous": shared_empty})
+            observed["kind"] = segment["kind"]
+            observed["evidence_spans"] = [{"line_id": line["id"], "start": segment["start"], "end": segment["end"]}]
+            observed["evidence_spans"].extend({"line_id": other["id"], "start": 0, "end": len(other["text"])}
+                                               for other in observed["lines"] if other["id"] != line["id"])
+            observations.append(observed)
+    return observations
+
+
+def date_evidence_overlaps(first, second):
+    """The same OCR line is safe only when its date character spans are disjoint."""
+    common = set(first["line_ids"]) & set(second["line_ids"])
+    for identifier in common:
+        left = [span for span in first.get("evidence_spans", []) if span["line_id"] == identifier]
+        right = [span for span in second.get("evidence_spans", []) if span["line_id"] == identifier]
+        if not left or not right or any(max(a["start"], b["start"]) < min(a["end"], b["end"]) for a in left for b in right):
+            return True
+    return False
+
+
+def without_date_evidence(line, fields):
+    """Remove checked date spans only; unrelated prefix text stays unverified."""
+    spans = [span for key, field in fields.items() if key in DATE_KINDS
+             for span in field.get("evidence_spans", []) if span["line_id"] == line["id"]]
+    text = line["text"]
+    # Union spans before slicing so overlapping/conflicting observations cannot
+    # shift offsets and accidentally consume unrelated text.
+    merged = []
+    for span in sorted(spans, key=lambda item: item["start"]):
+        start, end = span["start"], span["end"]
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    for start, end in reversed(merged):
+        text = text[:start] + text[end:]
+    return text
+
+
 def compact(text):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text or "")))
 
@@ -50,6 +124,8 @@ def anchor_kind(text):
 
 
 def _same_observation(a, b):
+    if a.get("_date_span") != b.get("_date_span"):
+        return False
     if compact(a["text"]) != compact(b["text"]):
         return False
     aa, bb = bounds(a), bounds(b)
@@ -105,8 +181,13 @@ def analyze_label_scope(lines):
     anchors = {}
     for line in lines:
         key = anchor_kind(line.get("text", ""))
-        if key and not any(_same_observation(line, other) for other in anchors.get(key, [])):
+        if key and key not in DATE_KINDS and not any(_same_observation(line, other) for other in anchors.get(key, [])):
             anchors.setdefault(key, []).append(line)
+        for segment in date_segments(line):
+            key = segment["kind"]
+            observed = dict(line, _date_span=(segment["start"], segment["end"]))
+            if not any(_same_observation(observed, other) for other in anchors.get(key, [])):
+                anchors.setdefault(key, []).append(observed)
     issues = []
     for key, observed in anchors.items():
         observed=_footer_observations(key,observed,lines)
