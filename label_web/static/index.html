@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261112-readable">
+  <script src="/static/reading.js?v=20261112-readable" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -32,7 +33,7 @@
     <div class="sidebar-bottom"><span class="status-dot"></span>第一版 · 逐字核對<button id="logout" class="quiet">登出</button></div>
   </aside>
   <main>
-    <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><span class="top-badge">掃描辨識 · 標準核對</span></header>
+    <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><div class="header-tools"><span class="top-badge">掃描辨識 · 標準核對</span><div class="reading-size" role="group" aria-label="閱讀字級"><button type="button" data-text-size-choice="large" aria-pressed="true">大字</button><button type="button" data-text-size-choice="xl" aria-pressed="false">特大字</button></div></div></header>
     <section id="view-inspect" class="view">
       <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">拍照後自動尋找系統標籤與商品清單，查看每一列的檢查結果。</p></div></div>
       <div class="steps" aria-label="檢查流程"><span><b>1</b>拍照或選照片</span><i></i><span><b>2</b>自動辨識核對</span><i></i><span><b>3</b>查看相符與差異</span></div>
