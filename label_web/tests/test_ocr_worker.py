@@ -390,6 +390,131 @@ class MemoryGuardTests(unittest.TestCase):
     def guard(self, required=True):
         return _MemoryGuard.discover(360*_MIB, 96*_MIB, self.proc, require_cgroup=required)
 
+    def pressure_run(self, advice, *, used=385, inactive=100, rss=224, waits=None, clock=None, deadline=None):
+        self.fixture()
+        (self.mount/"memory.current").write_text(str(int(used*_MIB)))
+        (self.mount/"memory.stat").write_text(f"inactive_file {int(inactive*_MIB)}\n")
+        process=FakeProcess(None)
+        (self.proc/str(process.pid)).mkdir()
+        status=self.proc/str(process.pid)/"status"
+        status.write_text(f"State:\tR (running)\nVmRSS:\t{int(rss*1024)} kB\n")
+        guard=self.guard()
+        worker=IsolatedOCR("models")
+        def wait(timeout=None):
+            process.waited=True
+            if process.returncode is not None:
+                return process.returncode
+            if waits:
+                return waits(process)
+            process.returncode=0
+            return 0
+        process.wait=wait
+        def stop(value):
+            value.kill();value.wait(timeout=5)
+        with patch("ocr_worker.subprocess.Popen",return_value=process), \
+             patch.object(worker,"_stop",side_effect=stop), \
+             patch("ocr_worker.advise_model_cache",side_effect=lambda path:advice(guard,status)) as cache:
+            if clock is None:
+                code=worker._run(["TEST"],guard,deadline=deadline)
+            else:
+                with patch("ocr_worker.time.monotonic",side_effect=lambda:clock[0]):
+                    code=worker._run(["TEST"],guard,deadline=deadline)
+        return code,guard,cache,process
+
+    def test_proactive_cache_relief_remeasures_current_usage_before_resuming_poll(self):
+        def advice(guard,status):
+            self.assertEqual(guard.worker_current,224*_MIB)
+            (self.mount/"memory.current").write_text(str(310*_MIB))
+            (self.mount/"memory.stat").write_text(f"inactive_file {25*_MIB}\n")
+            return {"status":"ok","advised":["TEST allowlist"]}
+        code,guard,cache,process=self.pressure_run(advice)
+        self.assertEqual(code,0)
+        self.assertEqual(cache.call_count,1)
+        event=guard.metadata()["proactive_cache"][0]
+        self.assertEqual(event["before"]["cgroups"][0]["current_mb"],385)
+        self.assertEqual(event["after"]["cgroups"][0]["current_mb"],310)
+        self.assertEqual(event["after_status"],"safe")
+        self.assertEqual(guard.group_peaks,[385*_MIB])
+        self.assertFalse(guard.cache_pressure(guard.last_cache_reclaim+1))
+        self.assertTrue(process.killed and process.waited)
+
+    def test_unreclaimed_cache_still_hits_unchanged_service_limit(self):
+        def wait(process):
+            (self.mount/"memory.current").write_text(str(int(416.5*_MIB)))
+            raise subprocess.TimeoutExpired("TEST",.01)
+        with self.assertRaises(OCRMemoryLimitError) as caught:
+            self.pressure_run(lambda guard,status:{"status":"ok","advised":["TEST"]},waits=wait)
+        self.assertEqual(caught.exception.kind,"service_budget")
+        self.assertEqual(caught.exception.limit_mb,416)
+        self.assertEqual(len(caught.exception.memory_guard["proactive_cache"]),1)
+        self.assertEqual(caught.exception.memory_guard["proactive_cache"][0]["after"]["cgroups"][0]["current_mb"],385)
+
+    def test_crossing_stop_limit_or_worker_limit_never_triggers_cache_advice(self):
+        for used,rss,kind in ((416.5,224,"service_budget"),(385,361,"worker_budget")):
+            calls=[]
+            with self.subTest(kind=kind),self.assertRaises(OCRMemoryLimitError) as caught:
+                self.pressure_run(lambda guard,status:calls.append(True) or {},used=used,rss=rss)
+            self.assertEqual(caught.exception.kind,kind)
+            self.assertEqual(calls,[])
+
+    def test_immediate_post_advice_recheck_enforces_all_guards(self):
+        for failure in ("service_budget","worker_budget","monitor_unavailable"):
+            def advice(guard,status):
+                if failure=="service_budget":
+                    (self.mount/"memory.current").write_text(str(417*_MIB))
+                elif failure=="worker_budget":
+                    status.write_text("State:\tR (running)\nVmRSS:\t369664 kB\n")
+                else:
+                    (self.mount/"memory.current").unlink()
+                return {"status":"ok"}
+            with self.subTest(failure=failure),self.assertRaises(OCRMemoryLimitError) as caught:
+                self.pressure_run(advice)
+            self.assertEqual(caught.exception.kind,failure)
+            self.assertEqual(caught.exception.memory_guard["proactive_cache"][0]["after_status"],failure)
+
+    def test_low_cache_or_low_current_usage_does_not_spend_reclaim_budget(self):
+        for used,inactive in ((383,100),(385,15)):
+            code,guard,cache,process=self.pressure_run(lambda guard,status:{},used=used,inactive=inactive)
+            self.assertEqual(code,0)
+            cache.assert_not_called()
+            self.assertEqual(guard.cache_reclaims,[])
+
+    def test_ancestor_over_budget_is_not_bypassed_by_a_reclaimable_leaf(self):
+        self.fixture()
+        (self.mount/"memory.current").write_text(str(385*_MIB))
+        (self.mount/"memory.stat").write_text(f"inactive_file {100*_MIB}\n")
+        ancestor=self.root/"ancestor";ancestor.mkdir()
+        (ancestor/"memory.current").write_text(str(417*_MIB))
+        guard=_MemoryGuard([(self.mount/"memory.current",512*_MIB),(ancestor/"memory.current",512*_MIB)],360*_MIB,96*_MIB,self.proc)
+        with patch("ocr_worker.advise_model_cache") as cache,patch("ocr_worker.subprocess.Popen") as launch:
+            with self.assertRaises(OCRMemoryLimitError) as caught:
+                IsolatedOCR("models")._run(["TEST"],guard)
+        self.assertEqual(caught.exception.kind,"service_budget")
+        cache.assert_not_called();launch.assert_not_called()
+
+    def test_reclaim_frequency_count_and_original_deadline_are_bounded(self):
+        clock=[10.];advice_times=[];polls=[0]
+        def advice(guard,status):
+            advice_times.append(clock[0]);return {"status":"ok"}
+        def wait(process):
+            polls[0]+=1;clock[0]+=.05
+            if polls[0]>=30:
+                process.returncode=0;return 0
+            raise subprocess.TimeoutExpired("TEST",.01)
+        code,guard,cache,process=self.pressure_run(advice,waits=wait,clock=clock,deadline=15.)
+        self.assertEqual(code,0)
+        self.assertEqual(len(advice_times),8)
+        self.assertTrue(all(b-a>=.1 for a,b in zip(advice_times,advice_times[1:])))
+        self.assertEqual(len(guard.metadata()["proactive_cache"]),8)
+        fresh=self.guard()
+        self.assertEqual(fresh.cache_reclaims,[])
+        self.assertIsNone(fresh.last_cache_reclaim)
+        clock[0]=10.
+        def slow_advice(guard,status):
+            clock[0]=12.;return {"status":"ok"}
+        with self.assertRaisesRegex(RuntimeError,"exceeded"):
+            self.pressure_run(slow_advice,clock=clock,deadline=11.)
+
     def test_v2_and_v1_counters_and_reserved_service_budget(self):
         for version in (2, 1):
             with self.subTest(version=version):

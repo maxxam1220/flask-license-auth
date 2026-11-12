@@ -22,6 +22,10 @@ from model_cache import advise_model_cache
 
 _MIB = 1024 * 1024
 _POLL_SECONDS = .01
+_CACHE_EARLY_MARGIN = 32 * _MIB
+_CACHE_MIN_INACTIVE = 16 * _MIB
+_CACHE_RECLAIM_INTERVAL = .1
+_CACHE_RECLAIM_MAX = 8
 
 
 def _read_model_diagnostics(path):
@@ -68,9 +72,13 @@ class _MemoryGuard:
         self.proc_root = proc_root
         self.worker_peak = 0
         self.group_peaks = [0] * len(limits)
+        self.group_current = [0] * len(limits)
         self.inactive_file = [0] * len(limits)
         self.working_set_peaks = [0] * len(limits)
         self.oom_score_applied = False
+        self.worker_current = 0
+        self.cache_reclaims = []
+        self.last_cache_reclaim = None
 
     @classmethod
     def discover(cls, worker_limit_bytes, reserve_bytes, proc_root=Path("/proc"), require_cgroup=True):
@@ -134,6 +142,7 @@ class _MemoryGuard:
                 used = int(path.read_text().strip())
                 if used < 0:
                     raise ValueError("invalid cgroup counter")
+                self.group_current[index] = used
                 self.group_peaks[index] = max(self.group_peaks[index], used)
                 # Diagnostic only: do not assume that every inactive file page
                 # can be reclaimed before a burst allocation exhausts the cgroup.
@@ -158,6 +167,7 @@ class _MemoryGuard:
                 if match is None:
                     raise ValueError("missing RSS counter")
                 rss = int(match[1]) * 1024
+                self.worker_current = rss
                 self.worker_peak = max(self.worker_peak, rss)
                 if rss >= self.worker_limit:
                     raise OCRMemoryLimitError("worker_budget", rss, self.worker_limit)
@@ -184,11 +194,31 @@ class _MemoryGuard:
         except OSError:
             pass
 
+    def cache_pressure(self, now):
+        """Called only after a complete safe observe, never as a budget bypass."""
+        if len(self.cache_reclaims) >= _CACHE_RECLAIM_MAX:
+            return False
+        if self.last_cache_reclaim is not None and now - self.last_cache_reclaim < _CACHE_RECLAIM_INTERVAL:
+            return False
+        return any(used >= limit - self.reserve - _CACHE_EARLY_MARGIN and inactive >= _CACHE_MIN_INACTIVE
+                   for used, inactive, (_, limit) in zip(self.group_current, self.inactive_file, self.limits))
+
+    def cache_snapshot(self):
+        # Fixed upper bound; retain actual current counters separately from peaks.
+        return {"last_worker_rss_mb": round(self.worker_current / _MIB, 1),
+                "cgroups": [{"current_mb": round(used / _MIB, 1),
+                             "inactive_file_mb": round(inactive / _MIB, 1),
+                             "working_set_mb": round((used-inactive) / _MIB, 1),
+                             "stop_at_mb": round((limit-self.reserve) / _MIB, 1)}
+                            for used, inactive, (_, limit) in list(zip(self.group_current, self.inactive_file, self.limits))[:8]],
+                "truncated": len(self.limits) > 8}
+
     def metadata(self):
         return {"worker_rss_peak_mb": round(self.worker_peak / _MIB, 1),
                 "worker_rss_limit_mb": round(self.worker_limit / _MIB, 1),
                 "reserve_mb": round(self.reserve / _MIB, 1), "poll_interval_ms": 10,
                 "oom_score_adj_applied": self.oom_score_applied,
+                "proactive_cache": self.cache_reclaims,
                 "cgroups": [{"peak_mb": round(peak / _MIB, 1),
                              "limit_mb": round(limit / _MIB, 1),
                              "stop_at_mb": round((limit - self.reserve) / _MIB, 1),
@@ -270,6 +300,29 @@ class IsolatedOCR:
                 if guard is not None:
                     try:
                         guard.observe(process.pid)
+                        if isinstance(guard, _MemoryGuard):
+                            now = time.monotonic()
+                            if guard.cache_pressure(now):
+                                if now >= deadline:
+                                    raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
+                                event = {"number":len(guard.cache_reclaims)+1, "before":guard.cache_snapshot()}
+                                guard.cache_reclaims.append(event)
+                                guard.last_cache_reclaim = now
+                                try:
+                                    # Parent-side advice can run while ORT is
+                                    # still loading the large recognition model.
+                                    # The original stop budgets remain active.
+                                    event["advice"] = advise_model_cache(self.model_dir)
+                                    guard.observe(process.pid)
+                                    event["after_status"] = "safe"
+                                except OCRMemoryLimitError as error:
+                                    event["after_status"] = error.kind
+                                    raise
+                                finally:
+                                    event["after"] = guard.cache_snapshot()
+                                    event["duration_ms"] = round((time.monotonic()-now)*1000, 2)
+                                if time.monotonic() >= deadline:
+                                    raise RuntimeError(f"OCR worker exceeded {self.timeout} seconds")
                     except OCRMemoryLimitError as error:
                         # During exit Linux can remove the memory map (and VmRSS)
                         # before waitpid can reap the child. Only that child-/proc
@@ -320,6 +373,9 @@ class IsolatedOCR:
                         try:
                             returncode = self._run(command, guard, deadline=deadline)
                         finally:
+                            if isinstance(guard, _MemoryGuard) and guard.cache_reclaims:
+                                recovery.setdefault("proactive_cache", []).append({"attempt":attempt,
+                                                                                  "events":guard.cache_reclaims})
                             recovery["model_loading"].append({"attempt":attempt, **_read_model_diagnostics(diagnostics)})
                             # _run always kills/reaps a started worker before
                             # this advice; keep the same total timeout deadline.
