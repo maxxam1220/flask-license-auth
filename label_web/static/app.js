@@ -1047,15 +1047,20 @@ function renderInspection(inspection) {
   review.onsubmit = async event => { event.preventDefault(); submit.disabled = true; try { await api(`/api/inspections/${inspection.id}/reviews`, {method:"POST",body:{decision:decision.value,reviewer:reviewer.value,note:note.value}}); sessionStorage.setItem("labelcheck-operator", reviewer.value); const dirty=state.resultDirty;await loadInspection(inspection.id,false);if(dirty)markResultChanged(); toast("複核紀錄已保存。"); } catch(e) { toast(e.message,true); } finally { submit.disabled=false; } };
   evidence.append(review); area.append(evidence);
 }
+function historyPresentation(item) {
+  const name=String(item.name || ""),version=Number(item.version) || 0;
+  const generatedManual=version===0 ? /^人工文字標準 manual:[0-9a-f]{32} · (.+)$/i.exec(name) : null;
+  return {name:generatedManual ? generatedManual[1] : name,reference:version>0 ? `第 ${version} 版` : generatedManual || item.source_kind==="manual" ? "人工文字標準" : isCatalogSource(item) ? "清單比對" : "系統比對"};
+}
 async function loadHistory() {
   const filter = $("#history-filter").value, page = state.page;
   const data = await api(`/api/inspections?page=${page}&status=${encodeURIComponent(filter)}`);
   if (page !== state.page || filter !== $("#history-filter").value) return;
   const list = $("#history-list"); list.replaceChildren();
   if (!data.items.length) { const empty = element("div", "empty-state"); empty.append(element("h2", "", "這裡還沒有檢查紀錄"),element("p", "", "完成一次照片檢查後，結果會自動保存在這裡。")); list.append(empty); }
-  data.items.forEach(item => { const row = element("button", "history-row"), img = element("img"), text = element("span"); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy"; const referenceLabel=Number(item.version)>0 ? `第 ${item.version} 版` : isCatalogSource(item) ? "清單比對" : "系統比對";text.append(element("strong", "", item.name), element("small", "", `${when(item.created_at)} · ${referenceLabel}`)); row.append(img,text,badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));row.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));} row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
+  data.items.forEach(item => { const row = element("button", "history-row"), img = element("img"), text = element("span","history-copy"),statuses=element("span","history-statuses"),display=historyPresentation(item); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy";text.append(element("strong", "", display.name), element("small", "", `${when(item.created_at)} · ${display.reference}`));statuses.append(badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));statuses.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));}row.append(img,text,statuses); row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
     if(allowed("cleanup_history")){
-      const wrap=element("div","history-entry"),label=element("label","history-select"),select=element("input");select.type="checkbox";select.checked=state.historySelection.has(item.id);select.setAttribute("aria-label",`選取紀錄：${item.name}，${when(item.created_at)}`);
+      const wrap=element("div","history-entry"),label=element("label","history-select"),select=element("input");select.type="checkbox";select.checked=state.historySelection.has(item.id);select.setAttribute("aria-label",`選取紀錄：${display.name}，${when(item.created_at)}`);
       select.onchange=()=>{if(select.checked)state.historySelection.set(item.id,item.name);else state.historySelection.delete(item.id);updateCleanupSelection();};label.append(select);wrap.append(label,row);list.append(wrap);
     }else list.append(row);
   });updateCleanupSelection();
