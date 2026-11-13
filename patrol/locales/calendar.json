@@ -1,0 +1,20 @@
+{
+  "每週三": {"id": "Setiap Rabu", "vi": "Thứ Tư hằng tuần"},
+  "每週五": {"id": "Setiap Jumat", "vi": "Thứ Sáu hằng tuần"},
+  "固定週三": {"id": "Setiap Rabu", "vi": "Thứ Tư hằng tuần"},
+  "固定週五": {"id": "Setiap Jumat", "vi": "Thứ Sáu hằng tuần"},
+  "固定每週三": {"id": "Setiap Rabu", "vi": "Thứ Tư hằng tuần"},
+  "固定每週五": {"id": "Setiap Jumat", "vi": "Thứ Sáu hằng tuần"},
+  "非排程日": {"id": "Di luar jadwal", "vi": "Ngoài ngày kiểm tra"},
+  "假日免巡": {"id": "Bebas inspeksi pada hari libur", "vi": "Miễn kiểm tra vào ngày nghỉ"},
+  "請休排除": {"id": "Pengecualian cuti", "vi": "Miễn do nghỉ phép"},
+  "每週巡檢（全部）": {"id": "Inspeksi mingguan (semua)", "vi": "Kiểm tra hằng tuần (tất cả)"},
+  "例假日免巡": {"id": "Bebas inspeksi pada hari libur", "vi": "Miễn kiểm tra vào ngày nghỉ"},
+  "假日日曆尚未涵蓋此年份，請聯絡系統管理員更新。": {"id": "Kalender hari libur belum mencakup tahun ini. Hubungi administrator untuk memperbaruinya.", "vi": "Lịch ngày nghỉ chưa có dữ liệu cho năm này. Vui lòng liên hệ quản trị viên để cập nhật."},
+  "假日或請休不列入應巡與漏打，仍可掃碼留紀錄。": {"id": "Hari libur atau cuti tidak dihitung dalam kewajiban atau inspeksi terlewat. Anda tetap dapat memindai untuk mencatat kunjungan.", "vi": "Ngày nghỉ hoặc nghỉ phép không tính vào lượt bắt buộc hay thiếu kiểm tra. Bạn vẫn có thể quét mã để ghi nhận."},
+  "今日免巡": {"id": "Tidak wajib inspeksi hari ini", "vi": "Hôm nay không bắt buộc kiểm tra"},
+  "今日非排程日，仍可打卡留紀錄。": {"id": "Hari ini di luar jadwal. Anda tetap dapat mencatat kunjungan.", "vi": "Hôm nay không phải ngày kiểm tra theo lịch. Bạn vẫn có thể ghi nhận lượt kiểm tra."},
+  "今日為假日，不列入漏打；仍可打卡留紀錄。": {"id": "Hari ini hari libur dan tidak dihitung sebagai inspeksi terlewat. Anda tetap dapat mencatat kunjungan.", "vi": "Hôm nay là ngày nghỉ, không tính là thiếu kiểm tra. Bạn vẫn có thể ghi nhận lượt kiểm tra."},
+  "僅指定星期列入待巡；遇假日免巡，不順延。": {"id": "Hanya muncul dalam daftar pada hari yang dijadwalkan. Jika hari libur, inspeksi ditiadakan dan tidak dipindahkan.", "vi": "Chỉ hiện trong danh sách vào thứ đã định. Nếu trùng ngày nghỉ thì miễn kiểm tra, không chuyển sang ngày khác."},
+  "六日及國定假日不列入漏打。": {"id": "Sabtu, Minggu, dan hari libur nasional tidak dihitung sebagai inspeksi terlewat.", "vi": "Thứ Bảy, Chủ nhật và ngày lễ không tính là thiếu kiểm tra."}
+}

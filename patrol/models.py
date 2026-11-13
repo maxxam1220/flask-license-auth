@@ -12,10 +12,10 @@ from sqlalchemy.engine import Engine
 db = SQLAlchemy()
 
 POINT_WORKFLOW_RULE = "workflow_mode = 'standard' OR (category = 'general' AND workflow_mode IN ('spot','two_stage'))"
-EXECUTION_SLOT_RULE = ("(frequency IN ('daily','weekly','monthly','irregular','three_day') AND slot = 'any') OR "
+EXECUTION_SLOT_RULE = ("(frequency IN ('daily','weekly','monthly','irregular','three_day','weekly_wed','weekly_fri') AND slot = 'any') OR "
                        "(frequency = 'daily2' AND slot IN ('am','pm'))")
 EXECUTOR_VISIT_RULE = ("NOT executor_visit OR (workflow_mode = 'spot' AND category = 'general' "
-    "AND (frequency = 'irregular' OR frequency = 'three_day') "
+    "AND (frequency IN ('irregular','three_day','daily','weekly_wed','weekly_fri')) "
     "AND slot = 'any' AND note = '' AND NOT is_abnormal)")
 ENGINEERING_TITLE_RULE = ("NOT engineering_inspector_title OR (role = 'inspector' AND patrol_category IS NOT NULL "
                           "AND patrol_category = 'general' AND NOT general_manager_title)")
@@ -24,7 +24,8 @@ POINT_INSPECTION_TEAM_RULE = ("inspection_team = 'general' OR "
 POINT_PENDING_FREQUENCY_RULE = ("(pending_frequency IS NULL AND frequency_effective_date IS NULL) OR "
     "(pending_frequency IS NOT NULL AND frequency_effective_date IS NOT NULL AND "
     "(pending_frequency = 'daily' OR pending_frequency = 'daily2' OR pending_frequency = 'weekly' "
-    "OR pending_frequency = 'monthly' OR pending_frequency = 'irregular' OR pending_frequency = 'three_day'))")
+    "OR pending_frequency = 'monthly' OR pending_frequency = 'irregular' OR pending_frequency = 'three_day' "
+    "OR pending_frequency = 'weekly_wed' OR pending_frequency = 'weekly_fri'))")
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 

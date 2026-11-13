@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261110-v22';
+const CACHE = 'patrol-offline-shell-20261113-v23';
 const AUDIO_VERSION = 'patrol-v1', AUDIO_ROOT = '/static/audio/' + AUDIO_VERSION + '/';
 // Keep the fixed paths compatible with already-open pages and pending drafts.
 // A new revision still requires a complete, verified download before activation.
@@ -131,7 +131,7 @@ self.addEventListener('message', event => {
         await prepareCache(); ready = await cacheReady(await caches.open(CACHE));
       }
     } catch (_) { /* Leave existing entries and private IndexedDB data intact. */ }
-    event.ports[0]?.postMessage({ ready, audioReady: ready, checklistVersion: 1, audioVersion: AUDIO_VERSION, audioRevision: AUDIO_REVISION });
+    event.ports[0]?.postMessage({ ready, audioReady: ready, checklistVersion: 1, calendarVersion: 1, audioVersion: AUDIO_VERSION, audioRevision: AUDIO_REVISION });
   })());
 });
 self.addEventListener('fetch', event => {

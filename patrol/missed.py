@@ -19,15 +19,23 @@ from zoneinfo import ZoneInfo
 
 from domain import CATEGORY_OPTIONS, FLOOR_ORDER
 from daily_rounds import daily2_anytime
+from patrol_calendar import (CALENDAR_POLICY_START, FIXED_FREQUENCIES, fixed_weekday,
+                             is_fixed_schedule_day, obligation_required)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 THREE_DAY_ANCHOR = date(2026, 11, 10)
 VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "three_day": ("three_day",),
-                    "weekly": ("weekly",), "monthly": ("monthly",)}
-FREQUENCIES = {"daily", "daily2", "three_day", "weekly", "monthly", "irregular"}
+                    "weekly": ("weekly", "weekly_wed", "weekly_fri"), "monthly": ("monthly",),
+                    "weekly_wed": ("weekly_wed",), "weekly_fri": ("weekly_fri",)}
+FREQUENCIES = {"daily", "daily2", "three_day", "weekly", "monthly", "irregular", *FIXED_FREQUENCIES}
 
 
 def period_bounds(day, view):
+    # Fixed-weekday points use the actual attendance day. An optional visit on
+    # another day cannot satisfy Wednesday/Friday or unlock a different day's
+    # second stage, even though reports group them under the weekly tab.
+    if view in FIXED_FREQUENCIES:
+        return day, day
     if view == "three_day":
         # One shared calendar, not a rolling deadline from each person's visit.
         # This anchor also aligns with date.min, so the supported date range
@@ -104,7 +112,8 @@ def schedule_snapshot(point, schedule):
     }
 
 
-def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
+def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_calendar=True,
+               safety_leave_dates=(), calendar_policy_start=CALENDAR_POLICY_START):
     """Yield the schedule binding each slot immediately before its Taipei deadline."""
     dates, schedules = timeline
     last = bisect_right(dates, day) - 1
@@ -142,16 +151,48 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily"):
             continue
         if morning and frequency != "daily2":
             continue
+        if not is_fixed_schedule_day(day, frequency):
+            continue
         if for_missed and day != period_bounds(day, frequency)[1]:
             continue
         if not for_missed and frequency not in VIEW_FREQUENCIES[view]:
             continue
+        if respect_calendar:
+            start, end = period_bounds(day, frequency)
+            # Days before creation or this schedule's start cannot make an
+            # otherwise fully exempt period acquire a new obligation.
+            binding_start = None
+            if schedule is not None:
+                binding_index = next(i for i, item in enumerate(schedules) if item is schedule)
+                plan_fields = ("frequency", "workflow_mode", "category", "active", "legacy_unscheduled")
+                while binding_index > 0:
+                    previous = schedule_snapshot(point, schedules[binding_index - 1])
+                    if any(previous[field] != snapshot[field] for field in plan_fields):
+                        break
+                    binding_index -= 1
+                binding_start = dates[binding_index]
+            # A rename on Sunday must not discard the preceding working days
+            # of an unchanged weekly obligation.
+            starts = [start, _value(point, "schedule_start"), binding_start]
+            created = _value(point, "created_at")
+            if created is not None:
+                starts.append(_utc(created).astimezone(TAIPEI).date())
+            start = max(value for value in starts if value is not None)
+            if not for_missed and start > end:
+                # The overview retains a not-yet-due card for a point whose
+                # start date is in a later period. Calendar exclusions still
+                # apply to the displayed period, not to that future start.
+                start = period_bounds(day, frequency)[0]
+            if not obligation_required(start, end, snapshot["category"], safety_leave_dates,
+                                       policy_start=calendar_policy_start):
+                continue
         slot = ("am" if morning else "pm") if frequency == "daily2" else "any"
         yield snapshot, slot, deadline
 
 
 def calculate_missed(points, completions, date_from, date_to, now, *, category="", floor=None, frequency="",
-                     executions=(), two_stage_only=False):
+                     executions=(), two_stage_only=False, respect_calendar=True, safety_leave_dates=(),
+                     calendar_policy_start=CALENDAR_POLICY_START):
     """Return expired missing occurrences as plain dicts, newest deadline first.
 
     The inputs may be preloaded ORM objects or attribute/mapping-based fixtures;
@@ -172,7 +213,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         raise ValueError("now must be a datetime")
     if category not in ("", None) and category not in dict(CATEGORY_OPTIONS):
         raise ValueError("Unknown category filter")
-    if frequency not in ("", None, "daily_all") and frequency not in FREQUENCIES:
+    if frequency not in ("", None, "daily_all", "weekly_all") and frequency not in FREQUENCIES:
         raise ValueError("Unknown frequency filter")
     if floor not in (None, ""):
         if str(floor) not in {str(value) for value in FLOOR_ORDER}:
@@ -191,7 +232,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
     executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
-    day_step = timedelta(days=7 if frequency == "weekly" else 3 if frequency == "three_day" else 1)
+    day_step = timedelta(days=7 if frequency == "weekly" or frequency in FIXED_FREQUENCIES else 3 if frequency == "three_day" else 1)
     for point in points:
         point_id = _value(point, "id")
         if point_id in seen_points:
@@ -205,14 +246,19 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         # A period filter can only match its last day. Choose
         # those dates before reading historical schedules for each point.
         due_day = period_bounds(first_due_day, frequency)[1]
+        if frequency in FIXED_FREQUENCIES:
+            due_day += timedelta(days=(fixed_weekday(frequency) - due_day.weekday()) % 7)
         while due_day <= last_due_day:
-            for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True):
+            for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True,
+                    respect_calendar=respect_calendar, safety_leave_dates=safety_leave_dates,
+                    calendar_policy_start=calendar_policy_start):
                 period_frequency, mode = snapshot["frequency"], snapshot["workflow_mode"]
                 if ((two_stage_only and mode != "two_stage")
                         or (category and snapshot["category"] != category)
                         or (floor is not None and snapshot["floor"] != floor)
                         or (frequency and period_frequency != frequency
-                            and not (frequency == "daily_all" and period_frequency in ("daily", "daily2")))):
+                            and not (frequency == "daily_all" and period_frequency in ("daily", "daily2"))
+                            and not (frequency == "weekly_all" and period_frequency in VIEW_FREQUENCIES["weekly"]))):
                     continue
                 period_start, _ = period_bounds(due_day, period_frequency)
                 if period_frequency in ("three_day", "weekly", "monthly"):

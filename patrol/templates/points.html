@@ -24,7 +24,7 @@
   <small>單段由巡檢員直接打卡。兩階段由執行人員先簽到，再由各巡檢員分別登記。是否列入漏打依巡檢頻率決定。</small>
 </label>
 {% endmacro %}
-{% macro frequency_select(selected) %}<select name="frequency">{% for value,label in [('daily','每日一次'),('daily2','每日兩次（不限時段）'),('three_day','每3日一次'),('weekly','每週一次'),('monthly','每月一次'),('irregular','不定期')] %}<option value="{{ value }}"{% if value in ['monthly','irregular'] %} data-general-frequency{% endif %}{% if selected == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}
+{% macro frequency_select(selected) %}<select name="frequency">{% for value,label in [('daily','每日一次'),('daily2','每日兩次（不限時段）'),('three_day','每3日一次'),('weekly','每週一次'),('weekly_wed','每週三'),('weekly_fri','每週五'),('monthly','每月一次'),('irregular','不定期')] %}<option value="{{ value }}"{% if value in ['monthly','irregular'] %} data-general-frequency{% endif %}{% if selected == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>{% endmacro %}
 {% block content %}
 <div hidden id="official-general-codes" data-codes='{{ official_general_codes|default({})|tojson }}'></div>
 <div class="page-heading management-page-heading"><div><h1>巡檢點管理</h1><p>管理職安、總務與工務點位，設定負責單位、巡檢頻率與專屬 QR Code。</p></div>{% if not show_deleted %}<a class="button button-secondary" href="{{ url_for('print_qr', category=selected_category, floor=selected_floor) }}">{{ icon('print') }}列印 QR 標籤</a>{% endif %}</div>
@@ -32,7 +32,7 @@
   <a class="{{ 'selected' if not show_deleted }}" aria-current="{{ 'page' if not show_deleted else 'false' }}" href="{{ url_for('points', category=selected_category, floor=selected_floor) }}">現有點位</a>
   <a class="{{ 'selected' if show_deleted }}" aria-current="{{ 'page' if show_deleted else 'false' }}" href="{{ url_for('points', list='deleted', category=selected_category, floor=selected_floor) }}">已刪除（{{ deleted_count }}）</a>
 </nav>
-<nav class="point-revision-entry form-actions" aria-label="點位批次調整"><a class="text-link" href="{{ url_for('general_point_numbering') }}">重排總務編號 {{ icon('arrow') }}</a>{% if not show_deleted %}<a class="text-link" href="{{ url_for('point_assignment_revision') }}">總務／工務點位調整 {{ icon('arrow') }}</a>{% endif %}</nav>
+<nav class="point-revision-entry form-actions" aria-label="點位批次調整"><a class="text-link" href="{{ url_for('general_point_numbering') }}">重排總務編號 {{ icon('arrow') }}</a>{% if not show_deleted %}<a class="text-link" href="{{ url_for('point_calendar_revision') }}">固定星期與梯廳調整 {{ icon('arrow') }}</a><a class="text-link" href="{{ url_for('point_assignment_revision') }}">總務／工務點位調整 {{ icon('arrow') }}</a>{% endif %}</nav>
 {% if general_numbering_enabled %}<div class="assignment-note">{{ icon('info') }}<p>G 編號已啟用自動排列：新增、停用、刪除、還原或重新啟用時，會依樓層重排。保留廁所編號與職安點位；編號有變更的標籤請重印。</p></div>{% endif %}
 {% if show_deleted %}<div class="archive-guide">{{ icon('info') }}<p>已刪除點位保留{{ '巡檢紀錄與異常案件；G 編號會自動重排' if general_numbering_enabled else '編號、巡檢紀錄與異常案件' }}。還原後會回到現有清單並維持停用；重新啟用後，請列印新 QR 標籤。</p></div>{% endif %}
 <section class="panel filter-panel point-filter-toolbar">

@@ -4,6 +4,7 @@
 {% elif name == 'check' %}<path d="m5 12 4 4L19 6"/>
 {% elif name == 'circle-check' %}<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>
 {% elif name == 'clock' %}<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+{% elif name == 'calendar' %}<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 11h18m-13 5 2 2 4-4"/>
 {% elif name == 'pin' %}<path d="M20 10c0 6-8 11-8 11S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>
 {% elif name == 'phone' %}<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M10 5h4M11 18h2"/>
 {% elif name == 'list' %}<path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>
@@ -33,7 +34,7 @@
 {% macro inspection_team_chip(selected='', enabled=false) -%}
 {% if enabled and selected %}<span class="query-chip"><span class="query-chip-label">負責單位</span><span class="query-chip-value">{{ '工務' if selected == 'engineering' else '總務' }}</span></span>{% endif %}
 {%- endmacro %}
-{% macro frequency(value) %}{{ t({'daily':'每日一次','daily2':'每日兩次','three_day':'每3日一次','weekly':'每週一次','monthly':'每月一次','irregular':'不定期'}.get(value, value)) }}{% endmacro %}
+{% macro frequency(value) %}{{ t({'daily':'每日一次','daily2':'每日兩次','three_day':'每3日一次','weekly':'每週一次','weekly_all':'每週巡檢（全部）','weekly_wed':'每週三','weekly_fri':'每週五','monthly':'每月一次','irregular':'不定期'}.get(value, value)) }}{% endmacro %}
 {% macro status(value) %}<span class="badge badge-{{ value }}">{% if value == 'approved' %}{{ t('已核准') }}{% elif value == 'pending' %}{{ t('待審核') }}{% elif value == 'revoked' %}{{ t('已解除') }}{% elif value == 'rejected' %}{{ t('未核准') }}{% elif value == 'done' %}{{ t('已完成') }}{% elif value == 'not_due' %}{{ t('不需巡檢') }}{% else %}{{ t('尚未綁定') }}{% endif %}</span>{% endmacro %}
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ t(title) }}</h3><p>{{ t(description) }}</p></div>{% endmacro %}
 

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createShellReadiness } = require('../static/offline.js');
-const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1 };
+const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 };
 function fixture(options = {}) {
   const calls = [], channels = [];
   class Channel {
@@ -47,6 +47,18 @@ test('audio-ready legacy shell must update before it can capture checklist entri
 
 test('legacy cached checklist shell fails offline without replacing stored drafts', async () => {
   const x = fixture(); x.env.navigator.onLine = false; x.registration.active = x.worker({ ...complete, checklistVersion: 0 });
+  await assert.rejects(x.ensure(), /尚未備妥/); assert(!x.calls.includes('update'));
+});
+
+test('old calendar labels must update before preparing fixed weekday points', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.calendarVersion;
+  x.registration.active = x.worker(legacy); await x.ensure();
+  assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
+});
+
+test('old calendar shell cannot claim readiness while offline', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.calendarVersion;
+  x.env.navigator.onLine = false; x.registration.active = x.worker(legacy);
   await assert.rejects(x.ensure(), /尚未備妥/); assert(!x.calls.includes('update'));
 });
 

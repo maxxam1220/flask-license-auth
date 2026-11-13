@@ -12,7 +12,7 @@ from test_workflow_reports import point as general_point
 
 @pytest.mark.parametrize('view,frequency,start,end', [
     ('daily', 'daily_all', '2026-10-28', '2026-10-28'),
-    ('weekly', 'weekly', '2026-10-26', '2026-11-01'),
+    ('weekly', 'weekly_all', '2026-10-26', '2026-11-01'),
 ])
 def test_dashboard_record_link_keeps_period_and_floor(application, seeded, view, frequency, start, end):
     point = seeded['weekly' if view == 'weekly' else 'daily']
@@ -78,7 +78,7 @@ def test_partial_boundary_week_links_to_valid_reports(application, seeded, day):
         assert client.get(url).status_code == 200
         query = parse_qs(urlsplit(url).query)
         assert "2000-01-01" <= query["date_from"][0] <= day <= query["date_to"][0] <= "2100-12-31"
-        assert (query["category"], query["floor"], query["frequency"]) == (["safety"], ["1"], ["weekly"])
+        assert (query["category"], query["floor"], query["frequency"]) == (["safety"], ["1"], ["weekly_all"])
 
 
 def test_irregular_point_badge_leads_to_filtered_open_case_and_clears_after_resolution(application, seeded):

@@ -9,6 +9,7 @@ import hmac
 import json
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from general_workflow import execution_deadline
 from models import AuditLog, Inspection, PatrolExecution, Point, PointSchedule, TAIPEI, db
@@ -17,6 +18,7 @@ from models import AuditLog, Inspection, PatrolExecution, Point, PointSchedule, 
 REVISION_ACTION = "point_assignment_revision_20261109"
 REVISION_LOCK_ID = 714032611091
 ACTIVATION_ACTION = "scheduled_point_frequency_activated"
+CALENDAR_REVISION_ACTION = "point_calendar_revision_20261113"
 # code: (expected name, floor, original frequency, workflow mode, target frequency)
 ENGINEERING_POINTS = {
     "B2-G003": ("消防泵浦室", -2, "monthly", "spot", "monthly"),
@@ -189,6 +191,52 @@ def revise_point_assignments(apply=False, instant=None, effective_date=None, exp
         raise
 
 
+def _authorized_calendar_workflow(point, schedule, markers):
+    """Allow the one approved calendar batch to introduce its planned second stage.
+
+    A future schedule alone is not authority to change a live workflow. The
+    committed revision must identify this exact point, its old and new plan,
+    and its identity after the batch's code renumbering.
+    """
+    if (schedule is None or point.pending_frequency is None or point.frequency_effective_date is None
+            or schedule.effective_date != point.frequency_effective_date
+            or schedule.frequency != point.pending_frequency or point.deleted_at is not None
+            or any(getattr(schedule, field) != getattr(point, current) for field, current in
+                   (("category", "category"), ("active", "active"), ("floor", "floor"),
+                    ("point_code", "code"), ("point_name", "name")))
+            or point.category != "general" or point.workflow_mode != "spot"
+            or schedule.workflow_mode != "two_stage" or len(markers) != 1):
+        return None
+    marker = markers[0]
+    try:
+        plan = json.loads(marker.detail)
+    except (TypeError, ValueError):
+        return None
+    if (not isinstance(plan, dict) or plan.get("effective_date") != point.frequency_effective_date.isoformat()
+            or not isinstance(plan.get("changes"), list)):
+        return None
+    matches = [change for change in plan["changes"] if isinstance(change, dict)
+               and type(change.get("point_id")) is int and change["point_id"] == point.id]
+    if len(matches) != 1:
+        return None
+    change = matches[0]
+    before = _snapshot(point)
+    after = {**before, "frequency": point.pending_frequency, "workflow_mode": schedule.workflow_mode}
+    identity = {field: getattr(point, field) for field in
+                ("code", "name", "floor", "category", "inspection_team", "active")}
+    if (change.get("before") != before or change.get("after") != after
+            or change.get("activation_identity") != identity):
+        return None
+    return marker.id
+
+
+def approved_calendar_workflow_schedule(point, schedule):
+    """Read-only approval check for displaying a pending batch workflow (e.g. QR print)."""
+    markers = db.session.scalars(select(AuditLog).where(
+        AuditLog.action == CALENDAR_REVISION_ACTION).order_by(AuditLog.id)).all()
+    return _authorized_calendar_workflow(point, schedule, markers) is not None
+
+
 def activate_due_point_frequencies(instant=None):
     """Activate due live frequencies atomically without changing old schedules.
 
@@ -206,23 +254,35 @@ def activate_due_point_frequencies(instant=None):
             return {"activated": 0, "points": []}
         if db.engine.dialect.name == "sqlite":
             db.session.execute(db.update(AuditLog).where(db.false()).values(action=ACTIVATION_ACTION))
-        points = db.session.scalars(select(Point).where(Point.pending_frequency.is_not(None),
+        points = db.session.scalars(select(Point).options(selectinload(Point.schedules)).where(Point.pending_frequency.is_not(None),
             Point.frequency_effective_date <= day).order_by(Point.id).with_for_update()
             .execution_options(populate_existing=True)).all()
         changes = []
+        calendar_markers = None
         for point in points:
             schedules = [s for s in point.schedules if s.effective_date <= point.frequency_effective_date]
             schedule = max(schedules, key=lambda s: (s.effective_date, s.id or 0)) if schedules else None
             if (schedule is None or schedule.effective_date != point.frequency_effective_date
                     or schedule.frequency != point.pending_frequency or point.deleted_at is not None
                     or any(getattr(schedule, field) != getattr(point, current) for field, current in
-                        (("category", "category"), ("workflow_mode", "workflow_mode"), ("active", "active"),
+                        (("category", "category"), ("active", "active"),
                          ("floor", "floor"), ("point_code", "code"), ("point_name", "name")))):
                 raise ValueError(f"點位 {point.code} 的預約頻率設定不一致，請由系統管理員確認後再打卡。")
+            source_audit_id = None
+            if schedule.workflow_mode != point.workflow_mode:
+                if calendar_markers is None:
+                    calendar_markers = db.session.scalars(select(AuditLog).where(
+                        AuditLog.action == CALENDAR_REVISION_ACTION).order_by(AuditLog.id)).all()
+                source_audit_id = _authorized_calendar_workflow(point, schedule, calendar_markers)
+                if source_audit_id is None:
+                    raise ValueError(f"點位 {point.code} 的預約頻率設定不一致，請由系統管理員確認後再打卡。")
             changes.append({"point_id": point.id, "code": point.code, "before": point.frequency,
-                            "after": point.pending_frequency, "effective_date": point.frequency_effective_date.isoformat()})
-        for point in points:
+                            "after": point.pending_frequency, "effective_date": point.frequency_effective_date.isoformat(),
+                            "workflow_before": point.workflow_mode, "workflow_after": schedule.workflow_mode,
+                            **({"source_audit_id": source_audit_id} if source_audit_id is not None else {})})
+        for point, change in zip(points, changes):
             point.frequency = point.pending_frequency
+            point.workflow_mode = change["workflow_after"]
             point.pending_frequency = None
             point.frequency_effective_date = None
         if changes:

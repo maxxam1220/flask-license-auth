@@ -76,11 +76,11 @@ def test_filtered_and_unfiltered_queries_count_only_expired_cycles_not_prior_opt
 
 
 def test_new_point_midcycle_never_acquires_an_obligation_before_creation_or_effective_date():
-    current = point(start="2026-11-14", history=False)
-    current.created_at = local("2026-11-14", 8)
-    assert missed(current, end="2026-11-12") == []
-    row, = missed(current, end="2026-11-15", frequency="three_day")
-    assert row["period_key"] == "2026-11-13" and row["due_date"] == date(2026, 11, 15)
+    current = point(start="2026-11-17", history=False)
+    current.created_at = local("2026-11-17", 8)
+    assert missed(current, end="2026-11-15") == []
+    row, = missed(current, end="2026-11-18", frequency="three_day")
+    assert row["period_key"] == "2026-11-16" and row["due_date"] == date(2026, 11, 18)
 
 
 def test_one_inspector_completion_satisfies_cycle_but_old_frequency_and_executor_visit_do_not():

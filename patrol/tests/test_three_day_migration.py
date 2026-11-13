@@ -104,7 +104,7 @@ def _visit(**changes):
 def test_v17_upgrade_preserves_rows_children_indexes_and_is_idempotent(engine, v17):
     with engine.connect() as connection:
         before = snapshot(connection, v17)
-    assert upgrade_schema(engine) == LATEST_VERSION == 18
+    assert upgrade_schema(engine) == LATEST_VERSION == 19
     with engine.connect() as connection:
         after = snapshot(connection, v17)
         assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
@@ -117,10 +117,10 @@ def test_v17_upgrade_preserves_rows_children_indexes_and_is_idempotent(engine, v
     indexes = {i["name"] for table in ("patrol_points", "patrol_inspections") for i in inspect(engine).get_indexes(table)}
     assert {"custom_preserved_point_name", "custom_preserved_inspection_note"} <= indexes
     signature = _signature(engine)
-    assert upgrade_schema(engine) == 18
+    assert upgrade_schema(engine) == LATEST_VERSION
     assert _signature(engine) == signature
     with engine.connect() as connection:
-        assert connection.scalar(select(func.count()).where(SchemaVersion.version == 18)) == 1
+        assert connection.scalar(select(func.count()).where(SchemaVersion.version == LATEST_VERSION)) == 1
 
 
 def test_three_day_values_rejected_before_migration_then_accepted(engine, v17):
@@ -140,7 +140,7 @@ def test_three_day_values_rejected_before_migration_then_accepted(engine, v17):
         assert connection.scalar(select(Inspection.frequency).where(Inspection.id == 3)) == "three_day"
 
 
-@pytest.mark.parametrize("changes", [{"slot": "am"}, {"frequency": "daily"}, {"note": "not allowed"},
+@pytest.mark.parametrize("changes", [{"slot": "am"}, {"frequency": "weekly"}, {"note": "not allowed"},
                                     {"is_abnormal": True}, {"category": "safety"}])
 def test_three_day_executor_visits_keep_existing_restrictions(engine, v17, changes):
     upgrade_schema(engine)

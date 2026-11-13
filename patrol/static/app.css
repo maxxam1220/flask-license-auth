@@ -795,13 +795,16 @@ body.scanner-fallback-open { overflow: hidden; }
 
 /* Keep the identity and account actions within reach on shorter laptops. */
 @media screen and (min-width: 721px) {
-  .sidebar .brand { margin-bottom: clamp(18px, 3vh, 30px); }
-  .sidebar .nav-links { gap: 3px; margin-bottom: 19px; }
+  /* Reclaim surrounding whitespace for all navigation items, including leave exclusions. */
+  .sidebar { padding-block: 22px 14px; }
+  .sidebar .brand { margin-bottom: clamp(12px, 1.8vh, 20px); }
+  .sidebar-label { margin-bottom: 6px; }
+  .sidebar .nav-links { gap: 2px; margin-bottom: 12px; }
   .sidebar .nav-link { padding-block: 9px; }
   .sidebar > .sidebar-navigation { flex: 1 1 auto; min-height: 7rem; overflow-y: auto; overscroll-behavior-y: contain; padding: 4px; margin: -4px; }
-  .sidebar .nav-links:last-child { margin-bottom: 4px; }
-  .sidebar-bottom { padding-top: 12px; }
-  .account { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px 10px; padding-top: 12px; }
+  .sidebar .nav-links:last-child { margin-bottom: 2px; }
+  .sidebar-bottom { padding-top: 8px; }
+  .account { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 10px; padding-top: 10px; }
   .account-name { line-height: 1.35; }
   .account-display-name {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;

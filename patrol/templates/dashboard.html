@@ -86,6 +86,7 @@
   {% endfor %}
 </section>
 <div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · 僅計已到期次數</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
+{% if calendar_unavailable %}<p class="notice-strip">假日日曆尚未涵蓋此年份，請聯絡系統管理員更新。</p>{% endif %}
 <section class="panel floor-overview" aria-labelledby="floor-progress">
   <div class="section-heading">
     <div><h2 id="floor-progress" tabindex="-1">樓層進度</h2><p>{{ period_title if view in ('three_day', 'monthly') else week_label if view == 'weekly' else selected_date }}</p></div>

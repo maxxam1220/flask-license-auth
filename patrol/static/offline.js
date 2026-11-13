@@ -3,6 +3,8 @@
   'use strict';
   const t = (source, params = {}) => root.PatrolI18n?.t(source, params) ?? String(source).replace(/\{(\w+)\}/g, (match, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : match);
   const pointName = (source, names) => names?.[root.PatrolI18n?.getLocale()] || source;
+  const frequencyLabel = frequency => t({ daily: '每日一次', daily2: '每日兩次', three_day: '每3日一次',
+    weekly: '每週一次', weekly_wed: '每週三', weekly_fri: '每週五', monthly: '每月一次', irregular: '不定期' }[frequency] || '每日一次');
   const DB_NAME = 'patrol-offline-v1';
   const STORES = ['meta', 'manifests', 'queue', 'receipts'];
   const MAX_QUEUE_BYTES = 256 * 1024 * 1024;
@@ -477,7 +479,7 @@
       if (pending) return pending;
       let cancelled = false, deadline;
       const probes = new Set();
-      const currentShell = value => value?.audioVersion === 'patrol-v1' && value.audioRevision === 'natural-female-1' && value.checklistVersion === 1;
+      const currentShell = value => value?.audioVersion === 'patrol-v1' && value.audioRevision === 'natural-female-1' && value.checklistVersion === 1 && value.calendarVersion === 1;
       const ready = value => value?.ready === true && value.audioReady === true && currentShell(value);
       const probe = (worker, type, timeout) => new Promise((resolve, reject) => {
         const channel = new e.MessageChannel(); let finished = false;
@@ -522,7 +524,7 @@
       return pending;
     };
   }
-  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, validateChecklist, validChecklistDefinition, formChecklist, safePath, requestPersistence, createShellReadiness };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { createCore, validatePhotos, validateChecklist, validChecklistDefinition, formChecklist, safePath, requestPersistence, createShellReadiness, frequencyLabel };
   if (!root.document) return;
   const ensureShell = createShellReadiness(root);
   const core = createCore({ ensureShell }); root.PatrolOffline = core;
@@ -665,7 +667,7 @@
         if (!eligible) voice('point_unavailable', `scan:${Date.now()}:${++voiceSequence}`);
       }
       text('point-code', displayed?.code || t('尚未取得點位')); text('point-name', displayed ? pointName(displayed.name, displayed.name_i18n) : t('請連線登入並準備今日離線資料。'));
-      text('point-meta', point ? `${point.floor} · ${point.frequency === 'daily2' ? t('每日兩次') : point.frequency === 'three_day' ? t('每3日一次') : point.frequency === 'weekly' ? t('每週一次') : point.frequency === 'monthly' ? t('每月一次') : point.frequency === 'irregular' ? t('不定期') : t('每日一次')}` : '');
+      text('point-meta', point ? `${point.floor} · ${frequencyLabel(point.frequency)}` : '');
       text('point-stage', point ? stageText(point.stage) : '');
       const roundLabel = displayed ? eligible ? `${slotText(expected.slot)} · ${expected.day}` : !unchanged ? t('點位或日期已變更，請重新掃描') : t('本次已完成、已暫存或已到期，請重新掃描確認') : '';
       text('point-round', roundLabel);

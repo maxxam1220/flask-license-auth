@@ -217,7 +217,7 @@ def test_fresh_database_and_idempotent_upgrade(engine):
         assert connection.exec_driver_sql("SELECT * FROM patrol_schema_versions").all() == before
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
-    assert len(inspect(engine).get_table_names()) == 16
+    assert len(inspect(engine).get_table_names()) == 17
     assert inspect(engine).has_table("patrol_executions")
     assert inspect(engine).has_table("patrol_revoked_sessions")
     assert inspect(engine).has_table("patrol_login_events")
@@ -809,7 +809,7 @@ def test_v5_adds_empty_revocation_table_and_preserves_other_tables(engine, versi
     with engine.begin() as connection:
         assert set(inspect(connection).get_table_names()) == old_tables | {
             "patrol_revoked_sessions", "patrol_executions", "patrol_login_events", "patrol_offline_submissions",
-            "patrol_issue_event_photos"}
+            "patrol_issue_event_photos", "patrol_safety_leave_exclusions"}
         after = snapshot(connection, version_five)
         assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")
         assert after == before

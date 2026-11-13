@@ -103,7 +103,7 @@ def test_historyless_fallback_cannot_override_original_owner_or_null_history(sto
 
 
 @pytest.mark.parametrize("change", [dict(category="safety", workflow_mode="standard"),
-                                    dict(frequency="daily"), dict(active=False)])
+                                    dict(frequency="monthly"), dict(active=False)])
 def test_original_identity_does_not_bypass_current_workflow_frequency_or_availability(stops, change):
     env = stops
     rename(env, env.point, "1F-NEW095")

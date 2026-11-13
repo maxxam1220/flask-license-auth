@@ -28,7 +28,7 @@ async function setup(t, options = {}) {
     constructor() { this.port1 = { close() {} }; this.port2 = { close() {}, postMessage: data => this.port1.onmessage?.({ data }) }; }
   }
   win.MessageChannel = Channel;
-  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1 }) } }) } });
+  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 }) } }) } });
   win.PatrolI18n = { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? ''), getLocale: () => 'vi', setLocale() {}, getPreferences: () => ({}), acceptPreferences: () => false };
   const manifest = { ok: true, version: 1, checklist_version: 1, owner: 'owner-12', identity: { id: 12, auth_version: 1, binding_id: 8, name: 'Test', ui_language: 'vi', role: 'executor' },
     server_time: new Date(stamp).toISOString(), day: '2026-11-09', capture_until: '2026-11-09T16:00:00Z', sync_until: '2026-11-10T16:00:00Z', csrf_token: 'csrf',

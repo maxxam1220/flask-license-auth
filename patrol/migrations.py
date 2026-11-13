@@ -15,9 +15,10 @@ from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
 from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
                     ENGINEERING_TITLE_RULE, EXECUTION_SLOT_RULE, EXECUTOR_VISIT_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
+from safety_leave import SafetyLeaveExclusion
 
 
-LATEST_VERSION = 18
+LATEST_VERSION = 19
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -136,6 +137,8 @@ def _upgrade_locked(connection) -> int:
                 _add_missing_columns(connection, model.__tablename__, [model.__table__.c.checklist_data])
         if current < 18:
             _upgrade_v17_to_v18(connection)
+        if current < 19:
+            _upgrade_v18_to_v19(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -340,12 +343,34 @@ def _frequency_constraint_rules():
     """Only these three named checks are expanded; rows and indexes stay unchanged."""
     return (
         (Point.__tablename__, "patrol_point_pending_frequency", POINT_PENDING_FREQUENCY_RULE,
-         POINT_PENDING_FREQUENCY_RULE.replace(" OR pending_frequency = 'three_day'", "")),
+         FREQUENCY_CHECKS_V17["patrol_point_pending_frequency"]),
         (PatrolExecution.__tablename__, "patrol_execution_valid_slot", EXECUTION_SLOT_RULE,
-         EXECUTION_SLOT_RULE.replace(",'three_day'", "")),
+         FREQUENCY_CHECKS_V17["patrol_execution_valid_slot"]),
         (Inspection.__tablename__, "patrol_executor_visit_fields", EXECUTOR_VISIT_RULE,
-         EXECUTOR_VISIT_RULE.replace("(frequency = 'irregular' OR frequency = 'three_day')", "frequency = 'irregular'")),
+         FREQUENCY_CHECKS_V17["patrol_executor_visit_fields"]),
     )
+
+
+# Keep historical DDL independent of the current model so a later expansion
+# cannot accidentally redefine what an already-installed schema meant.
+FREQUENCY_CHECKS_V17 = {
+    "patrol_point_pending_frequency": ("(pending_frequency IS NULL AND frequency_effective_date IS NULL) OR "
+        "(pending_frequency IS NOT NULL AND frequency_effective_date IS NOT NULL AND "
+        "(pending_frequency = 'daily' OR pending_frequency = 'daily2' OR pending_frequency = 'weekly' "
+        "OR pending_frequency = 'monthly' OR pending_frequency = 'irregular'))"),
+    "patrol_execution_valid_slot": ("(frequency IN ('daily','weekly','monthly','irregular') AND slot = 'any') OR "
+        "(frequency = 'daily2' AND slot IN ('am','pm'))"),
+    "patrol_executor_visit_fields": ("NOT executor_visit OR (workflow_mode = 'spot' AND category = 'general' "
+        "AND frequency = 'irregular' AND slot = 'any' AND note = '' AND NOT is_abnormal)"),
+}
+FREQUENCY_CHECKS_V18 = {
+    "patrol_point_pending_frequency": FREQUENCY_CHECKS_V17["patrol_point_pending_frequency"].replace(
+        "pending_frequency = 'irregular'", "pending_frequency = 'irregular' OR pending_frequency = 'three_day'"),
+    "patrol_execution_valid_slot": FREQUENCY_CHECKS_V17["patrol_execution_valid_slot"].replace(
+        "'monthly','irregular'", "'monthly','irregular','three_day'"),
+    "patrol_executor_visit_fields": FREQUENCY_CHECKS_V17["patrol_executor_visit_fields"].replace(
+        "frequency = 'irregular'", "(frequency = 'irregular' OR frequency = 'three_day')"),
+}
 
 
 def _normalize_frequency_check(expression):
@@ -355,14 +380,19 @@ def _normalize_frequency_check(expression):
 
 
 def _upgrade_v17_to_v18(connection):
-    """Permit fixed three-day periods without rewriting existing point/history rows."""
+    """Accept known intermediate DDL while upgrading legacy frequencies."""
+    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V17, FREQUENCY_CHECKS_V18))
+
+
+def _expand_frequency_checks(connection, accepted_rules):
+    """Validate all named checks before changing any of them."""
     changes = []
-    for table, name, current, previous in _frequency_constraint_rules():
+    for table, name, current, _ in _frequency_constraint_rules():
         checks = {item["name"]: item["sqltext"] for item in inspect(connection).get_check_constraints(table)}
         actual = _normalize_frequency_check(checks.get(name, ""))
         if actual == _normalize_frequency_check(current):
             continue  # Earlier upgrade steps can already create the new check.
-        if actual != _normalize_frequency_check(previous):
+        if actual not in {_normalize_frequency_check(rules[name]) for rules in accepted_rules}:
             raise SchemaMigrationError(f"Unexpected frequency constraint: {name}; no checks were replaced.")
         changes.append((table, name, current))
     quote = connection.dialect.identifier_preparer.quote
@@ -373,6 +403,12 @@ def _upgrade_v17_to_v18(connection):
         else:
             _sqlite_rebuild(connection, table, [], new_constraints=[CheckConstraint(expression, name=name)],
                             replace_checks={name})
+
+
+def _upgrade_v18_to_v19(connection):
+    """Expand named frequency checks and add reversible safety leave records."""
+    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V18,))
+    SafetyLeaveExclusion.__table__.create(connection, checkfirst=True)
 
 
 def _compact(expression):
@@ -484,12 +520,14 @@ def _validate_current(connection):
     revoked = RevokedSession.__tablename__
     expected_tables = BASE_TABLES | {"patrol_inspection_photos", "patrol_schema_versions",
                                    "patrol_inspection_issues", "patrol_issue_events", PatrolExecution.__tablename__, revoked,
-                                   LoginEvent.__tablename__, OfflineSubmission.__tablename__, IssueEventPhoto.__tablename__}
+                                   LoginEvent.__tablename__, OfflineSubmission.__tablename__, IssueEventPhoto.__tablename__,
+                                   SafetyLeaveExclusion.__tablename__}
     if not expected_tables <= set(inspector.get_table_names()):
         raise SchemaMigrationError("Required patrol tables are missing after migration.")
     _validate_login_events(inspector)
     _validate_offline_submissions(inspector)
     _validate_issue_event_photos(inspector)
+    _validate_safety_leave(inspector)
     for table_name, required in {
         User.__tablename__: ("general_manager_title", "engineering_inspector_title", "ui_language", "simple_executor_ui"),
         "patrol_points": ("category", "workflow_mode", "inspection_team"),
@@ -605,6 +643,38 @@ def _validate_current(connection):
     user_checks = {check["name"] for check in inspector.get_check_constraints(User.__tablename__)}
     if "patrol_user_category_allowed" not in user_checks:
         raise SchemaMigrationError("Account patrol category validation is missing.")
+
+
+def _validate_safety_leave(inspector):
+    """Reject partial exception tables before reports can rely on their dates."""
+    table = SafetyLeaveExclusion.__table__
+    actual = {column["name"]: column for column in inspector.get_columns(table.name)}
+    for expected in table.columns:
+        column = actual.get(expected.name)
+        if (not column or bool(column["nullable"]) != bool(expected.nullable)
+                or not isinstance(column["type"], type(expected.type))
+                or getattr(column["type"], "length", None) != getattr(expected.type, "length", None)
+                or (expected.name != "id" and column["default"] is not None)):
+            raise SchemaMigrationError(f"Invalid safety leave column: {expected.name}.")
+    if inspector.get_pk_constraint(table.name)["constrained_columns"] != ["id"]:
+        raise SchemaMigrationError("Safety leave primary key is invalid.")
+    keys = inspector.get_foreign_keys(table.name)
+    for column in ("created_by", "cancelled_by"):
+        if not any(fk["constrained_columns"] == [column] and fk["referred_table"] == User.__tablename__
+                   and fk["referred_columns"] == ["id"] and not fk.get("options", {}).get("ondelete")
+                   for fk in keys):
+            raise SchemaMigrationError(f"Safety leave account foreign key is missing or unsafe: {column}.")
+    checks = {check["name"]: check["sqltext"] for check in inspector.get_check_constraints(table.name)}
+    for expected in table.constraints:
+        if (isinstance(expected, CheckConstraint) and
+                _normalize_frequency_check(checks.get(expected.name, "")) != _normalize_frequency_check(str(expected.sqltext))):
+            raise SchemaMigrationError(f"Safety leave constraint is missing or invalid: {expected.name}.")
+    actual_indexes = {index["name"]: index for index in inspector.get_indexes(table.name)}
+    for expected in table.indexes:
+        index = actual_indexes.get(expected.name)
+        if (not index or index["unique"] or index["column_names"] != list(expected.columns.keys())
+                or any(key.endswith("_where") for key in index.get("dialect_options", {}))):
+            raise SchemaMigrationError(f"Missing or invalid safety leave index: {expected.name}.")
 
 
 def _validate_login_events(inspector):

@@ -201,14 +201,16 @@ def test_changed_frequency_preserves_the_personal_checkin_limit(application):
 
 
 def test_weekly_and_monthly_rows_show_their_own_taipei_due_date(application, monkeypatch):
-    now = datetime(2026, 11, 29, 23, 59, tzinfo=TAIPEI)  # Sunday; the month ends Monday.
+    now = datetime(2026, 11, 27, 23, 59, tzinfo=TAIPEI)  # Friday; the month ends Monday.
     monkeypatch.setattr(app_module, "now_utc", lambda: now)
     _, inspector, *_ = actors(application)
     feature_point(code="Q-WEEK", frequency="weekly", category="general")
     feature_point(code="Q-MONTH", frequency="monthly", category="general")
     full_page = inspector.get("/ready").text
-    assert '週巡 · <time datetime="2026-11-29">今日到期</time>' in full_page
+    assert '週巡 · <time datetime="2026-11-29">11/29 到期</time>' in full_page
     assert '月巡 · <time datetime="2026-11-30">11/30 到期</time>' in full_page
+    now = datetime(2026, 11, 29, 23, 59, tzinfo=TAIPEI)
+    assert ready(application, inspector) == {}  # Weekend exemption applies to long-period work lists too.
     now += timedelta(minutes=1)
     refreshed = inspector.get("/dashboard/ready").text
     assert '週巡 · <time datetime="2026-12-06">12/06 到期</time>' in refreshed

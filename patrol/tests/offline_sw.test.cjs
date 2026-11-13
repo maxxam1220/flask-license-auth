@@ -72,6 +72,7 @@ test('readiness requires every cached asset; activation deletes only old patrol 
   assert.equal(answer.audioReady, true); assert.equal(answer.audioVersion, 'patrol-v1');
   assert.equal(answer.audioRevision, 'natural-female-1');
   assert.equal(answer.checklistVersion, 1);
+  assert.equal(answer.calendarVersion, 1);
   const current = [...w.stores.keys()][0]; w.stores.get(current).delete('/static/offline.js');
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, false);
   w.stores.set('patrol-offline-shell-old', new Map()); w.stores.set('unrelated-app-cache', new Map()); await w.lifecycle('activate');

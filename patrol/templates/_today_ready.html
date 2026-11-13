@@ -17,6 +17,8 @@
     <span class="ready-asof">{{ t('更新於') }} <time datetime="{{ ready_as_of.isoformat() }}">{{ ready_as_of.strftime('%H:%M') }}</time></span>
   </p>
   <p class="ready-feedback" data-ready-feedback role="status"></p>
+  {% if ready_excluded %}<p class="notice-strip">{{ t('假日或請休不列入應巡與漏打，仍可掃碼留紀錄。') }}</p>{% endif %}
+  {% if calendar_unavailable %}<p class="notice-strip">{{ t('假日日曆尚未涵蓋此年份，請聯絡系統管理員更新。') }}</p>{% endif %}
   {% if ready_points %}
     <div class="ready-mobile-key" aria-hidden="true"><span>{{ t('樓層／編號 · 地點') }}</span><span>{{ t('簽到狀態' if executing else '巡檢狀態') }}</span></div>
     <table class="ready-table" role="table" aria-labelledby="today-ready-title">
@@ -34,8 +36,8 @@
           <td class="ready-floor" role="cell">{{ floor_label(row.floor) }}</td>
           <td class="ready-code" role="cell">{{ row.code }}</td>
           <td class="ready-name" role="cell">{{ localized_point_name(row.name) }}
-            {% if row.frequency in ('three_day', 'weekly', 'monthly') %}
-            <small class="ready-due">{{ t('3日巡檢' if row.frequency == 'three_day' else '週巡' if row.frequency == 'weekly' else '月巡') }} · <time datetime="{{ row.period_end }}">{{ t('今日到期') if row.period_end == ready_date else t('{date} 到期', date=row.period_end.strftime('%m/%d')) }}</time></small>
+            {% if row.frequency in ('three_day', 'weekly', 'monthly', 'weekly_wed', 'weekly_fri') %}
+            <small class="ready-due">{{ t('3日巡檢' if row.frequency == 'three_day' else '每週三' if row.frequency == 'weekly_wed' else '每週五' if row.frequency == 'weekly_fri' else '週巡' if row.frequency == 'weekly' else '月巡') }} · <time datetime="{{ row.period_end }}">{{ t('今日到期') if row.period_end == ready_date else t('{date} 到期', date=row.period_end.strftime('%m/%d')) }}</time></small>
             {% endif %}
           </td>
           <td class="ready-status" role="cell"><span class="ready-tag {{ 'ready-tag-execute' if row.status_key == 'execute' }}">{{ t(row.status_label) }}</span></td>

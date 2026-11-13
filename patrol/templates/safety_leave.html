@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% from '_ui.html' import icon, csrf, empty %}
+{% set title='請休排除' %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='safety-leave.css') }}">{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>請休排除</h1><p>登記職安請休日期，該日期的職安巡檢不列入漏打。</p></div></div>
+<section class="panel leave-create" aria-labelledby="leave-add-heading">
+  <div class="section-heading"><h2 id="leave-add-heading">新增排除日期</h2></div>
+  <form method="post" action="{{ url_for('add_safety_leave') }}" class="leave-form" data-submit-once>
+    {{ csrf() }}
+    <label>開始日期<input type="date" name="date_from" value="{{ leave_today.isoformat() }}" min="{{ min_date.isoformat() }}" max="{{ max_date.isoformat() }}" required></label>
+    <label>結束日期<input type="date" name="date_to" min="{{ min_date.isoformat() }}" max="{{ max_date.isoformat() }}" aria-describedby="leave-date-help"><small id="leave-date-help">只請一天可留空。</small></label>
+    <label class="leave-note">備註（選填）<input type="text" name="note" maxlength="100" placeholder="例如：請休" autocomplete="off"></label>
+    <div class="leave-submit"><button class="button button-primary" data-loading-text="正在儲存…">{{ icon('plus') }}新增排除</button></div>
+  </form>
+  <p class="leave-help">只影響職安應巡與漏打計算，仍可打卡，紀錄不會刪除。填錯可取消後重新新增。</p>
+</section>
+<section class="panel spaced leave-list" aria-labelledby="leave-list-heading">
+  <div class="section-heading"><h2 id="leave-list-heading">{{ '已取消紀錄' if show_cancelled else '排除日期' }}</h2><nav class="leave-tabs" aria-label="請休排除狀態"><a href="{{ url_for('safety_leave') }}"{% if not show_cancelled %} aria-current="page"{% endif %}>有效</a><a href="{{ url_for('safety_leave', status='cancelled') }}"{% if show_cancelled %} aria-current="page"{% endif %}>已取消</a></nav></div>
+  {% if entries %}<ul class="leave-entries">
+    {% for entry in entries %}<li class="leave-entry">
+      <div class="leave-entry-body"><strong class="leave-dates">{{ entry.date_from.isoformat() }}{% if entry.date_to != entry.date_from %}<span aria-hidden="true"> ～ </span>{{ entry.date_to.isoformat() }}{% endif %}</strong><span class="leave-duration">{{ entry.days }} 天</span>
+        {% if entry.note %}<p class="leave-entry-note">{{ entry.note }}</p>{% endif %}
+        <p class="leave-meta">{{ entry.creator.display_name }} · {{ entry.created_at|localtime }} 新增{% if entry.cancelled_at %}<br>{{ entry.canceller.display_name }} · {{ entry.cancelled_at|localtime }} 取消{% endif %}</p>
+      </div>
+      {% if not show_cancelled and (current_user.role == 'admin' or entry.created_by == current_user.id) %}<form method="post" action="{{ url_for('cancel_safety_leave', leave_id=entry.id) }}" data-confirm="取消後，{{ entry.date_from.isoformat() }}{% if entry.date_to != entry.date_from %} 至 {{ entry.date_to.isoformat() }}{% endif %} 將恢復依巡檢排程計算。確定取消？" data-confirm-title="取消請休排除" data-confirm-label="確認取消" data-confirm-danger="true">{{ csrf() }}<button class="button button-secondary button-small">取消排除</button></form>{% endif %}
+    </li>{% endfor %}
+  </ul>{% if entries|length == 200 %}<p class="leave-help">目前顯示最近 200 筆紀錄。</p>{% endif %}
+  {% else %}{{ empty('尚無已取消紀錄' if show_cancelled else '尚未登記請休排除', '有請休時，填寫上方日期即可；六日與國定假日由系統自動排除。', 'clock') }}{% endif %}
+</section>
+{% endblock %}

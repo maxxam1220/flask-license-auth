@@ -49,6 +49,8 @@ from patrol_access import (apply_point_scope, can_access_category, can_access_po
                            inspection_team_scope, patrol_scope)
 from ready_patrol import ready_patrol_points
 from daily_rounds import daily2_anytime, next_daily2_slot
+from patrol_calendar import fixed_weekday, is_excluded_day, obligation_required, has_calendar_year, CALENDAR_COVERAGE_END
+from safety_leave import can_manage_safety_leave, get_safety_leave_dates, register_routes as register_safety_leave
 from issues import (IssueActionError, append_resolution_photos, can_resolve_issue, issue_state, issue_version,
                     open_issue_condition, open_issue_counts as count_open_issues, open_issue_for, transition_issue_event)
 
@@ -155,10 +157,12 @@ def slot_label(slot):
 
 def frequency_label(frequency):
     return {"daily": "每日一次", "daily2": "每日兩次", "three_day": "每3日一次", "weekly": "每週一次", "monthly": "每月一次",
-            "irregular": "不定期"}.get(frequency, frequency)
+            "weekly_wed": "每週三", "weekly_fri": "每週五", "irregular": "不定期"}.get(frequency, frequency)
 
 
 def progress_view(frequency):
+    if frequency in ("weekly_wed", "weekly_fri"):
+        return "weekly"
     return frequency if frequency in ("three_day", "weekly", "monthly") else "daily"
 
 
@@ -201,7 +205,7 @@ def normalise_return_to(value, user):
                 return None
             elif key == "stage" and item not in ("execution", "inspection"):
                 return None
-            elif key == "frequency" and item not in ("daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
+            elif key == "frequency" and item not in ("daily", "daily2", "three_day", "weekly", "weekly_wed", "weekly_fri", "weekly_all", "monthly", "irregular", "daily_all"):
                 return None
             elif key == "status" and item not in ("open", "resolved", "all"):
                 return None
@@ -294,6 +298,7 @@ def create_app(config=None):
             raise RuntimeError("Production cannot enable demo mode or insecure cookies.")
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     db.init_app(app)
+    register_safety_leave(app, now_utc=lambda: now_utc())
 
     @app.template_filter("localtime")
     def format_localtime(value):
@@ -355,6 +360,8 @@ def create_app(config=None):
                 "t": t, "ui_locale": get_locale(), "ui_languages": UI_LANGUAGES,
                 "checklist_snapshot": checklist_snapshot,
                 "simple_executor_ui": uses_simple_executor_ui(user), "home_url": home_url(user),
+                "can_manage_safety_leave": can_manage_safety_leave(user),
+                "calendar_coverage_end": CALENDAR_COVERAGE_END,
                 "localized_point_name": localized_point_name, "client_i18n": client_catalog(),
                 "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
                 "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
@@ -434,7 +441,7 @@ def create_app(config=None):
                         and template.name in {
                             "dashboard.html", "ready.html", "checkin.html", "checkin_success.html", "records.html",
                             "record_detail.html", "issues.html", "missed.html", "devices.html",
-                            "admin_devices.html", "points.html", "users.html", "login_records.html",
+                            "admin_devices.html", "points.html", "users.html", "login_records.html", "safety_leave.html",
                         })
         context["can_scan"] = g.patrol_scanner_page = can_scan
 
@@ -552,6 +559,8 @@ def create_app(config=None):
         if request.endpoint == "change_password":
             return url_for("change_password", next=safe_next(request.form.get("next")))
         destinations = {"create_point": "points", "update_point": "points", "rotate_point_qr": "points",
+                        "point_calendar_revision": "point_calendar_revision",
+                        "add_safety_leave": "safety_leave", "cancel_safety_leave": "safety_leave",
                         "delete_point": "points", "restore_point": "points",
                         "create_user": "users", "update_user": "users", "reset_password": "users",
                         "approve_device": "admin_devices", "reject_device": "admin_devices", "revoke_device": "admin_devices"}
@@ -681,7 +690,7 @@ def create_app(config=None):
 
     def executor_can_scan(point):
         return point.category == "general" and (point.workflow_mode == "two_stage" or
-                (point.workflow_mode == "spot" and point.frequency in ("irregular", "three_day") and
+                (point.workflow_mode == "spot" and point.frequency in ("irregular", "three_day", "daily", "weekly_wed", "weekly_fri") and
                  point.id in registered_visit_owners().values()))
 
     def binding_destination():
@@ -738,7 +747,7 @@ def create_app(config=None):
         if g.user.role == "executor":
             return query.where(Inspection.user_id == g.user.id, Inspection.category == "general",
                                Inspection.executor_visit.is_(True), Inspection.workflow_mode == "spot",
-                               Inspection.frequency.in_(("irregular", "three_day")))
+                               Inspection.frequency.in_(("irregular", "three_day", "daily", "weekly_wed", "weekly_fri")))
         return query.where(Inspection.user_id == g.user.id, Inspection.category == scope)
 
     def historical_points(scope):
@@ -913,10 +922,12 @@ def create_app(config=None):
             if floor:
                 query = query.where(Point.floor == int(floor))
             points = db.session.scalars(scoped_query(query).options(selectinload(Point.schedules)).order_by(*point_order())).all()
-        ready_points = ready_patrol_points(points, g.user, local_now, floor, category)
+        leave_dates = get_safety_leave_dates(local_now.date(), local_now.date())
+        ready_points = ready_patrol_points(points, g.user, local_now, floor, category, safety_leave_dates=leave_dates)
         if simple_executor:
-            visits = [point for point in points if point.frequency in ("irregular", "three_day")
-                      and point.workflow_mode == "spot" and executor_can_scan(point)]
+            visits = [point for point in points if point.workflow_mode == "spot" and executor_can_scan(point)
+                      and not is_excluded_day(local_now.date(), point.category, safety_leave_dates=leave_dates)
+                      and (fixed_weekday(point.frequency) is None or fixed_weekday(point.frequency) == local_now.weekday())]
             if visits:
                 completed = set(db.session.scalars(select(Inspection.point_id).where(
                     Inspection.point_id.in_([point.id for point in visits]), Inspection.user_id == g.user.id,
@@ -928,6 +939,8 @@ def create_app(config=None):
                 ready_points.sort(key=lambda row: (FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)), row["code"]))
         return dict(selected_floor=floor, selected_category=category,
                     ready_points=ready_points,
+                    ready_excluded=is_excluded_day(local_now.date(), category or patrol_scope(g.user) or "general", safety_leave_dates=leave_dates),
+                    calendar_unavailable=not has_calendar_year(local_now.date()),
                     ready_date=local_now.date(), ready_as_of=local_now,
                     ready_slot_label="不限時段")
 
@@ -952,9 +965,17 @@ def create_app(config=None):
         today = local_now.date()
         selected = parse_date(request.args.get("date"), today)
         view = request.args.get("view", "daily")
-        if view not in VIEW_FREQUENCIES:
+        if view not in ("daily", "three_day", "weekly", "monthly"):
             abort(400)
         period_day, period_end = period_bounds(selected, view)
+        leave_dates = get_safety_leave_dates(period_day, period_end)
+        def period_match(model):
+            if view == "weekly":
+                return db.or_(
+                    db.and_(model.frequency == "weekly", model.period_key == period_day.isoformat()),
+                    db.and_(model.frequency == "weekly_wed", model.period_key == (period_day + timedelta(days=2)).isoformat()),
+                    db.and_(model.frequency == "weekly_fri", model.period_key == (period_day + timedelta(days=4)).isoformat()))
+            return model.period_key == period_day.isoformat()
         previous_period = period_bounds(period_day - timedelta(days=1), view)[0]
         following_period = period_end + timedelta(days=1)
         # Live periods use today's schedule. For another period, show the
@@ -976,7 +997,7 @@ def create_app(config=None):
             db.func.row_number().over(partition_by=(*slot_key, Inspection.user_id, Inspection.category,
                 Inspection.point_floor, Inspection.workflow_mode),
                 order_by=(Inspection.created_at.desc(), Inspection.id.desc())).label("personal")
-        ).where(Inspection.period_key == period_day.isoformat(), Inspection.frequency.in_(frequencies),
+        ).where(period_match(Inspection), Inspection.frequency.in_(frequencies),
                 Inspection.legacy_unscheduled.is_(False), Inspection.executor_visit.is_(False))
         completion_query = completion_query.where(Inspection.point_id.in_([point.id for point in points]))
         ranked = completion_query.subquery()
@@ -994,7 +1015,7 @@ def create_app(config=None):
         executed_at = {}
         if scope in (None, "general") and category_filter in ("", "general"):
             progress_query = select(PatrolExecution.point_id, PatrolExecution.frequency, PatrolExecution.slot,
-                                    PatrolExecution.created_at).where(PatrolExecution.period_key == period_day.isoformat(),
+                                    PatrolExecution.created_at).where(period_match(PatrolExecution),
                                         PatrolExecution.frequency.in_(frequencies), PatrolExecution.category == "general")
             executed_at = {(pid, freq, slot): timestamp for pid, freq, slot, timestamp in db.session.execute(scoped_query(progress_query, PatrolExecution))}
         cards, floors = [], [{"floor": f, "label": label, "total": 0, "done": 0} for f, label in FLOOR_OPTIONS]
@@ -1008,8 +1029,9 @@ def create_app(config=None):
             frequency, active, category = settings["frequency"], settings["active"], settings["category"]
             scheduled_floor, scheduled_code, scheduled_name = settings["floor"], settings["code"], settings["name"]
             mode, legacy_unscheduled = settings["workflow_mode"], settings["legacy_unscheduled"]
-            direct_visit = (executor and mode == "spot" and frequency in ("irregular", "three_day") and not legacy_unscheduled
-                            and point.code == scheduled_code and point.workflow_mode == "spot" and executor_can_scan(point))
+            direct_visit = (executor and mode == "spot" and frequency in ("irregular", "three_day", "daily", "weekly_wed", "weekly_fri") and not legacy_unscheduled
+                            and point.code == scheduled_code and point.frequency == frequency
+                            and point.workflow_mode == "spot" and executor_can_scan(point))
             if ((frequency == "irregular" or legacy_unscheduled) and (schedule or not point.schedules) and active
                     and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
                     and (not category_filter or category_filter == category)
@@ -1017,9 +1039,17 @@ def create_app(config=None):
                 irregular_points.append(SimpleNamespace(id=point.id, code=scheduled_code, name=scheduled_name, floor=scheduled_floor,
                     category=category, frequency=frequency, workflow_mode=mode, legacy_unscheduled=legacy_unscheduled, inspection_team=point.inspection_team))
             planned_slots = {}
-            for plan, slot, _ in slot_plans(point, reference_day, schedule_timeline(point), view=view):
-                key = (plan["frequency"], plan["category"], plan["floor"], plan["workflow_mode"])
-                planned_slots.setdefault(key, {})[slot] = plan
+            # Fixed weekdays use their own day's historical schedule and period
+            # identity, even when today's settings have changed since that day.
+            plan_days = {reference_day}
+            if view == "weekly":
+                plan_days.update((period_day + timedelta(days=2), period_day + timedelta(days=4)))
+            for plan_day in sorted(plan_days):
+                for plan, slot, _ in slot_plans(point, plan_day, schedule_timeline(point), view=view, safety_leave_dates=leave_dates):
+                    if fixed_weekday(plan["frequency"]) is None and plan_day != reference_day:
+                        continue
+                    key = (plan["frequency"], plan["category"], plan["floor"], plan["workflow_mode"])
+                    planned_slots.setdefault(key, {})[slot] = plan
             groups = {group: {} for group in planned_slots}
             for record in point_records:
                 groups.setdefault((record.frequency, record.category, record.point_floor, record.workflow_mode), {})[record.slot] = record
@@ -1028,16 +1058,18 @@ def create_app(config=None):
                 if (category_filter and category_filter != group_category) or (executor and group_mode != "two_stage" and not direct_visit):
                     continue
                 planned = planned_slots.get(group, {})
+                weekday = fixed_weekday(group_frequency)
+                group_day = period_day + timedelta(days=weekday) if weekday is not None and view == "weekly" else period_day
                 slot_keys = ("am", "pm") if group_frequency == "daily2" else ("any",)
                 slots = []
                 for slot in slot_keys:
                     record = records_by_slot.get(slot)
                     scheduled_slot = slot in planned
-                    due = scheduled_slot and point.schedule_start <= reference_day and period_day <= today
+                    due = scheduled_slot and point.schedule_start <= (group_day if weekday is not None else reference_day) and group_day <= today
                     # Do not create an obligation for a slot that had already
                     # ended when the point was introduced. Existing inspection
                     # snapshots still count, even for inconsistent legacy dates.
-                    slot_deadline = execution_deadline(group_frequency, period_day.isoformat(), slot)
+                    slot_deadline = execution_deadline(group_frequency, group_day.isoformat(), slot)
                     if not record and point.created_at and slot_deadline <= local_dt(point.created_at):
                         continue
                     # A classification/floor edit cannot create another obligation
@@ -1063,8 +1095,12 @@ def create_app(config=None):
                             stage_status = "expired_unreviewed" if executed else "expired_unexecuted"
                         else:
                             stage_status = "awaiting_inspection" if executed else "awaiting_execution"
+                    # Voluntary holiday/leave records remain visible without
+                    # manufacturing an obligation or inflating completion counts.
+                    counted = bool(due or (record and obligation_required(
+                        *period_bounds(group_day, group_frequency), group_category, safety_leave_dates=leave_dates)))
                     slots.append({"key": slot, "label": slot_label(slot), "status": status, "record": visible,
-                                  "due": bool(due or record), "expired": expired, "stage_status": stage_status, "executed_at": executed})
+                                  "due": counted, "counted": counted, "expired": expired, "stage_status": stage_status, "executed_at": executed})
                 if not slots:
                     continue
                 snapshot = max(records_by_slot.values(), key=lambda item: item.created_at, default=None)
@@ -1080,18 +1116,18 @@ def create_app(config=None):
                                                  name=display_snapshot.point_name if display_snapshot else scheduled_name,
                                                  floor=group_floor, frequency=group_frequency, category=group_category, workflow_mode=group_mode, inspection_team=point.inspection_team)
                 group_total = sum(slot["due"] for slot in slots)
-                group_done = sum(slot["status"] == "done" for slot in slots)
+                group_done = sum(slot["status"] == "done" and slot["counted"] for slot in slots)
                 if group_floor is not None:
                     floor_counts[group_floor]["total"] += group_total
                     floor_counts[group_floor]["done"] += group_done
                 if not floor_filter or group_floor == int(floor_filter):
-                    status = "done" if group_done == len(slots) else ("pending" if group_total else "not_due")
+                    status = "done" if all(slot["status"] == "done" for slot in slots) else ("pending" if group_total else "not_due")
                     visible_records = [slot["record"] for slot in slots if slot["record"]]
                     latest = max(visible_records, key=lambda item: item.created_at, default=None)
                     cards.append({"point": displayed_point, "status": status, "latest": latest, "period_label": period_label, "slots": slots,
                                   "missed_count": sum(s["expired"] for s in slots), "open_issue_count": issue_counts.get(point.id, 0)})
         total = sum(slot["due"] for card in cards for slot in card["slots"])
-        done = sum(slot["status"] == "done" for card in cards for slot in card["slots"])
+        done = sum(slot["status"] == "done" and slot["counted"] for card in cards for slot in card["slots"])
         recent_query = select(Inspection).options(selectinload(Inspection.issue)).order_by(Inspection.created_at.desc(), Inspection.id.desc()).limit(6)
         recent_query = private_records(recent_query, category_filter)
         if floor_filter:
@@ -1109,12 +1145,13 @@ def create_app(config=None):
         first_date, last_date = date(2000, 1, 1), date(2100, 12, 31)
         report_filters = dict(date_from=max(first_date, period_day).isoformat(),
                               date_to=min(last_date, period_end).isoformat(), category=category_filter,
-                              floor=floor_filter, frequency="daily_all" if view == "daily" else view)
+                              floor=floor_filter, frequency="daily_all" if view == "daily" else "weekly_all" if view == "weekly" else view)
         return render_template("dashboard.html", selected_date=selected, selected_category=category_filter, selected_floor=floor_filter,
                                view=view, floors=floors, cards=cards, totals={"total": total, "done": done, "pending": total - done},
                                previous_period=max(previous_period, first_date) if period_day > first_date else None,
                                following_period=following_period if following_period <= last_date else None,
                                current_period=period_day <= today <= period_end,
+                               calendar_unavailable=not has_calendar_year(period_end),
                                missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, outstanding_issue_count=visible_open_issue_total(),
                                device_state=current_binding.status if current_binding else "none",
@@ -1984,10 +2021,12 @@ def create_app(config=None):
             # Attendance-only visits have no inspection outcome.
             query = query.where(Inspection.executor_visit.is_(False), Inspection.is_abnormal.is_(abnormal == "1"))
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
+        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "weekly_wed", "weekly_fri", "weekly_all", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         if frequency == "daily_all":
             query = query.where(model.frequency.in_(("daily", "daily2")))
+        elif frequency == "weekly_all":
+            query = query.where(model.frequency.in_(("weekly", "weekly_wed", "weekly_fri")))
         elif frequency:
             query = query.where(model.frequency == frequency)
         if g.user.role != "admin" and not can_view_general_team(g.user):
@@ -2175,7 +2214,7 @@ def create_app(config=None):
             abort(400, description="請選擇正確的應完成日期範圍，最多可查詢 367 天。")
         floor, category = scope_filters()
         frequency = request.args.get("frequency", "")
-        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "monthly", "irregular", "daily_all"):
+        if frequency not in ("", "daily", "daily2", "three_day", "weekly", "weekly_wed", "weekly_fri", "weekly_all", "monthly", "irregular", "daily_all"):
             abort(400, description="巡檢頻率選項不正確。")
         # Read historical schedules, not the point's current classification.
         filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
@@ -2198,7 +2237,8 @@ def create_app(config=None):
                     PatrolExecution.period_key <= end.isoformat(), PatrolExecution.category == "general"), PatrolExecution)).all()
         rows = calculate_missed(points, completions, begin, end, instant,
                                 category=category, floor=int(floor) if floor else None, frequency=frequency,
-                                executions=executions, two_stage_only=g.user.role == "executor")
+                                executions=executions, two_stage_only=g.user.role == "executor",
+                                safety_leave_dates=get_safety_leave_dates(first_period, end))
         teams = {point.id: point.inspection_team for point in points}
         for row in rows:
             row["inspection_team"] = teams.get(row["point_id"], "general")
@@ -2223,6 +2263,7 @@ def create_app(config=None):
         if page > pages:
             return redirect(url_for("missed", **filters, page=pages))
         return render_template("missed.html", filters=filters,
+            calendar_unavailable=not has_calendar_year(date.fromisoformat(filters["date_to"])),
             totals={"missed": len(rows), "points": len({row["point_id"] for row in rows})},
             point_summaries=point_summaries, occurrences=rows[(page - 1) * per_page:page * per_page],
             pagination={"page": page, "pages": pages, "total": len(rows), "per_page": per_page})
@@ -2331,6 +2372,24 @@ def create_app(config=None):
         return render_template("point_assignment_revision.html", plan=plan,
                                revision_error=None, expected_plan=revision_plan_digest(plan))
 
+    @app.route("/admin/points/calendar-revision", methods=["GET", "POST"])
+    @admin_required
+    def point_calendar_revision():
+        from point_calendar_revision import revise_calendar_points, calendar_revision_digest
+        try:
+            if request.method == "POST":
+                lock_current_admin()
+                result = revise_calendar_points(apply=True, instant=now_utc(), actor_id=g.user.id,
+                                                 expected_plan=request.form.get("expected_plan", ""))
+                return render_template("point_calendar_revision.html", plan={**result, "already_applied": True},
+                                       revision_error=None, expected_plan="")
+            plan = revise_calendar_points(instant=now_utc())
+            return render_template("point_calendar_revision.html", plan=plan, revision_error=None,
+                                   expected_plan=calendar_revision_digest(plan))
+        except ValueError as error:
+            return render_template("point_calendar_revision.html", plan=None, revision_error=str(error),
+                                   expected_plan=""), 409
+
     def point_values(point=None):
         raw_code = request.form.get("code", "").strip()
         name = request.form.get("name", "").strip()
@@ -2368,7 +2427,7 @@ def create_app(config=None):
         elif (not re.fullmatch(r"(?:B[12]|[1-5]F|[145]M)-[A-Z0-9]{2,20}", code)
               or not code.startswith(floor_label(int(floor)) + "-")):
             abort(400, description="點位編號請與樓層一致，例如 B1-A01；總務廁所可用 AB1-M01、BB1-M02 等專用編號。")
-        frequencies = ("daily", "daily2", "three_day", "weekly", "monthly", "irregular") if category == "general" else ("daily", "daily2", "three_day", "weekly")
+        frequencies = ("daily", "daily2", "three_day", "weekly", "weekly_wed", "weekly_fri", "monthly", "irregular") if category == "general" else ("daily", "daily2", "three_day", "weekly", "weekly_wed", "weekly_fri")
         if not valid_label(name) or frequency not in frequencies:
             abort(400, description="請填寫點位名稱（最多 100 字）與正確的巡檢頻率。")
         if category not in ("safety", "general") and not (point and point.category == category == "uncategorized"):
@@ -2610,7 +2669,18 @@ def create_app(config=None):
         points = db.session.scalars(query.order_by(*point_order())).all()
         # The code and label come from the same snapshot, in one HTTP response.
         qr_images = {point.id: base64.b64encode(qr_image(point)).decode("ascii") for point in points}
+        from point_assignment_revision import approved_calendar_workflow_schedule
+        qr_workflows = {}
+        for point in points:
+            mode = point.workflow_mode
+            if point.pending_frequency:
+                planned = next((s for s in reversed(point.schedules)
+                    if s.effective_date == point.frequency_effective_date and s.frequency == point.pending_frequency), None)
+                if planned and approved_calendar_workflow_schedule(point, planned):
+                    mode = planned.workflow_mode
+            qr_workflows[point.id] = mode
         return render_template("print_qr.html", points=points, qr_images=qr_images, selected_floor=floor, selected_category=category,
+                               qr_workflows=qr_workflows,
                                public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
 
     @app.get("/admin/users")

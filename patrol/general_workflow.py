@@ -6,6 +6,7 @@ from sqlalchemy import select
 from daily_rounds import daily2_anytime
 from models import Inspection, PatrolExecution, db
 from missed import TAIPEI, period_bounds
+from patrol_calendar import FIXED_FREQUENCIES
 
 
 EXECUTION_STATUS_LABELS = {"done": "已巡檢", "pending": "待巡檢", "expired": "已到期、未巡檢",
@@ -14,7 +15,7 @@ EXECUTION_STATUS_LABELS = {"done": "已巡檢", "pending": "待巡檢", "expired
 
 def execution_deadline(frequency, period_key, slot):
     """Return the original Taipei slot's exclusive deadline, or None for an invalid snapshot."""
-    if frequency not in ("daily", "daily2", "three_day", "weekly", "monthly", "irregular"):
+    if frequency not in ("daily", "daily2", "three_day", "weekly", "monthly", "irregular", *FIXED_FREQUENCIES):
         return None
     if slot not in (("am", "pm") if frequency == "daily2" else ("any",)):
         return None

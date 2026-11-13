@@ -383,7 +383,7 @@ def test_v9_marks_only_new_executor_visits_and_retains_every_historical_row(engi
         assert conn.scalar(select(Inspection.executor_visit).where(Inspection.id == result)) is True
     assert upgrade_schema(engine) == LATEST_VERSION
     values["user_id"] = 17
-    for change in ({"frequency": "daily"}, {"note": "異常說明"}, {"is_abnormal": True}):
+    for change in ({"frequency": "weekly"}, {"note": "異常說明"}, {"is_abnormal": True}):
         with pytest.raises(IntegrityError), engine.begin() as conn:
             conn.execute(Inspection.__table__.insert().values(**(values | change), spot_request_id="bad-visit", executor_visit=True))
 

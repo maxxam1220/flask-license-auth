@@ -42,7 +42,7 @@ async function setup(t, { shell = false, stage = 'execute' } = {}) {
     constructor() { this.port1 = { close() {} }; this.port2 = { close() {}, postMessage: data => this.port1.onmessage?.({ data }) }; }
   }
   win.MessageChannel = Channel;
-  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1 }) } }) } });
+  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 }) } }) } });
   let locale = 'vi';
   win.PatrolI18n = { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? ''), getLocale: () => locale,
     setLocale: value => { locale = value; }, getPreferences: () => ({ ui_language: locale }), acceptPreferences: () => false };

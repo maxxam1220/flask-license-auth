@@ -1,0 +1,34 @@
+.leave-create, .leave-list { min-width: 0; }
+.leave-form { display: grid; grid-template-columns: repeat(2, minmax(0, 13rem)) minmax(12rem, 1fr) auto; align-items: start; gap: 1rem; }
+.leave-form label { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
+.leave-form input { width: 100%; min-width: 0; max-width: 100%; min-height: 48px; font-size: 1rem; }
+.leave-form small { color: var(--muted); font-size: .875rem; line-height: 1.5; }
+.leave-submit { padding-top: 1.9rem; }
+.leave-submit .button { min-height: 48px; white-space: nowrap; }
+.leave-help { color: var(--muted); line-height: 1.7; font-size: .9375rem; margin: 1rem 0 0; }
+.leave-tabs { display: flex; gap: .4rem; flex-wrap: wrap; }
+.leave-tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: .5rem .9rem; border-radius: 7px; color: var(--teal); text-decoration: none; }
+.leave-tabs a[aria-current="page"] { background: var(--teal-light); font-weight: 700; }
+.leave-entries { list-style: none; padding: 0; margin: 0; }
+.leave-entry { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.1rem 0; }
+.leave-entry + .leave-entry { border-top: 1px solid var(--line, #dce4df); }
+.leave-entry-body { min-width: 0; }
+.leave-dates { font-variant-numeric: tabular-nums; font-size: 1.0625rem; line-height: 1.7; overflow-wrap: anywhere; }
+.leave-duration { display: inline-block; margin-inline-start: .6rem; padding: .1rem .5rem; border-radius: 6px; color: var(--muted); background: #f0f4f1; font-size: .875rem; white-space: nowrap; }
+.leave-entry-note { margin: .35rem 0; line-height: 1.65; overflow-wrap: anywhere; }
+.leave-meta { margin: .3rem 0 0; color: var(--muted); font-size: .875rem; line-height: 1.6; overflow-wrap: anywhere; }
+.leave-entry > form { flex: 0 0 auto; }
+.leave-entry .button { min-height: 44px; }
+@media (max-width: 1250px) {
+  .leave-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .leave-submit { padding-top: 1.9rem; }
+}
+@media (max-width: 600px) {
+  .leave-form { grid-template-columns: minmax(0, 1fr); gap: .9rem; }
+  .leave-submit { padding-top: 0; }
+  .leave-submit .button { width: 100%; }
+  .leave-entry { align-items: flex-start; flex-direction: column; gap: .65rem; }
+  .leave-entry > form, .leave-entry .button { width: 100%; }
+  .leave-dates { font-size: 1rem; }
+  .leave-list .section-heading { align-items: flex-start; flex-wrap: wrap; gap: .5rem; }
+}

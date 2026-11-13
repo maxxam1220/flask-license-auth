@@ -105,7 +105,7 @@ def test_reusing_a_registered_code_cannot_move_visit_access_to_another_point(app
 
 
 @pytest.mark.parametrize("change", [
-    {"category": "safety", "workflow_mode": "standard"}, {"frequency": "daily"}, {"code": "Xq-RENAMED"},
+    {"category": "safety", "workflow_mode": "standard"}, {"frequency": "monthly"}, {"code": "Xq-RENAMED"},
     {"code": "xq-t000"}, {"active": False},
 ])
 def test_authorized_point_rechecks_current_classification_before_saving(application, synthetic_register, change):
@@ -119,6 +119,29 @@ def test_authorized_point_rechecks_current_classification_before_saving(applicat
     db.session.commit()
     assert executor.post(url + "/confirm", data=fields).status_code in (403, 404)
     assert db.session.query(Inspection).count() == db.session.query(PatrolExecution).count() == 0
+
+
+@pytest.mark.parametrize("frequency", ["daily", "weekly_wed", "weekly_fri"])
+def test_allowed_frequency_change_still_rejects_old_visit_form_and_ticket(application, synthetic_register, frequency):
+    executor, *_ = team(application)
+    url = register_point(synthetic_register[0])
+    db.session.commit()
+    original = payload(executor, url)
+    point = db.session.scalar(db.select(Point).where(Point.qr_token == url.split("/")[-1]))
+    point.frequency = frequency
+    db.session.commit()
+    assert executor.post(url + "/confirm", data=original).status_code == 409
+    current = payload(executor, url)
+    assert current["stage"] == "visit" and current["frequency"] == frequency
+    # Updating hidden fields cannot make the old signed ticket current.
+    assert executor.post(url + "/confirm", data=current | {"spot_ticket": original["spot_ticket"]}).status_code == 409
+    assert db.session.query(Inspection).count() == db.session.query(PatrolExecution).count() == 0
+    saved = executor.post(url + "/confirm", data=current)
+    assert saved.status_code == 302 and "/checkins/" in saved.location
+    assert executor.get(saved.location).status_code == 200
+    assert second_executor(application).get(saved.location).status_code == 403
+    record = db.session.scalar(db.select(Inspection))
+    assert record.frequency == frequency and record.executor_visit
 
 
 def test_visit_requires_own_binding_ticket_and_cannot_submit_report_content(application, synthetic_register):
