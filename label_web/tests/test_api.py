@@ -388,8 +388,8 @@ class APITests(unittest.TestCase):
         self.headers = {"X-CSRF-Token":response.json["csrf"]}
         self.client.post("/api/logout",json={},headers=self.headers)
         self.headers = {"X-CSRF-Token":self.client.get("/api/session").json["csrf"]}
-        # The successful sign-in above is also one attempt in the five-minute window.
-        for _ in range(9):
+        # Only failed sign-ins consume the shared login/elevation failure budget.
+        for _ in range(10):
             self.assertEqual(self.client.post("/api/login",json={"password":"wrong"},headers=self.headers).status_code,401)
         self.assertEqual(self.client.post("/api/login",json={"password":"wrong"},headers=self.headers).status_code,429)
 
@@ -400,7 +400,8 @@ class APITests(unittest.TestCase):
         response=self.client.post("/api/login",json={"password":"a-test-password"},headers=self.headers)
         self.assertEqual(response.status_code,200)
         self.assertNotEqual(response.json["csrf"],self.csrf)
-        self.assertEqual(self.client.get("/api/templates").status_code,200)
+        self.assertEqual(self.client.get("/api/templates").status_code,403)
+        self.assertEqual(self.client.get("/api/inspection-options").status_code,200)
 
 
 if __name__=="__main__":unittest.main()

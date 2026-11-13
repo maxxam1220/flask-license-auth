@@ -28,6 +28,8 @@ from label_geometry import analyze_label_scope
 import label_source
 import corrections
 import standard_reference
+import history_cleanup
+from access_control import AccessControl
 
 register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 32_000_000
@@ -39,6 +41,7 @@ def create_app(config=None, ocr=None):
     data_dir = Path(os.environ.get("LABELCHECK_DATA_DIR", ROOT / "data"))
     app.config.update(DATA_DIR=data_dir, DATABASE_URL=os.environ.get("LABELCHECK_DATABASE_URL", ""),
         APP_PASSWORD=os.environ.get("LABELCHECK_PASSWORD", ""),
+        ADMIN_PASSWORD=os.environ.get("LABELCHECK_ADMIN_PASSWORD", ""),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=128 * 1024,
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
         SESSION_COOKIE_SECURE=os.environ.get("LABELCHECK_HTTPS", "") == "1",
@@ -55,6 +58,8 @@ def create_app(config=None, ocr=None):
         except FileExistsError:
             pass
     app.secret_key = os.environ.get("LABELCHECK_SECRET", "") or key_file.read_text().strip()
+    access = AccessControl(app)
+    app.extensions["label_access"] = access
     engine = db.open_database(app.config["DATABASE_URL"], data_dir)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="label-ocr")
     slots = threading.BoundedSemaphore(12)
@@ -70,6 +75,8 @@ def create_app(config=None, ocr=None):
 
     def get_one(table, identifier):
         with engine.connect() as conn:
+            if table is db.inspections:
+                history_cleanup.ensure_active(conn, identifier)
             row = conn.execute(select(table).where(table.c.id == identifier)).mappings().first()
         if row is None:
             abort(404, description="找不到這筆資料。")
@@ -137,8 +144,13 @@ def create_app(config=None, ocr=None):
         if request.method == "POST":
             if request.headers.get("Sec-Fetch-Site") == "cross-site":
                 abort(403, description="請從本站操作。")
-            if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), session.get("csrf", "invalid")):
+            token, expected = request.headers.get("X-CSRF-Token", ""), session.get("csrf", "")
+            if not isinstance(expected, str) or not expected or not secrets.compare_digest(token.encode(), expected.encode()):
                 abort(403, description="頁面已過期，請重新整理後再試。")
+        if request.endpoint in {"list_templates", "save_template", "source_label", "list_manual_references",
+                "get_manual_reference", "preview_manual_reference", "create_manual_reference",
+                "get_comparison_standard", "preview_comparison_standard", "update_comparison_standard"}:
+            access.require_admin()
 
     @app.after_request
     def headers(response):
@@ -171,32 +183,23 @@ def create_app(config=None, ocr=None):
 
     @app.get("/api/session")
     def current_session():
-        session.setdefault("csrf", secrets.token_urlsafe(32))
-        return jsonify(csrf=session["csrf"], requires_login=bool(app.config["APP_PASSWORD"]), authenticated=not app.config["APP_PASSWORD"] or bool(session.get("authenticated")))
-
-    login_attempts = {}
-    login_lock = threading.Lock()
+        return jsonify(access.payload())
 
     @app.post("/api/login")
     def login():
-        import time
-        addr = request.remote_addr
-        with login_lock:
-            recent = [t for t in login_attempts.get(addr, []) if time.monotonic() - t < 300]
-            if len(recent) >= 10:
-                abort(429, description="嘗試次數過多，請 5 分鐘後再試。")
-            login_attempts[addr] = recent + [time.monotonic()]
-        body = request.get_json(silent=True) or {}
-        password = body.get("password", "")
-        if not isinstance(password, str) or not secrets.compare_digest(password.encode(), app.config["APP_PASSWORD"].encode()):
-            abort(401, description="登入密碼不正確。")
-        session.clear()
-        session.update(authenticated=True, csrf=secrets.token_urlsafe(32))
-        session.permanent = True
-        return jsonify(csrf=session["csrf"], authenticated=True)
+        return access.login()
+
+    @app.post("/api/admin/unlock")
+    def unlock_admin():
+        return access.unlock()
+
+    @app.post("/api/admin/lock")
+    def lock_admin():
+        return access.lock_admin()
 
     @app.post("/api/logout")
     def logout():
+        access.revoke()
         session.clear()
         return jsonify(ok=True)
 
@@ -205,6 +208,13 @@ def create_app(config=None, ocr=None):
         with engine.connect() as conn:
             rows = conn.execute(select(db.templates).where(db.templates.c.active.is_(True)).order_by(db.templates.c.created_at.desc())).mappings().all()
         return jsonify(items=[template_payload(x) for x in rows])
+
+    @app.get("/api/inspection-options")
+    def inspection_options():
+        with engine.connect() as conn:
+            rows = conn.execute(select(db.templates.c.id, db.templates.c.name, db.templates.c.version)
+                .where(db.templates.c.active.is_(True)).order_by(db.templates.c.created_at.desc())).mappings()
+            return jsonify(items=[dict(row) for row in rows])
 
     @app.get("/api/scan-config")
     def scan_config():
@@ -428,6 +438,8 @@ def create_app(config=None, ocr=None):
     @app.post("/api/jobs")
     def create_job():
         kind = request.form.get("kind")
+        if kind == "reference":
+            access.require_admin()
         if kind not in {"reference", "inspection", "recognition"} or "photo" not in request.files:
             abort(400, description="請選擇照片。")
         template_id = request.form.get("template_id", "")
@@ -491,6 +503,8 @@ def create_app(config=None, ocr=None):
     def retry_job(identifier):
         with retry_lock:
             original = get_one(db.jobs, identifier)
+            if original["kind"] == "reference":
+                access.require_admin()
             if original["state"] != "failed":
                 abort(409, description="這張照片並非失敗狀態，請查看原本辨識結果。")
             root = (original.get("result") or {}).get("retry_root") or original["id"]
@@ -531,6 +545,12 @@ def create_app(config=None, ocr=None):
     @app.get("/api/jobs/<identifier>")
     def job_status(identifier):
         row = get_one(db.jobs, identifier)
+        if row["kind"] == "reference":
+            access.require_admin()
+        inspection_id = (row.get("result") or {}).get("inspection_id")
+        if inspection_id:
+            with engine.connect() as conn:
+                history_cleanup.ensure_active(conn, inspection_id)
         row["image"] = image_payload(row["image_id"])
         return jsonify(row)
 
@@ -548,7 +568,7 @@ def create_app(config=None, ocr=None):
         except ValueError:
             abort(400, description="頁碼不正確。")
         query = select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status,
-                       db.inspections.c.template_snapshot, db.inspections.c.created_at)
+                       db.inspections.c.template_snapshot, db.inspections.c.created_at).where(history_cleanup.active_filter())
         if request.args.get("status") in {"pass", "fail", "review"}:
             query = query.where(db.inspections.c.status == request.args["status"])
         with engine.connect() as conn:
@@ -598,6 +618,7 @@ def create_app(config=None, ocr=None):
                     .with_for_update()).mappings().first()
                 if original is None:
                     abort(404, description="找不到這筆資料。")
+                history_cleanup.ensure_active(conn, identifier)
                 original = dict(original)
                 action = corrections.validate_request(body, original)
                 current = corrections.latest(conn, identifier)
@@ -622,6 +643,8 @@ def create_app(config=None, ocr=None):
             abort(400, description="請填寫複核人員與原因（原因最多 2,000 字）。")
         row = dict(id=db.uid(), inspection_id=identifier, decision=body["decision"], reviewer=reviewer, note=note, created_at=db.now())
         with engine.begin() as conn:
+            conn.execute(select(db.inspections.c.id).where(db.inspections.c.id == identifier).with_for_update()).first()
+            history_cleanup.ensure_active(conn, identifier)
             conn.execute(insert(db.reviews).values(**row))
         return jsonify(row), 201
 
@@ -638,6 +661,7 @@ def create_app(config=None, ocr=None):
                 .with_for_update()).mappings().first()
             if original is None:
                 abort(404, description="找不到這筆資料。")
+            history_cleanup.ensure_active(conn, identifier)
             original = dict(original)
             current = corrections.latest(conn, identifier)
             active = current if current and current["patches"] else None
@@ -658,4 +682,5 @@ def create_app(config=None, ocr=None):
         return jsonify(inspection_id=new_id, manual_revision=1 if copied_from else 0, copied_from=copied_from), 201
 
     standard_reference.register_routes(app, engine)
+    history_cleanup.register_routes(app, engine, access.require_admin)
     return app

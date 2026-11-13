@@ -569,3 +569,26 @@ footer{font-size:.875rem;color:#61735a;padding:28px 0}.login-panel{max-width:460
   .login-panel{padding:24px}.topbar #breadcrumb{font-size:.875rem}.nav-item{font-size:.9375rem;min-height:68px}
 }
 
+/* Role controls and recoverable history management. */
+[hidden]{display:none!important}
+.topbar,.header-tools{flex-wrap:wrap}.header-tools{max-width:100%}
+.admin-access{min-height:44px;font-size:1rem;white-space:nowrap;padding:8px 14px}
+.workflow-help{flex-basis:100%;font-size:1rem;line-height:1.8;color:#536d54;margin:4px 0}
+.history-management{padding:16px 18px;margin:0 0 20px;border:1px solid #cad8be;border-radius:14px;background:#f5f9ef}
+.history-management .edit-actions{flex-wrap:wrap;gap:10px}.history-management .button{flex:1 1 max-content;min-width:0;white-space:normal}
+.history-entry{display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px;align-items:start}
+.history-entry>.history-row{width:100%;min-width:0}.history-select{display:flex;min-width:44px;min-height:56px;align-items:center;justify-content:center;margin:0;cursor:pointer}
+.history-select input{width:24px;height:24px;margin:0}
+.cleanup-summary{font-weight:700;overflow-wrap:anywhere}.cleanup-items{padding-left:1.4em;max-height:340px;overflow:auto}
+.cleanup-item{padding:8px 0;border-bottom:1px solid #dfe6d7;overflow-wrap:anywhere}.cleanup-item p{margin:3px 0}
+#cleanup-batches .review-record{padding:16px 0}#cleanup-batches .button{max-width:100%;white-space:normal}
+#cleanup-confirm-panel{margin-top:20px;padding-top:16px;border-top:1px solid #cad8be}
+#history-cleanup-dialog .button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#admin-dialog{max-width:min(620px,calc(100vw - 20px))}#admin-dialog .edit-actions{flex-wrap:wrap}
+@media(max-width:540px){
+  .topbar{align-items:flex-start}.header-tools{width:100%;justify-content:space-between;gap:8px;margin-left:0}
+  .admin-access{padding:7px 11px}.history-entry{grid-template-columns:32px minmax(0,1fr);gap:4px}.history-select{min-width:32px}
+  .history-management{padding:14px}.history-management .edit-actions{display:flex;flex-direction:column}
+  .history-entry .history-row{padding:12px}.history-entry .history-row>span:not(.badge){flex-basis:130px}
+}
+

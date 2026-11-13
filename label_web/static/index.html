@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261112-sidebar">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261113-admin">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20261113-admin" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -19,7 +19,7 @@
 <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5l5 5-5 5"/></symbol>
 </defs></svg>
 <div id="login" class="login-screen" hidden>
-  <form id="login-form" class="panel login-panel"><div class="brand-mark"><svg><use href="#i-scan"/></svg></div><p class="eyebrow">福和生鮮 · 品質管理</p><h1>登入標籤核對</h1><label>登入密碼<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">登入</button><p id="login-error" class="error" role="alert"></p></form>
+  <form id="login-form" class="panel login-panel"><div class="brand-mark"><svg><use href="#i-scan"/></svg></div><p class="eyebrow">福和生鮮 · 品質管理</p><h1>登入標籤核對</h1><label>登入密碼或管理碼<input name="password" type="password" autocomplete="current-password" required></label><p class="help">一般密碼可掃描、查看紀錄及訂正文字；管理碼另可管理標準與整理紀錄。</p><button class="button primary" type="submit">登入</button><p id="login-error" class="error" role="alert"></p></form>
 </div>
 <div id="app-shell" class="shell" hidden>
   <aside class="sidebar">
@@ -27,13 +27,13 @@
     <p class="nav-label">工作區</p>
     <nav aria-label="主要功能">
       <button data-view="inspect" class="nav-item active"><svg><use href="#i-scan"/></svg><span>檢查標籤</span></button>
-      <button data-view="library" class="nav-item"><svg><use href="#i-library"/></svg><span>標準標籤庫</span><span id="nav-count" class="nav-count">0</span></button>
+      <button data-view="library" data-permission="manage_standards" class="nav-item" hidden><svg><use href="#i-library"/></svg><span>標準標籤庫</span><span id="nav-count" class="nav-count">0</span></button>
       <button data-view="history" class="nav-item"><svg><use href="#i-clock"/></svg><span>檢查紀錄</span></button>
     </nav>
     <div class="sidebar-bottom"><span class="sidebar-status"><span class="status-dot"></span>第一版 · 逐字核對</span><button id="logout" class="quiet">登出</button></div>
   </aside>
   <main>
-    <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><div class="header-tools"><span class="top-badge">掃描辨識 · 標準核對</span><div class="reading-size" role="group" aria-label="閱讀字級"><button type="button" data-text-size-choice="large" aria-pressed="true">大字</button><button type="button" data-text-size-choice="xl" aria-pressed="false">特大字</button></div></div></header>
+    <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><div class="header-tools"><button id="admin-access" class="button secondary admin-access" type="button">管理功能</button><div class="reading-size" role="group" aria-label="閱讀字級"><button type="button" data-text-size-choice="large" aria-pressed="true">大字</button><button type="button" data-text-size-choice="xl" aria-pressed="false">特大字</button></div></div></header>
     <section id="view-inspect" class="view">
       <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">拍照後自動尋找系統標籤與商品清單，查看每一列的檢查結果。</p></div></div>
       <div class="steps" aria-label="檢查流程"><span><b>1</b>拍照或選照片</span><i></i><span><b>2</b>自動辨識核對</span><i></i><span><b>3</b>查看相符與差異</span></div>
@@ -110,6 +110,7 @@
     </section>
     <section id="view-history" class="view" hidden>
       <div class="heading"><div><p class="eyebrow">INSPECTION LOG</p><h1>檢查紀錄</h1><p class="lead">保留當時的標準版本、照片與人工複核結果。</p></div><select id="history-filter" aria-label="篩選檢查結果"><option value="">全部結果</option><option value="fail">有差異</option><option value="review">需複核</option><option value="pass">設定項目通過</option></select></div>
+      <div class="history-management" data-permission="cleanup_history" hidden><p class="help">管理員可將舊紀錄移至回收區；照片與完整資料保留，可還原。</p><div class="edit-actions"><button id="history-cleanup-selected" class="button secondary" type="button" disabled>整理所選 0 筆</button><button id="history-cleanup-filter" class="button secondary" type="button">依條件整理</button><button id="history-recycle" class="button secondary" type="button">紀錄回收區</button></div></div>
       <div id="history-list" class="history-list"></div><div class="pagination"><button id="history-prev" class="button secondary">上一頁</button><span id="history-page">第 1 頁</span><button id="history-next" class="button secondary">下一頁</button></div>
     </section>
     <footer>以人工確認的標準逐字核對 · 辨識不確定時請對照原圖複核</footer>
@@ -117,7 +118,7 @@
 </div>
 <dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">正面靠近拍攝，讓標籤盡量填滿畫面並保留四邊。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
 <dialog id="correction-dialog" class="edit-dialog" aria-labelledby="correction-title">
-  <div class="edit-heading"><h2 id="correction-title">訂正這行</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div>
+  <div class="edit-heading"><h2 id="correction-title">訂正辨識文字</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div>
   <p class="help">請依照片實際印字訂正，只影響這筆檢查。原始辨識與訂正紀錄都會保留。</p>
   <figure class="correction-photo"><canvas id="correction-photo" role="img" aria-label="所選文字的原始照片位置"></canvas><figcaption id="correction-photo-note">載入原圖中…</figcaption><a id="correction-full-photo" target="_blank" rel="noopener">查看完整原圖</a></figure>
   <form id="correction-form">
@@ -141,7 +142,7 @@
     <label>標準品名<input id="manual-standard-name" maxlength="200" required></label>
     <label>貨號 <span class="optional">選填</span><input id="manual-standard-sku" maxlength="100"></label>
     <label>正確標籤文字 <span class="optional">每行一項</span><textarea id="manual-standard-lines" rows="9" maxlength="20000" required></textarea></label>
-    <p class="help">以下帶入的是未核准的辨識原文，請修正錯字與漏字；保留公司、地址、電話、規格等固定文字，不要填入本批日期。</p>
+    <p class="help">1. 核對並補齊正確文字　2. 預覽　3. 確認儲存。帶入的辨識或訂正文字尚未核准為標準，請逐字確認；不要填入本批日期。</p>
     <label>保存天數 <span class="optional">未知請留空</span><input id="manual-standard-days" type="number" min="0" max="3650" step="1"></label>
     <details class="scan-options"><summary>日期排程 <span class="optional">知道規則再填</span></summary><p class="help">填相對本批基準日的天數，例如到店日 +1 填 1。留空只檢查可判讀的日期格式及順序，不推定排程。</p><label>製造日位移<input id="manual-standard-manufacture" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>有效日位移<input id="manual-standard-expiry" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>到店日位移<input id="manual-standard-arrival" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label></details>
     <label>確認人員<input id="manual-standard-reviewer" maxlength="100" required></label>
@@ -154,9 +155,9 @@
   <p id="manual-standard-error" class="upload-error" role="alert" hidden></p>
 </dialog>
 <dialog id="standard-edit-dialog" class="edit-dialog" aria-labelledby="standard-edit-title">
-  <div class="edit-heading"><h2 id="standard-edit-title">修正比對標準</h2><button id="standard-edit-close" class="button secondary" type="button">關閉</button></div>
+  <div class="edit-heading"><h2 id="standard-edit-title">更新比對標準</h2><button id="standard-edit-close" class="button secondary" type="button">關閉</button></div>
   <p id="standard-edit-source" class="edit-source"></p><p id="standard-edit-notice" class="help"></p>
-  <p class="help">這裡修改網站的比對依據，會套用到之後同款標籤；印標程式的版面不會因此變更。照片辨識文字不會自動填入。</p>
+  <p class="help">1. 修改正確依據　2. 預覽差異　3. 確認儲存。影響之後同款掃描；本筆訂正另行保留，印標版面不變。</p>
   <form id="standard-edit-form" hidden>
     <div id="standard-edit-operation" class="note" hidden><p id="standard-edit-operation-note"></p><button id="standard-edit-operation-cancel" class="button secondary" type="button">取消還原，繼續編輯</button></div>
     <label>標準品名<input id="standard-edit-name" maxlength="200" required></label>
@@ -176,6 +177,27 @@
   <button id="standard-edit-photo-template" class="button secondary" type="button" hidden>建立照片標準新版</button>
   <button id="standard-edit-reset" class="button secondary" type="button" hidden>恢復原始來源</button>
   <details id="standard-edit-history"><summary>標準修改紀錄</summary><div id="standard-edit-history-list"></div></details>
+</dialog>
+<dialog id="admin-dialog" class="edit-dialog" aria-labelledby="admin-title">
+  <div class="edit-heading"><h2 id="admin-title">管理權限</h2><button id="admin-close" class="button secondary" type="button">關閉</button></div>
+  <p id="admin-status" class="help"></p>
+  <form id="admin-unlock-form"><label>管理碼<input id="admin-password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">解鎖管理功能</button></form>
+  <p id="admin-error" class="upload-error" role="alert" hidden></p>
+  <div class="edit-actions"><button id="admin-lock" class="button secondary" type="button" hidden>鎖定管理功能</button><button id="admin-logout" class="button secondary" type="button">登出帳號</button></div>
+</dialog>
+<dialog id="history-cleanup-dialog" class="edit-dialog" aria-labelledby="cleanup-title">
+  <div class="edit-heading"><h2 id="cleanup-title">整理檢查紀錄</h2><button id="cleanup-close" class="button secondary" type="button">關閉</button></div>
+  <p class="help">只移至可還原的回收區，保留照片、比對標準、訂正及複核紀錄。</p>
+  <form id="cleanup-filter-form">
+    <p id="cleanup-selection-note" class="help"></p>
+    <div id="cleanup-filter-fields"><div class="form-row"><label>開始日期<input id="cleanup-from" type="date"></label><label>結束日期<input id="cleanup-to" type="date"></label></div><label>原始判定<select id="cleanup-status"><option value="">全部原始判定</option><option value="fail">有差異</option><option value="review">需人工複核</option><option value="pass">已核對項目相符</option></select></label></div>
+    <button id="cleanup-preview-button" class="button secondary" type="submit">預覽符合的紀錄</button>
+  </form>
+  <section id="cleanup-recycle" hidden><div id="cleanup-batches"></div><div class="pagination"><button id="cleanup-batch-prev" class="button secondary" type="button">上一頁</button><span id="cleanup-batch-page">第 1 頁</span><button id="cleanup-batch-next" class="button secondary" type="button">下一頁</button></div></section>
+  <p id="cleanup-notice" class="help" role="status"></p><p id="cleanup-summary" class="cleanup-summary"></p>
+  <details class="cleanup-item-details"><summary>查看本次清單</summary><ol id="cleanup-items" class="cleanup-items"></ol></details>
+  <div id="cleanup-confirm-panel" hidden><form id="cleanup-confirm-form"><label>操作人員<input id="cleanup-reviewer" maxlength="100" required autocomplete="name"></label><label>整理或還原原因<textarea id="cleanup-note" maxlength="2000" rows="2" required></textarea></label><label class="check-label"><input id="cleanup-confirm" type="checkbox" required><span id="cleanup-confirm-text"></span></label><button id="cleanup-confirm-save" class="button primary" type="submit" disabled>確認移至回收區</button></form></div>
+  <p id="cleanup-error" class="upload-error" role="alert" hidden></p>
 </dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 </body></html>

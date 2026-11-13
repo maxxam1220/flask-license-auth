@@ -8,6 +8,78 @@ const textFields = ["product", "spec", "storage", "origin", "company", "address"
 const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
 const maxPhotoBytes = 15 * 1024 * 1024;
 let toastTimer;
+Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false});
+let cleanupContext = null;
+
+function allowed(permission = "manage_standards") { return state.role === "admin" && state.permissions[permission] === true; }
+function requireAdmin(permission = "manage_standards") {
+  if (allowed(permission)) return true;
+  toast("此功能需管理員解鎖；掃描與本筆訂正仍可使用。", true); return false;
+}
+function isAdminPath(path) {
+  return /^\/api\/(?:templates(?:[/?]|$)|manual-standards(?:[/?]|$)|admin\/history(?:[/?]|$)|source-labels\/)/.test(path)
+    || /^\/api\/inspections\/[^/]+\/(?:standard|manual-standard)(?:[/?]|$)/.test(path);
+}
+function purgeAdminData() {
+  state.standardEdit = null; manualStandard = null; cleanupContext = null;
+  state.referenceJob = null; state.source = null; state.supersedes = null; state.historySelection.clear();
+  manualLibraryRequest++; manualLibraryTotal = 0;
+  $$(".history-select").forEach(node=>node.remove());
+  state.templates = state.templates.map(({id,name,version}) => ({id,name,version}));
+  for (const id of ["standard-edit-dialog","manual-standard-dialog","history-cleanup-dialog"]) { const node=$("#"+id); if(node.open)node.close(); }
+  for (const id of ["standard-form","standard-edit-form","manual-standard-form","cleanup-filter-form","cleanup-confirm-form"]) $("#"+id).reset();
+  $$("#standard-edit-dialog input, #standard-edit-dialog textarea, #manual-standard-dialog input, #manual-standard-dialog textarea, #history-cleanup-dialog input, #history-cleanup-dialog textarea").forEach(node=>{node.value="";node.checked=false;});
+  for(const id of ["library-list","manual-library-list","source-results","reference-lines","standard-edit-line-fields","standard-edit-date-fields","standard-edit-history-list","standard-edit-preview","manual-standard-preview","cleanup-items","cleanup-batches"]) $("#"+id).replaceChildren();
+  for(const id of ["standard-edit-source","standard-edit-notice","standard-edit-error","manual-standard-notice","manual-standard-error","source-note","manual-library-status","cleanup-error","cleanup-notice","cleanup-summary","cleanup-selection-note"]) $("#"+id).textContent="";
+  $("#reference-preview").removeAttribute("src"); $("#reference-preview").hidden=true; $("#reference-ocr").hidden=true; $("#standard-fields").disabled=true;
+  $("#manual-library-query").value=""; $("#source-query").value=""; $("#nav-count").textContent="0";
+  delete state.retryJobs.reference; $("#reference-retry").hidden=true; setUploadError("reference");
+  sessionStorage.setItem("labelcheck-failed-jobs",JSON.stringify(state.retryJobs));
+  state.failedJobs=state.failedJobs.filter(item=>item.kind!=="reference"); renderFailedJobs();
+  selectedStandard(); updateCleanupSelection();
+}
+function applySession(session) {
+  const role=session.authenticated ? session.role || "operator" : "anonymous";
+  const changed=state.role!==role || state.authenticated!==!!session.authenticated;
+  if(changed)state.authEpoch++;
+  state.role=role; state.authenticated=!!session.authenticated; state.permissions=session.permissions || {};
+  state.adminConfigured=!!session.admin_configured; if(session.csrf)state.csrf=session.csrf;
+  if(!allowed())purgeAdminData();
+  $$("[data-permission]").forEach(node=>{node.hidden=!allowed(node.dataset.permission);});
+  $$("[data-action='new-standard']").forEach(node=>{node.hidden=!allowed();});
+  $("#admin-access").textContent=allowed() ? "管理員" : "管理功能";
+  $("#logout").hidden=!session.requires_login; $("#admin-logout").hidden=!session.requires_login;
+  $("#login").hidden=state.authenticated; $("#app-shell").hidden=!state.authenticated;
+  if(!state.authenticated){
+    state.inspection=null;state.correction=null;state.inspectSource=null;state.templates=[];state.failedJobs=[];state.inspectSearchRequest++;state.failedJobsRequest++;
+    for(const id of ["result-area","history-list","inspect-source-results","inspect-source-selected","selected-standard","failed-jobs-list"])$("#"+id).replaceChildren();
+    $("#template-select").replaceChildren(new Option("自動對應系統標籤與清單",""));
+    $("#correction-form").reset();$("#correction-original").value="";$("#correction-text").value="";$("#correction-standard").textContent="";$("#correction-full-photo").removeAttribute("href");
+    const canvas=$("#correction-photo");canvas.width=canvas.width;
+    for(const id of ["admin-dialog","correction-dialog","camera-dialog"])if($("#"+id).open)$("#"+id).close();
+    $("#admin-password").value="";return;
+  }
+  if(!allowed() && ["library","standard"].includes(location.hash.slice(1)))showView("inspect");
+  if(changed && state.inspection)renderInspection(state.inspection);
+  if(changed && location.hash==="#history")loadHistory().catch(error=>toast(error.message,true));
+}
+function openAdminDialog() {
+  if(state.busy)return toast("請等待目前工作完成，再切換管理權限。");
+  $("#admin-unlock-form").reset();setDialogError("#admin-error");
+  $("#admin-status").textContent=allowed() ? "目前已解鎖管理功能，可管理比對標準及整理檢查紀錄。" : state.adminConfigured ? "一般操作可掃描、查看紀錄及訂正本筆文字。輸入管理碼後可管理標準及整理紀錄。" : "尚未設定管理碼，管理功能暫不開放。請由服務管理者設定管理碼後再使用。";
+  $("#admin-unlock-form").hidden=allowed() || !state.adminConfigured;$("#admin-lock").hidden=!allowed();$("#admin-dialog").showModal();
+}
+async function changeAdminRole(unlock=false) {
+  if(state.busy)return;
+  const password=$("#admin-password").value;if(unlock && (!state.adminConfigured || !password))return;
+  setDialogError("#admin-error");setBusy(true);$$("#admin-dialog button").forEach(node=>{node.disabled=true;});
+  try {
+    const session=await api(unlock ? "/api/admin/unlock" : "/api/admin/lock",{method:"POST",...(unlock ? {body:{password}} : {})});
+    applySession(session);$("#admin-password").value="";$("#admin-dialog").close();await loadTemplates();
+    toast(unlock ? "管理功能已解鎖。" : "已鎖定管理功能，掃描及本筆訂正仍可使用。");
+  }catch(error){setDialogError("#admin-error",error.message);$("#admin-password").value="";}
+  finally{setBusy(false);$$("#admin-dialog button").forEach(node=>{node.disabled=false;});}
+}
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -48,6 +120,7 @@ function restoreRetryJobs() {
   let saved;
   try { saved = JSON.parse(sessionStorage.getItem("labelcheck-failed-jobs") || "{}"); } catch { saved = {}; }
   for (const slot of ["inspect", "reference"]) {
+    if(slot==="reference" && !allowed())continue;
     const item = saved?.[slot];
     if (item?.state !== "failed" || typeof item.id !== "string" || !["inspection", "recognition", "reference"].includes(item.kind)) continue;
     state.retryJobs[retrySlot(item.kind)] = item;
@@ -82,7 +155,7 @@ async function loadFailedJobs() {
     const data = await api("/api/jobs/failed?limit=5");
     if (request !== state.failedJobsRequest) return;
     state.failedJobs = (Array.isArray(data.items) ? data.items : []).filter(item =>
-      item && typeof item.id === "string" && ["inspection", "recognition", "reference"].includes(item.kind)).slice(0, 5);
+      item && typeof item.id === "string" && ["inspection", "recognition", "reference"].includes(item.kind) && (item.kind!=="reference" || allowed())).slice(0, 5);
     $("#failed-jobs-note").textContent = "照片已保留，可沿用原本設定重新辨識。";
     renderFailedJobs();
   } catch (_) {
@@ -128,6 +201,7 @@ async function cleanupMemory() {
   finally { memoryBusy=false;memoryControls(); }
 }
 async function retryFailedJob(item) {
+  if(item?.kind==="reference" && !requireAdmin())return;
   if (state.busy || !item?.id || !["inspection", "recognition", "reference"].includes(item.kind)) return;
   if (retryIsPending(item.id)) return toast("這張照片已開始辨識，請重新整理接續查看結果。");
   const kind = item.kind, saved = state.retryJobs[retrySlot(kind)], supersedesId = item.supersedes_id || (saved?.id === item.id ? saved.supersedes_id : null);
@@ -150,14 +224,25 @@ async function retryFailedJob(item) {
   finally { setBusy(false); }
 }
 async function api(path, options = {}) {
+  const epoch=state.authEpoch;
+  if(isAdminPath(path) && !allowed(path.startsWith("/api/admin/history") ? "cleanup_history" : "manage_standards")){
+    const error=new Error("此功能需要管理員權限，請先解鎖管理功能。");error.status=403;error.code="admin_required";throw error;
+  }
   const headers = {...options.headers};
   if (options.method && options.method !== "GET") headers["X-CSRF-Token"] = state.csrf;
   if (options.body && !(options.body instanceof FormData)) { headers["Content-Type"] = "application/json"; options.body = JSON.stringify(options.body); }
   const response = await fetch(path, {...options, headers});
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && path !== "/api/login") { $("#login").hidden = false; $("#app-shell").hidden = true; }
-    const error = new Error(payload.error || "連線失敗，請確認網路後重試。"); error.status = response.status; throw error;
+    if (response.status === 401 && !["/api/login","/api/admin/unlock"].includes(path)) applySession({authenticated:false,role:"anonymous",requires_login:true});
+    if(response.status===403 && payload.code==="admin_required"){
+      applySession({authenticated:state.authenticated,role:"operator",requires_login:true,admin_configured:state.adminConfigured});
+      try{applySession(await api("/api/session"));if(state.authenticated)await loadTemplates();}catch(_){/* Keep management data cleared until a verified session is available. */}
+    }
+    const error = new Error(payload.error || "連線失敗，請確認網路後重試。"); error.status = response.status; error.code=payload.code; throw error;
+  }
+  if(epoch!==state.authEpoch && !["/api/session","/api/login","/api/admin/unlock","/api/admin/lock","/api/logout"].includes(path)){
+    const error=new Error("登入權限已變更，請重新操作。");error.code="session_changed";throw error;
   }
   return payload;
 }
@@ -169,6 +254,7 @@ function sourceCodeLabel(source) { const code=String(source?.code || "");return 
 function sourceOptionLabel(source) { return `${sourceKindLabel(source)} ${sourceCodeLabel(source)} · ${source.name}`; }
 function showView(view) {
   if (!["inspect", "library", "standard", "history"].includes(view)) view = "inspect";
+  if(["library","standard"].includes(view) && !allowed())view="inspect";
   $$(".view").forEach(x => { x.hidden = x.id !== `view-${view}`; });
   $$("[data-view]").forEach(x => { x.classList.toggle("active", x.dataset.view === (view === "standard" ? "library" : view)); });
   $("#breadcrumb").textContent = `工作區 / ${{inspect:"檢查標籤",library:"標準標籤庫",standard:"建立標準標籤",history:"檢查紀錄"}[view]}`;
@@ -179,6 +265,7 @@ function showView(view) {
 }
 function setBusy(busy, kind = "") {
   state.busy = busy;
+  $("#admin-access").disabled=busy;
   memoryControls();
   if(!busy && $("#memory-panel").open)loadMemory();
   $$("[data-file]").forEach(b => { b.disabled = busy; });
@@ -197,7 +284,7 @@ function setBusy(busy, kind = "") {
   $("#inspect-progress").hidden = !busy || !["inspection", "recognition"].includes(kind);
   $("#reference-progress").hidden = !busy || kind !== "reference";
 }
-function clearResult() { state.inspection = null; state.resultDirty = false; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
+function clearResult() { state.inspection = null; state.resultDirty = false; state.standardSaved=false; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
 function markResultChanged() {
   if (!state.inspection) return;
   state.resultDirty = true;
@@ -216,25 +303,25 @@ function selectedStandard() {
     state.inspectSource = null; renderInspectSource();
     $("#template-options").open = true;
     if (standard.image) { const img = element("img"); img.src = standard.image.thumbnail; img.alt = "選定的標準照片"; node.append(img); }
-    const info = element("div"); info.append(element("strong", "", standard.fields.product), element("p", "", `第 ${standard.version} 版 · ${standard.approved_by} 已確認`));
-    const checked = textFields.filter(key => standard.fields[key]).map(key => fieldLabels[key]);
-    if (standard.rules.dates) checked.push("製造／有效日期");
-    if (standard.rules.arrival) checked.push("到店日");
-    info.append(element("p", "help", `核對項目：${checked.join("、")}`));
+    const info = element("div"); info.append(element("strong", "", standard.fields?.product || standard.name), element("p", "", `第 ${standard.version} 版${standard.approved_by ? ` · ${standard.approved_by} 已確認` : " · 已核准照片標準"}`));
+    if(standard.fields){const checked = textFields.filter(key => standard.fields[key]).map(key => fieldLabels[key]);
+      if (standard.rules?.dates) checked.push("製造／有效日期");
+      if (standard.rules?.arrival) checked.push("到店日");
+      info.append(element("p", "help", `核對項目：${checked.join("、")}`));}
     node.append(info);
   }
   setBusy(state.busy);
 }
 async function loadTemplates(selectedId) {
-  const payload = await api("/api/templates"); state.templates = payload.items;
+  const epoch=state.authEpoch,admin=allowed();
+  const payload = await api(admin ? "/api/templates" : "/api/inspection-options");if(epoch!==state.authEpoch)return;state.templates = payload.items;
   const select = $("#template-select"), previous = selectedId || select.value;
   select.replaceChildren();
   select.append(new Option("自動對應系統標籤與清單", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
   $("#nav-count").textContent = String(state.templates.length + manualLibraryTotal);
-  selectedStandard(); renderLibrary();
-  await loadManualLibrary(1);
+  selectedStandard(); if(admin){renderLibrary();await loadManualLibrary(1);}
 }
 async function loadScanConfig() {
   const config = await api("/api/scan-config");
@@ -257,6 +344,7 @@ function selectInspectSource(item) {
   markResultChanged(); toast(state.inspection ? "已選擇比對資料，請按重新核對套用。" : "已選擇比對資料，可以開始掃描。");
 }
 function newStandard(previous = null) {
+  if(!requireAdmin())return;
   if (state.busy) return toast("請等待目前照片完成辨識。");
   state.referenceJob = null; state.source = null; state.supersedes = previous;
   $("#source-results").replaceChildren(); $("#source-note").textContent = "";
@@ -287,6 +375,7 @@ function renderOCR(lines, container) {
   });
 }
 function fillReference(job) {
+  if(!allowed())return;
   state.referenceJob = job; state.source = null;
   $("#source-note").textContent = "";
   const form = $("#standard-form"), fields = job.result.fields;
@@ -304,6 +393,7 @@ function fillReference(job) {
 }
 async function pollJob(jobId, kind) {
   for (let attempts = 0; attempts < 600; attempts++) {
+    if(kind==="reference" && !allowed())throw new Error("標準照片已保留，請管理員解鎖後再接續處理。");
     const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
     if (job.state === "failed") { rememberFailedJob({...job,id:job.id || jobId}, kind); sessionStorage.removeItem("labelcheck-pending"); throw new Error(job.error || "照片辨識未完成，可以使用已保留的照片重試。"); }
     if (job.state === "done") {
@@ -321,6 +411,7 @@ async function pollJob(jobId, kind) {
   throw new Error("辨識仍在處理中，可重新整理頁面接續查看結果。");
 }
 async function upload(file, kind) {
+  if(kind==="reference" && !requireAdmin())return;
   if (!file || state.busy) return;
   setUploadError(kind); setRetryJob(kind);
   if (kind === "reference") $("#reference-recovery").hidden = true;
@@ -341,7 +432,7 @@ async function upload(file, kind) {
   finally { setBusy(false); }
 }
 async function saveStandard(event) {
-  event.preventDefault(); if ((!state.referenceJob && !state.source) || state.busy) return;
+  event.preventDefault(); if (!requireAdmin() || (!state.referenceJob && !state.source) || state.busy) return;
   const form = event.currentTarget, button = $("button[type=submit]", form); button.disabled = true; setBusy(true);
   try {
     const body = {job_id: state.referenceJob?.id, source_code: state.source?.code, source_revision: state.source?.revision, name: form.elements.name.value.trim(),
@@ -359,6 +450,7 @@ async function saveStandard(event) {
 }
 let manualLibraryPage=1,manualLibraryRequest=0,manualLibraryTotal=0;
 async function loadManualLibrary(page=1) {
+  if(!allowed())return;
   const token=++manualLibraryRequest,query=$("#manual-library-query").value.trim();
   $("#manual-library-status").textContent="讀取人工文字標準…";
   $("#manual-library-prev").disabled=true;$("#manual-library-next").disabled=true;
@@ -379,6 +471,7 @@ async function loadManualLibrary(page=1) {
   } catch(error){if(token===manualLibraryRequest)$("#manual-library-status").textContent=error.message;}
 }
 function renderLibrary() {
+  if(!allowed())return;
   const list = $("#library-list"); list.replaceChildren();
   if (!state.templates.length) {
     const empty = element("div", "empty-state"); empty.append(element("h2", "", "尚未建立照片標準"), element("p", "", "也可以從人工確認過的正確照片建立標準。"));
@@ -399,7 +492,7 @@ function renderLibrary() {
   });
 }
 async function loadInspection(id, restoreSettings = true) {
-  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false;
+  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
   state.manualView = true;
   if (restoreSettings) restoreInspectionSettings(inspection);
   renderInspection(inspection); showView("inspect"); $("#result-area").scrollIntoView({block:"start",behavior:"instant"});
@@ -513,6 +606,7 @@ function invalidateManualPreview() {
   $("#manual-standard-preview").hidden=true;$("#manual-standard-confirm-label").hidden=true;$("#manual-standard-save").hidden=true;$("#manual-standard-confirm").checked=false;
 }
 async function openManualStandard(inspectionId=state.inspection?.id) {
+  if(!requireAdmin())return;
   if(state.busy || !inspectionId)return;
   const context={inspectionId,preview:null};manualStandard=context;
   $("#manual-standard-form").reset();$("#manual-standard-form").hidden=true;invalidateManualPreview();setDialogError("#manual-standard-error");
@@ -520,7 +614,7 @@ async function openManualStandard(inspectionId=state.inspection?.id) {
   try {
     const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/manual-standard`);
     if(manualStandard!==context)return;
-    $("#manual-standard-notice").textContent=data.notice || "請依正確資料逐字核對，辨識原文尚未核准。";
+    $("#manual-standard-notice").textContent=(data.notice || "請依正確資料逐字核對，辨識原文尚未核准。")+(data.draft_basis==="manual_correction" ? " 已帶入本筆確認為 OCR 讀錯的訂正文字；仍需逐字核准為正確標準。" : "")+(data.excluded_unconfirmed_lines?.length ? ` ${data.excluded_unconfirmed_lines.length} 行印錯或不確定內容未帶入，請依正確資料補齊。` : "");
     if(!data.can_create){
       if(data.existing_code){const source=await api(`/api/source-labels/${encodeURIComponent(data.existing_code)}`);if(manualStandard!==context)return;$("#manual-standard-dialog").close();selectInspectSource(source);toast("這張照片已建立過文字標準，請重新核對套用。");}
       return;
@@ -540,6 +634,7 @@ function manualStandardBody() {
 }
 function manualFormBusy(busy){setBusy(busy);$$("#manual-standard-dialog input, #manual-standard-dialog textarea, #manual-standard-dialog button").forEach(node=>{node.disabled=busy;});}
 async function previewManualStandard() {
+  if(!requireAdmin())return;
   if(state.busy || !manualStandard)return;const body=manualStandardBody();if(!body)return;
   const context=manualStandard;invalidateManualPreview();setDialogError("#manual-standard-error");manualFormBusy(true);
   try {
@@ -558,7 +653,7 @@ async function previewManualStandard() {
   finally {manualFormBusy(false);}
 }
 async function saveManualStandard(event) {
-  event.preventDefault();if(state.busy || !manualStandard)return;
+  event.preventDefault();if(!requireAdmin() || state.busy || !manualStandard)return;
   const context=manualStandard,body=manualStandardBody();if(!body)return;
   if(!context.preview || context.preview.body!==JSON.stringify(body)){invalidateManualPreview();setDialogError("#manual-standard-error","內容有變更，請重新預覽後確認。");return;}
   const reviewer=$("#manual-standard-reviewer").value.trim(),note=$("#manual-standard-note").value.trim();
@@ -567,7 +662,7 @@ async function saveManualStandard(event) {
   try {saved=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/manual-standard`,{method:"POST",body:{...body,preview_hash:context.preview.hash,reviewer,note,confirmed:true}});sessionStorage.setItem("labelcheck-operator",reviewer);$("#manual-standard-dialog").close();manualStandard=null;}
   catch(error){setDialogError("#manual-standard-error",error.message);}
   finally {manualFormBusy(false);}
-  if(saved){selectInspectSource(saved.source || saved);loadManualLibrary(1);toast("文字標準已儲存，下次可搜尋選用；這張照片請按「重新核對」。");}
+  if(saved && allowed()){selectInspectSource(saved.source || saved);standardSavedNotice();loadManualLibrary(1);toast("文字標準已儲存，下次可搜尋選用。請重新核對本張照片。");}
 }
 function invalidateStandardPreview() {
   if (!state.standardEdit) return;
@@ -575,6 +670,7 @@ function invalidateStandardPreview() {
   $("#standard-edit-preview").hidden=true;$("#standard-edit-confirm-label").hidden=true;$("#standard-edit-save").hidden=true;$("#standard-edit-confirm").checked=false;
 }
 async function openStandardEditor(inspectionId = state.inspection?.id, focusLineIds = []) {
+  if(!requireAdmin())return;
   if (state.busy || !inspectionId) return;
   state.standardEdit={inspectionId,loading:true,operation:"update",focusLineIds:Array.isArray(focusLineIds) ? focusLineIds.map(String) : []};
   $$("#standard-edit-dialog button").forEach(button=>{button.disabled=false;});
@@ -654,6 +750,7 @@ function restoreStandardOperationButtons() {
   $$("[data-standard-restore]").forEach(button=>{const item=(data?.history || []).find(row=>String(row.revision)===button.dataset.standardRestore);button.disabled=state.busy || !!context?.conflict || !item || !!data.stale || item.source_revision!==data.source_revision || item.revision===data.base_revision;});
 }
 async function selectStandardOperation(operation, targetRevision) {
+  if(!requireAdmin())return;
   const context=state.standardEdit;
   if(state.busy || !context?.data?.editable || context.conflict || !["reset","restore"].includes(operation))return;
   if(operation==="restore"){
@@ -703,6 +800,7 @@ function collectStandardChanges() {
   return {changes,preview};
 }
 function previewStandardChanges() {
+  if(!requireAdmin())return;
   if(state.busy)return;
   setDialogError("#standard-edit-error");const collected=collectStandardChanges();if(!collected)return;
   if(!collected.preview.length){invalidateStandardPreview();setDialogError("#standard-edit-error","目前沒有修改內容。");return;}
@@ -711,7 +809,7 @@ function previewStandardChanges() {
   state.standardEdit.preview=standardPreviewSignature(collected);area.hidden=false;$("#standard-edit-confirm").checked=false;$("#standard-edit-confirm-label").hidden=false;$("#standard-edit-save").hidden=false;
 }
 async function saveStandardEdit(event) {
-  event.preventDefault();const context=state.standardEdit;if(state.busy || !context?.data?.editable || context.conflict)return;
+  event.preventDefault();const context=state.standardEdit;if(!requireAdmin() || state.busy || !context?.data?.editable || context.conflict)return;
   const collected=collectStandardChanges();if(!collected)return;
   if(!context.preview || context.preview !== standardPreviewSignature(collected)){invalidateStandardPreview();setDialogError("#standard-edit-error","內容已變更，請重新預覽修改差異。");return;}
   const reviewer=$("#standard-edit-reviewer").value.trim(),note=$("#standard-edit-note").value.trim();
@@ -723,7 +821,7 @@ async function saveStandardEdit(event) {
     if(body.operation==="restore")body.target_revision=context.targetRevision;
     await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard`,{method:"POST",body});
     sessionStorage.setItem("labelcheck-operator",reviewer);$("#standard-edit-dialog").close();
-    if(state.inspection?.id===context.inspectionId){markResultChanged();const dirty=$("#recheck-dirty");if(dirty)dirty.textContent="比對標準已更新，之後同款會使用新版。以下仍是原判定，請按「重新核對」更新這張照片。";}
+    if(state.inspection?.id===context.inspectionId)standardSavedNotice();
     toast("新版比對標準已儲存，之後同款會套用；這張照片可再按「重新核對」。");
   } catch(error){
     if(error.status===409){context.conflict=true;$("#standard-edit-reload").hidden=false;setDialogError("#standard-edit-error","標準已被更新。你的輸入仍保留；請先複製需要的文字，再重新載入最新標準核對，這次尚未儲存。");}
@@ -875,13 +973,20 @@ async function recheckInspection() {
 }
 function renderRecheckControls(area) {
   const block = element("div", "recheck-controls"); block.id = "recheck-controls";
-  const dirty = element("p", "recheck-dirty", "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
-  const button = element("button", "button secondary", "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
+  const dirty = element("p", "recheck-dirty", state.standardSaved ? "標準已儲存，之後同款會使用新版。以下仍是上次結果，請重新核對本張照片。" : "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
+  const button = element("button", `button ${state.standardSaved ? "primary" : "secondary"}`, state.standardSaved ? "用新標準重新核對本張" : "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
   const result=state.inspection?.manual_revision?.result || state.inspection?.result;
   const hasSource=!!state.inspection?.template_id || !!state.inspection?.template_snapshot?.source?.code;
-  const edit = element("button","button secondary",hasSource ? "修正比對標準" : "建立文字比對標準");edit.type="button";edit.dataset.editStandard="true";edit.disabled=state.busy;edit.hidden=!!result?.label_scope?.blocked;edit.onclick=()=>hasSource ? openStandardEditor() : openManualStandard();
+  const edit = element("button","button secondary",hasSource ? "更新比對標準" : "建立文字比對標準");edit.type="button";edit.dataset.editStandard="true";edit.disabled=state.busy;edit.hidden=!allowed() || !!result?.label_scope?.blocked;edit.onclick=()=>hasSource ? openStandardEditor() : openManualStandard();
   const hasPatches = !!state.inspection?.manual_revision?.patches?.length;
-  block.append(dirty,button,edit,element("p","recheck-help",hasPatches ? "沿用目前人工訂正，依最新標準與上方本批日期重新核對；原紀錄保留。" : "使用原辨識文字，依最新系統標籤、清單與上方本批日期核對。")); area.append(block);
+  block.append(dirty,button,edit,element("p","recheck-help",hasPatches ? "沿用目前人工訂正，依最新標準與上方本批日期重新核對；原紀錄保留。" : "使用原辨識文字，依最新系統標籤、清單與上方本批日期核對。"));
+  block.append(element("p","workflow-help",allowed() ? "訂正辨識文字：按各行「訂正」，只影響本筆。更新比對標準：按「改標準」，影響之後同款掃描。" : "辨識讀錯時，按該行「訂正」，只影響本筆；變更後續比對標準需管理員處理。"));
+  area.append(block);
+}
+function standardSavedNotice(){
+  state.standardSaved=true;markResultChanged();
+  if(state.inspection)renderInspection(state.inspection);
+  $("#recheck-controls")?.scrollIntoView({block:"center",behavior:"instant"});
 }
 function renderResultLines(rows, area, inspection, manual = false) {
   const list = element("section", "scan-lines"); list.id = "result-lines"; list.setAttribute("aria-label", "逐列檢查結果");
@@ -889,7 +994,7 @@ function renderResultLines(rows, area, inspection, manual = false) {
   rows.forEach(row => {
     if(manual)row.originalLines=inspection.ocr.lines;
     const node=resultLine(row),lineId=row.line_ids.find(id=>inspection?.ocr?.lines?.some(line=>line.id===id));
-    const sourceIds=inspection.template_id || !["fail","review"].includes(row.status) ? [] : [...new Set(row.checks.filter(check=>["fail","review"].includes(check.status) && check.source !== "date").flatMap(check=>Array.isArray(check.source_line_ids) ? check.source_line_ids.filter(id=>typeof id==="string" || Number.isInteger(id)) : []))];
+    const sourceIds=!allowed() || inspection.template_id || !["fail","review"].includes(row.status) ? [] : [...new Set(row.checks.filter(check=>["fail","review"].includes(check.status) && check.source !== "date").flatMap(check=>Array.isArray(check.source_line_ids) ? check.source_line_ids.filter(id=>typeof id==="string" || Number.isInteger(id)) : []))];
     if(lineId === undefined && !sourceIds.length){list.append(node);return;}
     const wrapper=element("div","scan-line-entry"),actions=element("div","scan-line-actions");
     if(lineId !== undefined){const button=element("button","line-correct-button","訂正");button.type="button";button.dataset.correctLine=String(lineId);button.disabled=state.busy;button.setAttribute("aria-label",`訂正這行：${row.text || "未辨識到文字"}`);button.onclick=()=>openCorrectionDialog(lineId);actions.append(button);}
@@ -948,18 +1053,121 @@ async function loadHistory() {
   if (page !== state.page || filter !== $("#history-filter").value) return;
   const list = $("#history-list"); list.replaceChildren();
   if (!data.items.length) { const empty = element("div", "empty-state"); empty.append(element("h2", "", "這裡還沒有檢查紀錄"),element("p", "", "完成一次照片檢查後，結果會自動保存在這裡。")); list.append(empty); }
-  data.items.forEach(item => { const row = element("button", "history-row"), img = element("img"), text = element("span"); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy"; const referenceLabel=Number(item.version)>0 ? `第 ${item.version} 版` : isCatalogSource(item) ? "清單比對" : "系統比對";text.append(element("strong", "", item.name), element("small", "", `${when(item.created_at)} · ${referenceLabel}`)); row.append(img,text,badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));row.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));} row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); }; list.append(row); });
+  data.items.forEach(item => { const row = element("button", "history-row"), img = element("img"), text = element("span"); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy"; const referenceLabel=Number(item.version)>0 ? `第 ${item.version} 版` : isCatalogSource(item) ? "清單比對" : "系統比對";text.append(element("strong", "", item.name), element("small", "", `${when(item.created_at)} · ${referenceLabel}`)); row.append(img,text,badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));row.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));} row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
+    if(allowed("cleanup_history")){
+      const wrap=element("div","history-entry"),label=element("label","history-select"),select=element("input");select.type="checkbox";select.checked=state.historySelection.has(item.id);select.setAttribute("aria-label",`選取紀錄：${item.name}，${when(item.created_at)}`);
+      select.onchange=()=>{if(select.checked)state.historySelection.set(item.id,item.name);else state.historySelection.delete(item.id);updateCleanupSelection();};label.append(select);wrap.append(label,row);list.append(wrap);
+    }else list.append(row);
+  });updateCleanupSelection();
   $("#history-page").textContent=`第 ${page} 頁`; $("#history-prev").disabled=page<=1; $("#history-next").disabled=!data.has_more;
 }
+function updateCleanupSelection(){
+  const count=state.historySelection.size;$("#history-cleanup-selected").textContent=`整理所選 ${count} 筆`;
+  $("#history-cleanup-selected").disabled=!allowed("cleanup_history") || !count || state.busy;
+}
+function clearCleanupPreview(){
+  if(cleanupContext){cleanupContext.preview=null;cleanupContext.batch=null;}
+  $("#cleanup-confirm-panel").hidden=true;$("#cleanup-confirm").checked=false;$("#cleanup-confirm-save").disabled=true;
+  $("#cleanup-items").replaceChildren();$("#cleanup-summary").textContent="";
+}
+function cleanupBusy(busy){setBusy(busy);$$("#history-cleanup-dialog button, #history-cleanup-dialog input, #history-cleanup-dialog select, #history-cleanup-dialog textarea").forEach(node=>{node.disabled=busy;});if(!busy){cleanupConfirmChanged();$("#cleanup-batch-prev").disabled=(cleanupContext?.page || 1)<=1;$("#cleanup-batch-next").disabled=!cleanupContext?.batchHasMore;}}
+function cleanupConfirmChanged(){
+  const ready=cleanupContext?.preview?.count>0 || cleanupContext?.batch?.status==="archived";
+  $("#cleanup-confirm-save").disabled=state.busy || !allowed("cleanup_history") || !ready || !$("#cleanup-confirm").checked;
+}
+async function openHistoryCleanup(mode="filters"){
+  if(!requireAdmin("cleanup_history") || state.busy)return;
+  const ids=mode==="selected" ? [...state.historySelection.keys()] : [];
+  if(mode==="selected" && !ids.length)return;
+  cleanupContext={mode,ids,page:1,preview:null,batch:null};
+  $("#cleanup-filter-form").reset();$("#cleanup-confirm-form").reset();clearCleanupPreview();setDialogError("#cleanup-error");
+  $("#cleanup-notice").textContent="";$("#cleanup-batches").replaceChildren();$("#cleanup-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";
+  $("#cleanup-filter-fields").hidden=mode!=="filters";$("#cleanup-filter-form").hidden=mode==="recycle";$("#cleanup-recycle").hidden=mode!=="recycle";
+  $("#cleanup-selection-note").textContent=mode==="selected" ? `準備整理已選取的 ${ids.length} 筆紀錄，請先預覽實際清單。` : "依台灣日期（含起訖日）與原始判定篩選；每次最多 500 筆。";
+  $("#cleanup-title").textContent=mode==="recycle" ? "紀錄回收區" : "整理檢查紀錄";
+  $("#history-cleanup-dialog").showModal();
+  if(mode==="recycle")await loadCleanupBatches(1);
+}
+function cleanupFilters(){
+  if(cleanupContext?.mode==="selected")return {ids:[...cleanupContext.ids]};
+  const filters={};for(const [key,id] of [["date_from","cleanup-from"],["date_to","cleanup-to"],["status","cleanup-status"]])if($("#"+id).value)filters[key]=$("#"+id).value;
+  if(!Object.keys(filters).length)throw new Error("請至少設定日期或原始判定，避免一次整理全部紀錄。");
+  if(filters.date_from && filters.date_to && filters.date_from>filters.date_to)throw new Error("開始日期不可晚於結束日期。");
+  return filters;
+}
+function renderCleanupItems(items){
+  const list=$("#cleanup-items");list.replaceChildren();
+  for(const item of items || []){const row=element("li","cleanup-item");row.append(element("strong","",item.name || "未命名標籤"),element("p","help",`${when(item.created_at)} · 原始：${statusLabels[item.status] || item.status}`));if(item.manual_status)row.append(element("small","",`訂正後：${statusLabels[item.manual_status] || item.manual_status}`));list.append(row);}
+}
+function describeCleanupFilters(filters){
+  if(filters.ids)return `所選 ${filters.ids.length} 筆紀錄`;
+  return `${filters.date_from || "不限開始日期"} ～ ${filters.date_to || "不限結束日期"}；原始判定：${statusLabels[filters.status] || "全部"}`;
+}
+async function previewHistoryCleanup(event){
+  event?.preventDefault();if(!requireAdmin("cleanup_history") || state.busy || !cleanupContext)return;
+  clearCleanupPreview();setDialogError("#cleanup-error");let filters;
+  try{filters=cleanupFilters();}catch(error){setDialogError("#cleanup-error",error.message);return;}
+  const context=cleanupContext;cleanupBusy(true);
+  try{
+    const data=await api("/api/admin/history/preview",{method:"POST",body:{filters}});if(cleanupContext!==context)return;
+    context.preview={...data,filters};renderCleanupItems(data.items);
+    $("#cleanup-summary").textContent=`預覽 ${data.count} 筆 · ${describeCleanupFilters(filters)}${data.expires_at ? ` · 確認期限 ${when(data.expires_at)}` : ""}`;
+    $("#cleanup-notice").textContent=data.count ? "尚未移動資料。請核對下方確切清單，再填寫人員與原因。" : "沒有符合條件的紀錄，尚未修改任何資料。";
+    $("#cleanup-confirm-panel").hidden=!data.count;$("#cleanup-confirm-text").textContent=`已確認上述 ${data.count} 筆，移至回收區並保留照片、標準及訂正紀錄。`;$("#cleanup-confirm-save").textContent="確認移至回收區";
+  }catch(error){if(cleanupContext===context)setDialogError("#cleanup-error",error.message);}
+  finally{cleanupBusy(false);}
+}
+async function loadCleanupBatches(page=1){
+  if(!allowed("cleanup_history") || !cleanupContext)return;
+  const context=cleanupContext,request=(context.request || 0)+1;context.request=request;
+  try{
+    const data=await api(`/api/admin/history/batches?page=${page}`);if(cleanupContext!==context || context.request!==request)return;
+    context.page=page;context.batchHasMore=!!data.has_more;const list=$("#cleanup-batches");list.replaceChildren();
+    for(const item of data.items || []){
+      const row=element("article","review-record");row.append(element("strong","",`${item.count} 筆 · ${item.status==="restored" ? "已還原" : "回收區"}`),element("p","help",`${when(item.created_at)} · ${item.reviewer || ""}`),element("p","",item.note || ""));
+      const button=element("button","button secondary",item.status==="archived" ? "查看並還原" : "查看清單");button.type="button";button.onclick=()=>previewHistoryRestore(item.batch_id);row.append(button);list.append(row);
+    }
+    if(!data.items?.length)list.append(element("p","help","回收區目前沒有紀錄。"));
+    $("#cleanup-batch-page").textContent=`第 ${page} 頁`;$("#cleanup-batch-prev").disabled=page<=1;$("#cleanup-batch-next").disabled=!data.has_more;
+  }catch(error){if(cleanupContext===context)setDialogError("#cleanup-error",error.message);}
+}
+async function previewHistoryRestore(batchId){
+  if(!requireAdmin("cleanup_history") || state.busy || !cleanupContext)return;
+  const context=cleanupContext;clearCleanupPreview();setDialogError("#cleanup-error");cleanupBusy(true);
+  try{
+    const data=await api(`/api/admin/history/batches/${encodeURIComponent(batchId)}`);if(cleanupContext!==context)return;
+    context.batch=data.batch;renderCleanupItems(data.items);
+    $("#cleanup-summary").textContent=`${data.batch.count} 筆 · ${data.batch.status==="restored" ? "這批已還原" : "待還原清單"} · ${when(data.batch.created_at)}`;
+    $("#cleanup-notice").textContent="還原後會重新出現在檢查紀錄；原本照片、判定與訂正內容均保留。";
+    $("#cleanup-confirm-panel").hidden=data.batch.status!=="archived";$("#cleanup-confirm-text").textContent=`已確認將以上 ${data.batch.count} 筆還原到檢查紀錄。`;$("#cleanup-confirm-save").textContent="確認還原這批紀錄";
+    $("#cleanup-confirm-panel").scrollIntoView({block:"start",behavior:"instant"});
+  }catch(error){if(cleanupContext===context)setDialogError("#cleanup-error",error.message);}
+  finally{cleanupBusy(false);}
+}
+async function commitHistoryCleanup(event){
+  event.preventDefault();if(!requireAdmin("cleanup_history") || state.busy || !cleanupContext)return;
+  const context=cleanupContext,preview=context.preview,batch=context.batch,reviewer=$("#cleanup-reviewer").value.trim(),note=$("#cleanup-note").value.trim();
+  if(!reviewer || !note || !$("#cleanup-confirm").checked || !(preview?.count>0 || batch?.status==="archived")){setDialogError("#cleanup-error","請先預覽清單，填寫人員及原因，再勾選確認。");return;}
+  if(preview){let current;try{current=cleanupFilters();}catch(error){clearCleanupPreview();setDialogError("#cleanup-error",error.message);return;}if(JSON.stringify(preview.filters)!==JSON.stringify(current)){clearCleanupPreview();setDialogError("#cleanup-error","篩選已變更，請重新預覽清單。");return;}}
+  if(preview?.expires_at && Date.parse(preview.expires_at)<=Date.now()){clearCleanupPreview();setDialogError("#cleanup-error","預覽已過期，請重新預覽再確認。");return;}
+  cleanupBusy(true);setDialogError("#cleanup-error");
+  try{
+    const result=await api(batch ? `/api/admin/history/batches/${encodeURIComponent(batch.batch_id)}/restore` : "/api/admin/history/archive",{method:"POST",body:{reviewer,note,confirmed:true,...(batch ? {base_revision:batch.revision} : {preview_id:preview.preview_id,preview_hash:preview.preview_hash})}});
+    if(cleanupContext!==context)return;
+    sessionStorage.setItem("labelcheck-operator",reviewer);state.historySelection.clear();clearCleanupPreview();
+    $("#cleanup-notice").textContent=batch ? `已還原 ${result.count} 筆，現在可在檢查紀錄查看。` : `已將 ${result.count} 筆移至回收區，照片與完整紀錄均保留，可隨時至回收區還原。`;
+    state.page=1;await loadHistory();if(batch)await loadCleanupBatches(context.page);
+  }catch(error){if(cleanupContext===context){if([409,410].includes(error.status))clearCleanupPreview();setDialogError("#cleanup-error",error.message);}}
+  finally{cleanupBusy(false);}
+}
 async function initialize() {
-  const session = await api("/api/session"); state.csrf = session.csrf;
-  $("#logout").hidden=!session.requires_login;
-  $("#login").hidden=session.authenticated; $("#app-shell").hidden=!session.authenticated;
+  const session = await api("/api/session"); applySession(session);
   if (!session.authenticated) return;
   await Promise.all([loadTemplates(),loadScanConfig(),loadFailedJobs()]); restoreRetryJobs(); showView(location.hash.slice(1));
   const stored = sessionStorage.getItem("labelcheck-pending");
   if (stored) {
     let pending; try { pending=JSON.parse(stored); } catch { sessionStorage.removeItem("labelcheck-pending"); return; }
+    if(pending.kind==="reference" && !allowed())return;
     if (pending.supersedes_id) {
       state.supersedes=state.templates.find(t=>t.id===pending.supersedes_id);
       if (!state.supersedes) { sessionStorage.removeItem("labelcheck-pending"); toast("原標準已更新，請重新選擇最新標準再建立新版。",true); return; }
@@ -1052,7 +1260,7 @@ $("#inspect-source-search").onsubmit = async event => {
   finally { button.disabled = state.busy; }
 };
 $("#source-search").onsubmit = async event => {
-  event.preventDefault(); if(state.busy) return;
+  event.preventDefault(); if(!requireAdmin() || state.busy) return;
   const results = $("#source-results"); results.replaceChildren(); setBusy(true);
   try {
     const data = await api(`/api/source-labels?q=${encodeURIComponent($("#source-query").value.trim())}`);
@@ -1061,7 +1269,7 @@ $("#source-search").onsubmit = async event => {
   } catch(error) { toast(error.message,true); } finally { setBusy(false); }
 };
 async function importSource(code) {
-  if(state.busy) return; setBusy(true);
+  if(!requireAdmin() || state.busy) return; setBusy(true);
   try {
     const source = await api(`/api/source-labels/${encodeURIComponent(code)}`);
     state.source = source; state.referenceJob = null;
@@ -1112,8 +1320,27 @@ $("#history-filter").options[0].textContent="全部原始判定";
 $("#history-filter").onchange=()=>{ state.page=1; loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-prev").onclick=()=>{ state.page=Math.max(1,state.page-1); loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-next").onclick=()=>{ state.page++; loadHistory().catch(e=>toast(e.message,true)); };
+$("#admin-access").onclick=openAdminDialog;
+$("#admin-close").onclick=()=>{if(!state.busy)$("#admin-dialog").close();};
+$("#admin-dialog").addEventListener("close",()=>{$("#admin-password").value="";});
+$("#admin-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();});
+$("#admin-unlock-form").onsubmit=event=>{event.preventDefault();changeAdminRole(true);};
+$("#admin-lock").onclick=()=>changeAdminRole(false);
+$("#admin-logout").onclick=()=>$("#logout").click();
+$("#history-cleanup-filter").onclick=()=>openHistoryCleanup("filters");
+$("#history-cleanup-selected").onclick=()=>openHistoryCleanup("selected");
+$("#history-recycle").onclick=()=>openHistoryCleanup("recycle");
+$("#cleanup-close").onclick=()=>{if(!state.busy){cleanupContext=null;$("#history-cleanup-dialog").close();}};
+$("#history-cleanup-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();else cleanupContext=null;});
+$("#cleanup-filter-form").onsubmit=previewHistoryCleanup;
+$("#cleanup-filter-form").addEventListener("input",clearCleanupPreview);
+$("#cleanup-confirm-form").onsubmit=commitHistoryCleanup;
+$("#cleanup-confirm").onchange=cleanupConfirmChanged;
+$("#cleanup-batch-prev").onclick=()=>loadCleanupBatches(Math.max(1,(cleanupContext?.page || 1)-1));
+$("#cleanup-batch-next").onclick=()=>loadCleanupBatches((cleanupContext?.page || 1)+1);
+window.addEventListener("hashchange",()=>{if(state.authenticated)showView(location.hash.slice(1));});
 $("#login-form").onsubmit=async e=>{ e.preventDefault(); const form=e.currentTarget, button=$("button",form); button.disabled=true; try { const result=await api("/api/login",{method:"POST",body:{password:form.elements.password.value}}); state.csrf=result.csrf; form.reset(); $("#login-error").textContent=""; await initialize(); } catch(error) { $("#login-error").textContent=error.message; } finally { button.disabled=false; } };
-$("#logout").onclick=async()=>{ if(state.busy) return toast("請等待目前辨識完成。"); try { await api("/api/logout",{method:"POST"}); location.reload(); } catch(e) { toast(e.message,true); } };
+$("#logout").onclick=async()=>{ if(state.busy) return toast("請等待目前辨識完成。"); try { await api("/api/logout",{method:"POST"}); applySession({authenticated:false,requires_login:true});location.reload(); } catch(e) { toast(e.message,true); } };
 $("#memory-panel").addEventListener("toggle",()=>{if($("#memory-panel").open)loadMemory();});
 $("#memory-refresh").onclick=loadMemory;
 $("#memory-cleanup").onclick=cleanupMemory;

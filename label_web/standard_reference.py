@@ -10,6 +10,7 @@ from sqlalchemy import Column, Integer, JSON, String, Table, Text, UniqueConstra
 from sqlalchemy.exc import IntegrityError
 
 import database as db
+import history_cleanup
 from validation import extract_fields, TEXT_FIELDS
 from source_validation import normalize_text
 
@@ -196,6 +197,15 @@ def _inspection(engine, identifier):
     return dict(row)
 
 
+def _lock_active_inspection(conn, identifier):
+    """Serialize writes with reversible history cleanup, not only route guards."""
+    existing = conn.execute(select(db.inspections.c.id).where(db.inspections.c.id == identifier)
+                            .with_for_update()).scalar_one_or_none()
+    if existing is None:
+        abort(404, description="找不到這筆辨識紀錄。")
+    history_cleanup.ensure_active(conn, identifier)
+
+
 def _context(engine, inspection):
     from label_source import raw_draft
     snapshot = inspection.get("template_snapshot") or {}
@@ -292,6 +302,7 @@ def save(engine, inspection, body):
     code = str(base["code"])
     try:
         with engine.begin() as conn:
+            _lock_active_inspection(conn, inspection["id"])
             head = conn.execute(select(heads).where(heads.c.code == code).with_for_update()).mappings().first()
             current_revision = head["revision"] if head else 0
             if current_revision != base_revision:

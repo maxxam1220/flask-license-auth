@@ -10,6 +10,8 @@ import database as db
 import label_source
 import manual_reference as manual
 import standard_reference as standards
+import corrections
+import history_cleanup
 from source_rules import prepare_source
 from source_validation import evaluate_source
 
@@ -59,6 +61,15 @@ class ManualReferenceTests(unittest.TestCase):
         body.update(extra)
         return self.client.post(f"/api/inspections/{identifier}/manual-standard", json=body)
 
+    def correct(self, identifier, text="", kind="ocr_misread", operation="replace"):
+        with self.engine.begin() as conn:
+            current = corrections.latest(conn, self.original["id"])
+            revision = corrections.build_revision(self.original, current,
+                {"line_id": identifier, "text": text, "kind": kind, "operation": operation,
+                 "reviewer": "訂正員", "note": "對照原圖"}, db.now())
+            conn.execute(insert(db.corrections).values(**revision))
+        return revision
+
     def test_draft_is_unapproved_and_excludes_full_and_short_batch_dates(self):
         data = self.client.get("/api/inspections/unknown/manual-standard").json
         self.assertTrue(data["can_create"])
@@ -77,6 +88,43 @@ class ManualReferenceTests(unittest.TestCase):
         with self.engine.connect() as conn:
             self.assertEqual(conn.execute(select(func.count()).select_from(db.manual_sources)).scalar(), 0)
             self.assertEqual(conn.execute(select(func.count()).select_from(standards.versions)).scalar(), 0)
+
+    def test_draft_uses_latest_active_confirmed_corrections_only_and_keeps_raw_ocr(self):
+        self.correct(0, "品名：確認蘋果")
+        self.correct(1, "貨號：NEW-002")
+        self.correct(3, "有效日期：2026.11.16")
+        self.correct(2, "產地：日木", "label_misprint")
+        final = self.correct(4, "", "uncertain")
+        data = self.client.get("/api/inspections/unknown/manual-standard").json
+        self.assertEqual(data["manual_revision"], final["revision"])
+        self.assertEqual(data["draft_basis"], "manual_correction")
+        self.assertEqual((data["suggested_name"], data["suggested_sku"]), ("確認蘋果", "NEW-002"))
+        self.assertEqual(data["draft_lines"], [{"id": 0, "text": "品名：確認蘋果"}, {"id": 1, "text": "貨號：NEW-002"}])
+        self.assertEqual(data["excluded_date_lines"], [{"id": 3, "text": "有效日期：2026.11.16"}])
+        self.assertEqual({row["id"]: row["kind"] for row in data["excluded_unconfirmed_lines"]}, {2: "label_misprint", 4: "uncertain"})
+        self.assertEqual(data["ocr_lines"], self.original["ocr"]["lines"])
+        self.assertIn("仍未核准", data["warning"])
+        with self.engine.connect() as conn:
+            stored = dict(conn.execute(select(db.inspections).where(db.inspections.c.id == "unknown")).mappings().one())
+            self.assertEqual(stored, self.original)
+            self.assertEqual(conn.execute(select(func.count()).select_from(db.manual_sources)).scalar(), 0)
+
+    def test_draft_never_suggests_misprinted_name_or_uncertain_sku(self):
+        self.correct(0, "品名：日本錯果", "label_misprint")
+        self.correct(1, "", "uncertain")
+        data = self.client.get("/api/inspections/unknown/manual-standard").json
+        self.assertEqual((data["suggested_name"], data["suggested_sku"]), ("", ""))
+        self.assertTrue({0, 1}.isdisjoint(row["id"] for row in data["draft_lines"]))
+
+    def test_revoked_correction_is_not_reused_in_manual_draft(self):
+        self.correct(0, "品名：確認蘋果")
+        final = self.correct(0, operation="revoke")
+        data = self.client.get("/api/inspections/unknown/manual-standard").json
+        self.assertEqual(data["manual_revision"], final["revision"])
+        self.assertEqual(data["draft_basis"], "original_ocr")
+        self.assertEqual(data["suggested_name"], "日本蘋果")
+        self.assertEqual(data["draft_lines"][0]["text"], "品名：日本蘋果")
+        self.assertEqual(data["excluded_unconfirmed_lines"], [])
 
     def test_listing_paginates_searches_sku_and_returns_only_current_metadata(self):
         code = self.create().json["code"]
@@ -153,6 +201,9 @@ class ManualReferenceTests(unittest.TestCase):
         body = deepcopy(self.definition)
         body["date_settings"] = [{"kind": "expiry", "shift_days": "3"}]
         self.assertEqual(self.preview(body).status_code, 400)
+        for wrong_kind in ([], {}):
+            body["date_settings"] = [{"kind": wrong_kind, "shift_days": 3}]
+            self.assertEqual(self.preview(body).status_code, 400)
 
     def test_contradictory_manual_schedule_is_rejected_without_inventing_missing_dates(self):
         for settings, keep_days in (([{"kind": "manufacture", "shift_days": 3}, {"kind": "expiry", "shift_days": 1}], None),
@@ -176,6 +227,79 @@ class ManualReferenceTests(unittest.TestCase):
             response = self.client.post("/api/inspections/date-edit/standard", json=body)
             self.assertEqual(response.status_code, 400, response.json)
             self.assertEqual(self.client.get("/api/inspections/date-edit/standard").json["base_revision"], 1)
+
+    def test_manual_text_revisions_cannot_bypass_creation_date_and_line_rules(self):
+        code = self.create().json["code"]
+        original = label_source.draft(self.engine, code)
+        self.add_inspection("fixed-edit", [], original)
+        current = self.client.get("/api/inspections/fixed-edit/standard").json
+        for value in ("11/15", "到店日：", "製造日期：", "產地：日本\n食用前清洗"):
+            body = {"base_revision": 1, "source_revision": current["source_revision"],
+                    "changes": {"lines": [{"id": 2, "text": value}]},
+                    "reviewer": "B", "note": "確認標準", "confirmed": True}
+            response = self.client.post("/api/inspections/fixed-edit/standard", json=body)
+            self.assertEqual(response.status_code, 400, value)
+            self.assertEqual(self.client.get("/api/inspections/fixed-edit/standard").json["base_revision"], 1)
+        self.assertEqual(label_source.draft(self.engine, code), original)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.execute(select(func.count()).select_from(standards.versions)).scalar(), 1)
+            self.assertEqual(dict(conn.execute(select(db.inspections).where(db.inspections.c.id == "unknown")).mappings().one()), self.original)
+        definition = dict(self.definition, name="日本\n蘋果", lines=[{"text": "產地：日本"}])
+        self.add_inspection("bad-name", [])
+        self.assertEqual(self.preview(definition, "bad-name").status_code, 400)
+
+    def test_archived_after_preview_cannot_create_manual_standard(self):
+        preview = self.preview().json
+        with self.engine.begin() as conn:
+            conn.execute(insert(history_cleanup.tombstones).values(inspection_id="unknown", batch_id="archive-race",
+                archived=True, revision=1, updated_at=db.now()))
+        body = dict(self.definition, preview_hash=preview["preview_hash"], reviewer="A", note="已預覽", confirmed=True)
+        response = self.client.post("/api/inspections/unknown/manual-standard", json=body)
+        self.assertEqual(response.status_code, 404, response.json)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.execute(select(func.count()).select_from(db.manual_sources)).scalar(), 0)
+            self.assertEqual(conn.execute(select(func.count()).select_from(standards.versions)).scalar(), 0)
+
+    def test_source_search_uses_current_manual_name_sku_and_text_after_edit(self):
+        code = self.create().json["code"]
+        self.add_inspection("search-edit", [], label_source.draft(self.engine, code))
+        current = self.client.get("/api/inspections/search-edit/standard").json
+        body = {"base_revision": 1, "source_revision": current["source_revision"],
+                "changes": {"name": "新版蘋果", "lines": [{"id": 1, "text": "貨號：NEW-001"}, {"id": 2, "text": "產地：台灣"}]},
+                "reviewer": "B", "note": "確認新版", "confirmed": True}
+        self.assertEqual(self.client.post("/api/inspections/search-edit/standard", json=body).status_code, 201)
+        for query in ("NEW-001", "新版蘋果", "台灣", code):
+            self.assertEqual([row["code"] for row in label_source.search(self.engine, query)], [code])
+        for query in ("ABC-001", "日本蘋果", "日本"):
+            self.assertEqual(label_source.search(self.engine, query), [])
+        body.update(base_revision=2, operation="reset", changes={})
+        self.assertEqual(self.client.post("/api/inspections/search-edit/standard", json=body).status_code, 201)
+        self.assertEqual([row["code"] for row in label_source.search(self.engine, "ABC-001")], [code])
+        self.assertEqual(label_source.search(self.engine, "NEW-001"), [])
+
+    def test_resolution_rejects_revision_changed_after_identity_selection(self):
+        code = self.create().json["code"]
+        self.add_inspection("concurrent-edit", [], label_source.draft(self.engine, code))
+        current = self.client.get("/api/inspections/concurrent-edit/standard").json
+        original_draft = label_source.draft
+        def changed_draft(engine, selected):
+            response = self.client.post("/api/inspections/concurrent-edit/standard", json={
+                "base_revision": 1, "source_revision": current["source_revision"],
+                "changes": {"name": "新版梨子", "lines": [{"id": 1, "text": "貨號：PEAR-002"}]},
+                "reviewer": "B", "note": "另一人同時更新", "confirmed": True})
+            self.assertEqual(response.status_code, 201, response.json)
+            return original_draft(engine, selected)
+        observed = [line(0, "品名：日本蘋果"), line(1, "貨號：ABC-001")]
+        before = deepcopy(observed)
+        with patch.object(label_source, "draft", side_effect=changed_draft):
+            result = label_source.resolve(self.engine, observed)
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertIsNone(result["source"])
+        self.assertIn("更新", result["reason"])
+        self.assertEqual(observed, before)
+        self.assertNotEqual(label_source.resolve(self.engine, observed)["status"], "matched")
+        self.assertEqual(label_source.resolve(self.engine, [line(0, "品名：新版梨子"), line(1, "貨號：PEAR-002")])["code"], code)
+        self.assertEqual(label_source.resolve(self.engine, observed, source_code=code)["source"]["name"], "新版梨子")
 
     def test_expiry_offset_does_not_double_add_keep_days_and_unknown_lines_stay_read(self):
         code = self.create().json["code"]

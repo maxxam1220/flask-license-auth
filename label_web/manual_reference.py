@@ -29,6 +29,17 @@ def _fixed_manual_text(value):
     return value
 
 
+def fixed_line_text(value):
+    """The same fixed-text contract applies to creation and later revisions."""
+    from standard_reference import _text
+    value = _fixed_manual_text(_text(value, "標準文字", 2000))
+    if "\n" in value or "\r" in value:
+        abort(400, description="請將標準文字逐行分開，不要合併成一段。")
+    if _kind(value) in DATE_LABELS:
+        abort(400, description="製造日、有效日與到店日請填日期規則，不要存成固定文字。")
+    return value
+
+
 def _stored(engine):
     inspector = inspect(engine, raiseerr=False)
     return inspector is not None and inspector.has_table(db.manual_sources.name)
@@ -111,6 +122,10 @@ def validate_date_rules(source):
     """Reject contradictory explicitly supplied rules, without inventing missing ones."""
     if source.get("source_kind") != "manual":
         return
+    # Restore/reset also pass here: a historical fixed batch date must not
+    # bypass today's creation/edit validation just because it was saved before.
+    for row in source.get("lines", []):
+        fixed_line_text(row["text"])
     offsets = {_kind(setting.get("content", "")): setting["shift_days"]
                for setting in source.get("date_settings", []) if _kind(setting.get("content", "")) in DATE_LABELS}
     for first, second, message in (
@@ -141,8 +156,29 @@ def _context(engine, inspection):
 
 def payload(engine, inspection):
     from label_source import _identifiers, _SKU_LABEL
+    import corrections
     can_create, existing, notice = _context(engine, inspection)
-    lines = deepcopy(inspection.get("ocr", {}).get("lines", []))
+    original_lines = deepcopy(inspection.get("ocr", {}).get("lines", []))
+    lines = deepcopy(original_lines)
+    with engine.connect() as conn:
+        correction = corrections.latest(conn, inspection["id"])
+    patches = {patch["line_id"]: patch for patch in (correction or {}).get("patches", [])}
+    excluded_unconfirmed, applied = [], []
+    for line in lines:
+        patch = patches.get(line.get("id"))
+        if not patch:
+            continue
+        if patch["kind"] == "ocr_misread":
+            # A confirmed reading is draft input, never an approved standard or
+            # a replacement of the original OCR stored with the inspection.
+            line.update(text=patch["text"], human_verified=True, human_uncertain=False)
+            applied.append(line["id"])
+        else:
+            line["human_uncertain"] = True
+            excluded_unconfirmed.append({"id": line["id"], "text": patch["text"], "kind": patch["kind"],
+                "reason": "此行已確認標籤印錯，不能直接作為正確標準。" if patch["kind"] == "label_misprint"
+                          else "此行已標記看不清楚，請確認正確文字後另外填入。"})
+    excluded_ids = {line["id"] for line in excluded_unconfirmed}
     try:
         fields = extract_fields(lines)
     except (KeyError, ValueError, TypeError):
@@ -151,6 +187,8 @@ def payload(engine, inspection):
     draft_lines, excluded = [], []
     from werkzeug.exceptions import HTTPException
     for line in lines:
+        if line.get("id") in excluded_ids:
+            continue
         value = str(line.get("text", "")).strip()
         if not value:
             continue
@@ -160,12 +198,19 @@ def payload(engine, inspection):
         except HTTPException:
             safe = False
         (draft_lines if safe else excluded).append({"id": line.get("id"), "text": value})
-    skus = {value for line in lines for value in _identifiers(line.get("text", ""), _SKU_LABEL, normalize=lambda v:v)}
+    skus = {value for line in lines if line.get("id") not in excluded_ids
+            for value in _identifiers(line.get("text", ""), _SKU_LABEL, normalize=lambda v:v)}
+    product = fields.get("product", {})
+    suggested_name = "" if excluded_ids.intersection(product.get("line_ids", [])) else product.get("value", "")
     return {"can_create": can_create, "existing_code": existing, "notice": notice,
-            "suggested_name": fields.get("product", {}).get("value", ""),
+            "suggested_name": suggested_name,
             "suggested_sku": next(iter(skus)) if len(skus) == 1 else "",
-            "ocr_lines": lines, "draft_lines": draft_lines, "excluded_date_lines": excluded,
-            "warning": "這是辨識原文，尚未核准；請逐字修正後，確認要作為之後同款標籤的比對標準。"}
+            "ocr_lines": original_lines, "draft_lines": draft_lines, "excluded_date_lines": excluded,
+            "manual_revision": correction["revision"] if correction else 0,
+            "draft_basis": "manual_correction" if applied else "original_ocr",
+            "excluded_unconfirmed_lines": excluded_unconfirmed,
+            "warning": (f"草稿已套用第 {correction['revision']} 版中確認的辨識訂正，仍未核准為標準；請逐字確認後再儲存。" if applied
+                        else "這是辨識原文，尚未核准；請逐字修正後，確認要作為之後同款標籤的比對標準。")}
 
 
 def definition(body):
@@ -187,11 +232,7 @@ def definition(body):
     for item in supplied:
         if not isinstance(item, dict) or set(item) != {"text"}:
             abort(400, description="每段標準文字只能提供 text。")
-        text = _fixed_manual_text(_text(item["text"], "標準文字", 2000))
-        if "\n" in text or "\r" in text:
-            abort(400, description="請將標準文字逐行分開，不要合併成一段。")
-        if _kind(text) in DATE_LABELS:
-            abort(400, description="製造日、有效日與到店日請填日期規則，不要存成固定文字。")
+        text = fixed_line_text(item["text"])
         if _kind(text) == "product" and normalize_text(text) != normalize_text(name):
             abort(400, description="品名與標準文字中的品名不同，請逐字修正後再預覽。")
         if text not in texts:
@@ -211,12 +252,13 @@ def definition(body):
     if not isinstance(supplied_dates, list) or len(supplied_dates) > 3:
         abort(400, description="日期規則最多包含製造日、有效日與到店日。")
     for item in supplied_dates:
-        if not isinstance(item, dict) or set(item) != {"kind", "shift_days"} or item.get("kind") not in DATE_LABELS or item["kind"] in kinds:
+        if (not isinstance(item, dict) or set(item) != {"kind", "shift_days"}
+                or not isinstance(item.get("kind"), str) or item["kind"] not in DATE_LABELS or item["kind"] in kinds):
             abort(400, description="每種日期只能設定一次，並填寫相對本批基準日的位移天數。")
         kinds.add(item["kind"])
         settings.append({"content": DATE_LABELS[item["kind"]], "format": "A",
                          "shift_days": _integer(item["shift_days"], "日期位移", -3650, 3650)})
-    lines = [{"id": index, "text": value, "score": 1., "box": []} for index, value in enumerate(texts)]
+    lines = [{"id": index, "text": fixed_line_text(value), "score": 1., "box": []} for index, value in enumerate(texts)]
     fields = fields_from_lines(lines, name)
     source = {"name": name, "source_kind": "manual", "comparison_scope": "manual_text",
               "fields": fields, "lines": lines, "rules": {"dates": bool(kinds & {"manufacture", "expiry"}), "arrival": "arrival" in kinds},
@@ -259,6 +301,7 @@ def save(engine, inspection, body):
     source.update(code=code, provenance={"inspection_id": inspection["id"], "reviewer": reviewer, "created_at": created})
     try:
         with engine.begin() as conn:
+            standards._lock_active_inspection(conn, inspection["id"])
             conn.execute(insert(db.manual_sources).values(code=code, name=source["name"], inspection_id=inspection["id"],
                 reference_hash=digest, snapshot=source, active=True, reviewer=reviewer, note=note, created_at=created))
             conn.execute(insert(standards.heads).values(code=code, revision=1))

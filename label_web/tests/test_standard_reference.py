@@ -10,6 +10,7 @@ import database as db
 import label_source
 import reference_catalog
 import standard_reference as standards
+import history_cleanup
 from source_rules import prepare_source
 from source_validation import evaluate_source
 
@@ -84,6 +85,31 @@ class StandardReferenceTests(unittest.TestCase):
         self.assertEqual(result["source"]["lines"][0]["text"], "品名：原始蘋果")
         self.assertEqual(result["base_revision"], 0)
         self.assertNotIn("照片錯字", str(result))
+
+    def test_archived_after_editor_open_cannot_write_comparison_revision(self):
+        current = self.get()
+        with self.engine.begin() as conn:
+            conn.execute(insert(history_cleanup.tombstones).values(inspection_id="inspection-A", batch_id="archive-race",
+                archived=True, revision=1, updated_at=db.now()))
+        response = self.client.post("/api/inspections/inspection-A/standard", json={
+            "base_revision": current["base_revision"], "source_revision": current["source_revision"],
+            "changes": {"name": "新版蘋果"}, "reviewer": "A", "note": "已開啟編輯", "confirmed": True})
+        self.assertEqual(response.status_code, 404, response.json)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.execute(select(func.count()).select_from(standards.versions)).scalar(), 0)
+            self.assertEqual(conn.execute(select(func.count()).select_from(standards.heads)).scalar(), 0)
+
+    def test_first_override_created_during_auto_matching_requires_retry(self):
+        original_draft = label_source.draft
+        def changed_draft(engine, code):
+            response = self.post({"name": "新版梨子"})
+            self.assertEqual(response.status_code, 201, response.json)
+            return original_draft(engine, code)
+        with patch.object(label_source, "draft", side_effect=changed_draft):
+            result = label_source.resolve(self.engine, [line(0, "品名：原始蘋果")])
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertIsNone(result["source"])
+        self.assertEqual(label_source.resolve(self.engine, [line(0, "品名：新版梨子")])["code"], "A")
 
     def test_text_patch_preserves_originals_and_future_same_source_uses_new_standard(self):
         response = self.post({"lines": [{"id": 1, "text": "產地：日本"}]})

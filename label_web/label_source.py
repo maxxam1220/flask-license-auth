@@ -77,10 +77,18 @@ def search(engine, query):
             items = [item for item in items if str(item["code"]) != code]
             continue
         effective = standard_reference.apply_current(engine, base, version)
+        current_values = [effective["name"], code, *effective.get("barcode_values", [])]
+        if effective.get("source_kind") == "manual":
+            current_values.extend(line["text"] for line in effective.get("lines", []))
+        if not any(wanted in _identity_text(value) for value in current_values):
+            # An old SKU/name may have matched the original snapshot. Search
+            # must agree with the current revision used for actual comparison.
+            items = [item for item in items if str(item["code"]) != code]
+            continue
         existing = next((item for item in items if str(item["code"]) == code), None)
         if existing is not None:
             existing["name"] = effective["name"]
-        elif any(wanted in _identity_text(value) for value in [effective["name"], code, *effective.get("barcode_values", [])]):
+        else:
             items.insert(0, {"code": code, "name": effective["name"], "source_kind": effective["source_kind"]})
     return items[:80]
 
@@ -263,6 +271,8 @@ def _catalog(engine):
                 value = source.get("fields", {}).get(key)
                 if value:
                     item[key].add(_identity_text(value))
+        item["_standard_revision"] = version["revision"]
+        item["_source_revision"] = source["revision"]
         catalog[code] = item
     return catalog
 
@@ -410,6 +420,11 @@ def resolve(engine, ocr_lines, source_code=""):
             source = draft(engine, code)
             if source is None:
                 return _resolution("unmatched", "該標籤已變更或移除，請重新選擇。")
+            selected = catalog[code]
+            if (source.get("standard_reference", {}).get("revision", 0) != selected.get("_standard_revision", 0)
+                    or (selected.get("_source_revision") and source["revision"] != selected["_source_revision"])):
+                return _resolution("ambiguous", "比對來源在辨識期間已更新，請重新核對；未將舊品名或貨號套用到新版標準。",
+                                   catalog, [code])
             if equivalent:
                 source["equivalent_sources"] = equivalent
             reason = ("多筆清單的品名、條碼與保存天數完全相同，使用等價清單資料核對。" if equivalent
