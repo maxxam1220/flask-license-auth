@@ -8,7 +8,7 @@ const textFields = ["product", "spec", "storage", "origin", "company", "address"
 const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
 const maxPhotoBytes = 15 * 1024 * 1024;
 let toastTimer;
-Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false});
+Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false,crop:null,sampleRequest:0});
 let cleanupContext = null;
 
 function allowed(permission = "manage_standards") { return state.role === "admin" && state.permissions[permission] === true; }
@@ -17,13 +17,14 @@ function requireAdmin(permission = "manage_standards") {
   toast("此功能需管理員解鎖；掃描與本筆訂正仍可使用。", true); return false;
 }
 function isAdminPath(path) {
-  return /^\/api\/(?:templates(?:[/?]|$)|manual-standards(?:[/?]|$)|admin\/history(?:[/?]|$)|source-labels\/)/.test(path)
+  return /^\/api\/(?:templates(?:[/?]|$)|manual-standards(?:[/?]|$)|admin\/(?:history|recognition-samples)(?:[/?]|$)|source-labels\/)/.test(path)
     || /^\/api\/inspections\/[^/]+\/(?:standard|manual-standard)(?:[/?]|$)/.test(path);
 }
 function purgeAdminData() {
   state.standardEdit = null; manualStandard = null; cleanupContext = null;
   state.referenceJob = null; state.source = null; state.supersedes = null; state.historySelection.clear();
   manualLibraryRequest++; manualLibraryTotal = 0;
+  state.sampleRequest++;$("#recognition-sample-summary").textContent="";$("#recognition-sample-note").textContent="";$("#recognition-sample-download").hidden=true;$("#recognition-samples").hidden=true;
   $$(".history-select").forEach(node=>node.remove());
   state.templates = state.templates.map(({id,name,version}) => ({id,name,version}));
   for (const id of ["standard-edit-dialog","manual-standard-dialog","history-cleanup-dialog"]) { const node=$("#"+id); if(node.open)node.close(); }
@@ -56,6 +57,7 @@ function applySession(session) {
     $("#template-select").replaceChildren(new Option("自動對應系統標籤與清單",""));
     $("#correction-form").reset();$("#correction-original").value="";$("#correction-text").value="";$("#correction-standard").textContent="";$("#correction-full-photo").removeAttribute("href");
     const canvas=$("#correction-photo");canvas.width=canvas.width;
+    closeCropDialog();
     for(const id of ["admin-dialog","correction-dialog","camera-dialog"])if($("#"+id).open)$("#"+id).close();
     $("#admin-password").value="";return;
   }
@@ -68,6 +70,21 @@ function openAdminDialog() {
   $("#admin-unlock-form").reset();setDialogError("#admin-error");
   $("#admin-status").textContent=allowed() ? "目前已解鎖管理功能，可管理比對標準及整理檢查紀錄。" : state.adminConfigured ? "一般操作可掃描、查看紀錄及訂正本筆文字。輸入管理碼後可管理標準及整理紀錄。" : "尚未設定管理碼，管理功能暫不開放。請由服務管理者設定管理碼後再使用。";
   $("#admin-unlock-form").hidden=allowed() || !state.adminConfigured;$("#admin-lock").hidden=!allowed();$("#admin-dialog").showModal();
+  $("#recognition-samples").hidden=!allowed();if(allowed())loadRecognitionSamples();
+}
+async function loadRecognitionSamples(){
+  if(!allowed())return;const token=++state.sampleRequest;$("#recognition-sample-summary").textContent="正在整理候選摘要…";$("#recognition-sample-download").hidden=true;
+  try{const data=await api("/api/admin/recognition-samples");if(token!==state.sampleRequest || !allowed())return;
+    const counts=data.counts || {};$("#recognition-sample-summary").textContent=`候選 ${Number(counts.candidates) || 0} 筆 · 合併重複 ${Number(counts.duplicate_observations) || 0} 筆 · 排除答案衝突 ${Number(counts.conflict_groups) || 0} 組`;
+    $("#recognition-sample-note").textContent=data.notice || "這些是待審查候選資料，不是已核准訓練集，也不會自動訓練。";$("#recognition-sample-download").hidden=data.download_available!==true;
+  }catch(error){if(token===state.sampleRequest)$("#recognition-sample-summary").textContent=error.message;}
+}
+async function downloadRecognitionSamples(){
+  if(!requireAdmin())return;const epoch=state.authEpoch,button=$("#recognition-sample-download");button.disabled=true;
+  try{const response=await fetch("/api/admin/recognition-samples/export");if(!response.ok){const payload=await response.json().catch(()=>({}));if(response.status===401 || (response.status===403 && payload.code==="admin_required"))applySession(await api("/api/session"));throw new Error(payload.error || "無法下載候選資料，請重新確認管理權限。");}
+    const blob=await response.blob();if(epoch!==state.authEpoch || !allowed())return;
+    const url=URL.createObjectURL(blob),link=element("a");link.href=url;link.download="ocr-recognition-candidates.jsonl";document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){if(allowed())$("#recognition-sample-note").textContent=error.message;else toast(error.message,true);}finally{button.disabled=false;}
 }
 async function changeAdminRole(unlock=false) {
   if(state.busy)return;
@@ -277,7 +294,7 @@ function setBusy(busy, kind = "") {
   $("#batch-date").disabled = busy;
   $("#arrival-date").disabled = busy;
   if ($("#recheck-button")) $("#recheck-button").disabled = busy;
-  $$("[data-correct-line], [data-edit-standard], [data-toggle-original]").forEach(button => { button.disabled = busy; });
+  $$("[data-correct-line], [data-edit-standard], [data-toggle-original], [data-recognition-action]").forEach(button => { button.disabled = busy; });
   $$("[data-retry-job]").forEach(button => { button.disabled = busy || retryIsPending(button.dataset.retryJob); });
   for (const slot of ["inspect", "reference"]) $(`#${slot}-retry-button`).disabled = busy || retryIsPending(state.retryJobs[slot]?.id);
   $$("[data-action='new-standard']").forEach(x => { x.disabled = busy; });
@@ -365,12 +382,12 @@ function toggleDateFields() {
   $("#reference-arrival-field").hidden = !arrivalEnabled;
   f.elements.arrival.required = arrivalEnabled;
 }
-function renderOCR(lines, container) {
+function renderOCR(lines, container, threshold=.65) {
   container.replaceChildren();
   if (!lines.length) return container.append(element("p", "muted", "未辨識到文字，請換一張清楚的照片。"));
   lines.forEach(line => {
     const row = element("div", "ocr-line", line.text);
-    if (line.score < .94) row.append(element("small", "", "此行辨識不確定，請對照照片。"));
+    if(line.human_uncertain || (!line.human_verified && (line.ambiguous || (Number.isFinite(line.score) && line.score < threshold))))row.append(element("small", "", line.ambiguity_reason==="line_retry_disagrees" ? "局部重讀結果不同，請對照原圖。" : line.ambiguous ? "不同次辨識有差異，請對照照片。" : "此行需對照照片確認。"));
     container.append(row);
   });
 }
@@ -381,7 +398,7 @@ function fillReference(job) {
   const form = $("#standard-form"), fields = job.result.fields;
   $("#reference-preview").src = job.image.url; $("#reference-preview").hidden = false;
   $("#reference-recovery").textContent = recoveryMessage(job.result.ocr); $("#reference-recovery").hidden = !$("#reference-recovery").textContent;
-  $("#reference-ocr").hidden = false; renderOCR(job.result.ocr.lines, $("#reference-lines"));
+  $("#reference-ocr").hidden = false; renderOCR(job.result.ocr.lines, $("#reference-lines"),ocrLowScoreThreshold(job.result.ocr));
   $("#standard-fields").disabled = false;
   for (const key of [...textFields, "manufacture", "expiry", "arrival"]) form.elements[key].value = fields[key]?.value || "";
   form.elements.name.value = state.supersedes?.name || fields.product?.value || "";
@@ -855,7 +872,7 @@ function buildResultRows(checks, ocrLines) {
   const rank = {fail:0,review:1,pass:2,read:3}, sources = new Map(), rows = new Map();
   ocrLines.forEach(line => sources.set(line.id, line));
   checks.forEach(check => (check.source_lines || []).forEach(line => sources.set(line.id, {...sources.get(line.id),...line})));
-  for (const line of sources.values()) rows.set(`line-${line.id}`, {id:`line-${line.id}`,status:"read",text:line.display_text ?? line.text,checks:[],line_ids:[line.id]});
+  for (const line of sources.values()) rows.set(`line-${line.id}`, {id:`line-${line.id}`,status:"read",text:line.display_text ?? line.text,checks:[],line_ids:[line.id],source_lines:[line]});
   checks.forEach((check, index) => {
     const ids = (check.line_ids || []).filter(id => sources.has(id));
     const targets = ids.length ? ids.map(id => rows.get(`line-${id}`)) : [{id:`check-${index}`,status:"read",text:check.display_actual ?? check.display_text ?? check.actual,checks:[],line_ids:[]}];
@@ -873,21 +890,25 @@ function buildResultRows(checks, ocrLines) {
   }
   return [...rows.values()].sort((a,b) => rank[a.status] - rank[b.status]);
 }
+function alternativeEvidence(item){
+  const targets=new Set(Array.isArray(item.line_ids) ? item.line_ids : []),lines=Array.isArray(item.source_lines) ? [...item.source_lines] : [];
+  for(const check of item.checks || [])if(Array.isArray(check?.source_lines))lines.push(...check.source_lines);
+  return lines.filter(line=>line && (!targets.size || targets.has(line.id)));
+}
+function hasLocalRetryDifference(item){return alternativeEvidence(item).some(line=>line.ambiguity_reason==="line_retry_disagrees" || (Array.isArray(line.alternatives) && line.alternatives.some(value=>value?.method==="stroke_thin_2x2")));}
 function appendOCRAlternatives(container, item) {
-  const targets = new Set(Array.isArray(item.line_ids) ? item.line_ids : []), seen = new Set(), values = [];
-  for (const check of item.checks || []) {
-    for (const line of Array.isArray(check?.source_lines) ? check.source_lines : []) {
-      if (!line || (targets.size && !targets.has(line.id))) continue;
+  const seen = new Set(), values = [];
+  for (const line of alternativeEvidence(item)) {
       for (const alternative of Array.isArray(line.alternatives) ? line.alternatives : []) {
         const text = typeof alternative === "string" ? alternative : alternative?.text;
         if (typeof text !== "string" || !text.trim() || text === line.text || seen.has(text)) continue;
         seen.add(text); values.push(text);
       }
-    }
   }
   if (!values.length) return;
   const block = element("div", "line-comparison ocr-alternatives");
-  block.append(element("strong", "", "另一次辨識（僅供對照，未套用）"));
+  block.append(element("strong", "", hasLocalRetryDifference(item) ? "局部重讀候選（僅供對照，未套用）" : "另一次辨識（僅供對照，未套用）"));
+  if(hasLocalRetryDifference(item))block.append(element("p","help","局部重讀結果不同，請對照原圖；候選可能更不準確，原始辨識文字仍保留。"));
   values.forEach(text => block.append(element("p", "scan-line-text", text)));
   container.append(block);
 }
@@ -902,6 +923,7 @@ function resultLine(item) {
   content.append(element("p", "scan-line-text", item.label && item.text ? `${item.label}：${text}` : text));
   if (item.status === "read") content.append(element("small", "line-note", item.partialPass ? "部分日期檢查已通過，其餘文字尚無比對依據" : "僅辨識，尚無比對依據"));
   const reasons = [...new Set(item.checks.filter(check => check.status === item.status).map(check => check.reason).filter(Boolean))];
+  if(item.status==="review" && hasLocalRetryDifference(item))reasons.unshift("局部重讀結果不同，請對照原圖。");
   if (expandable && reasons.length) content.append(element("p", "line-reason", reasons[0]));
   body.append(mark, content);
   if (expandable) {
@@ -1023,6 +1045,7 @@ function renderInspection(inspection) {
   const recovery = recoveryMessage(inspection.ocr);
   if (recovery) { const notice = element("p", "result-notes", recovery); notice.setAttribute("role", "status"); area.append(notice); }
   renderSourceMatch(result.source_match, area, result.inputs?.base_date);
+  renderRecognitionInfo(inspection,result,rows,area);
   renderRecheckControls(area);
   renderResultLines(rows, area, inspection, manual);
   if (result.notes?.length) { const notes = element("div", "result-notes"); result.notes.forEach(note => notes.append(element("p", "", note))); area.append(notes); }
@@ -1036,7 +1059,7 @@ function renderInspection(inspection) {
   }
   const canvas = element("canvas"); canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", "待檢照片；紅框為差異，黃框為待確認文字"); observedScroll.append(canvas);
   observed.append(element("figcaption", "", "待檢照片 · 紅框差異／黃框複核"), observedScroll); pair.append(observed); evidence.append(pair); drawEvidence(canvas, {...inspection,result});
-  const details = element("details"), raw = element("div", "ocr-lines"); details.append(element("summary", "", "查看完整辨識原文"), raw); renderOCR(inspection.ocr.lines, raw); evidence.append(details);
+  const details = element("details"), raw = element("div", "ocr-lines"); details.append(element("summary", "", "查看完整辨識原文"), raw); renderOCR(inspection.ocr.lines, raw,ocrLowScoreThreshold(inspection.ocr)); evidence.append(details);
   const reviewList = element("div"); inspection.reviews.forEach(review => { const row = element("div", "review-record"); row.append(element("strong", "", reviewLabels[review.decision]), element("p", "", review.note), element("small", "", `${review.reviewer} · ${when(review.created_at)}`)); reviewList.append(row); }); evidence.append(reviewList);
   const review = element("form", "review-form"); review.append(element("h3", "", "人工複核"), element("p", "help", "複核紀錄會另外保留，原始辨識結果不會被覆蓋。"));
   function control(label, input) { const wrap = element("label", "", label); wrap.append(input); review.append(wrap); return input; }
@@ -1046,6 +1069,45 @@ function renderInspection(inspection) {
   const submit = element("button", "button secondary full", "儲存複核紀錄"); submit.type = "submit"; review.append(submit);
   review.onsubmit = async event => { event.preventDefault(); submit.disabled = true; try { await api(`/api/inspections/${inspection.id}/reviews`, {method:"POST",body:{decision:decision.value,reviewer:reviewer.value,note:note.value}}); sessionStorage.setItem("labelcheck-operator", reviewer.value); const dirty=state.resultDirty;await loadInspection(inspection.id,false);if(dirty)markResultChanged(); toast("複核紀錄已保存。"); } catch(e) { toast(e.message,true); } finally { submit.disabled=false; } };
   evidence.append(review); area.append(evidence);
+}
+function ocrLowScoreThreshold(ocr){const threshold=ocr?.diagnostics?.low_score_threshold;return Number.isFinite(threshold) && threshold>=0 && threshold<=1 ? threshold : .65;}
+function recognitionInfo(inspection,result,rows){
+  const ocr=inspection.ocr || {},diagnostics=ocr.diagnostics || {},pre=ocr.preprocessing || {},lines=Array.isArray(ocr.lines) ? ocr.lines : [];
+  const count=value=>Number.isInteger(value) && value>=0 ? value : null;
+  const width=Number(inspection.image?.width),height=Number(inspection.image?.height),threshold=ocrLowScoreThreshold(ocr);
+  const low=count(diagnostics.low_score_count) ?? lines.filter(line=>Number.isFinite(line.score) && line.score<threshold).length;
+  const ambiguous=count(diagnostics.ambiguous_line_count) ?? lines.filter(line=>line.ambiguous===true).length;
+  const small=count(diagnostics.small_text_line_count),review=rows.filter(row=>row.status==="review").length;
+  const facts=[],warnings=[];
+  if(width>0 && height>0)facts.push(`保存照片：${width} × ${height} 像素`);
+  facts.push(`原始辨識：${count(diagnostics.line_count) ?? lines.length} 行；目前需確認：${review} 項`);
+  if(typeof ocr.engine==="string" && ocr.engine)facts.push(`辨識引擎：${ocr.engine}`);
+  if(Number.isInteger(pre.passes) && pre.passes>0)facts.push(`本次整圖讀取：${pre.passes} 次${Number(pre.selected_rotation) ? `；採用旋轉 ${pre.selected_rotation}° 的讀取結果` : ""}`);
+  if(count(diagnostics.line_retry_count)>0)facts.push(`局部文字重讀：${diagnostics.line_retry_count} 行`);
+  if(count(diagnostics.rotation_retry_count)>0 && !(Number(pre.passes)>1))facts.push(`旋轉重讀：${diagnostics.rotation_retry_count} 次`);
+  if(Number.isFinite(ocr.elapsed) && ocr.elapsed>=0)facts.push(`辨識耗時：${ocr.elapsed} 秒`);
+  if(pre.scale_x>1 || pre.scale_y>1)facts.push("小圖曾放大供辨識；放大不能補回原照缺少的細節。");
+  if(result.label_scope?.blocked)warnings.push(result.label_scope.reason || "照片內的標籤範圍不明，請框選一張完整標籤後重新辨識。");
+  if(small>0)warnings.push(`有 ${small} 行字框較小${Number.isFinite(diagnostics.small_text_height_threshold_px) ? `（短邊小於 ${diagnostics.small_text_height_threshold_px} 像素）` : ""}，請放大原照確認細字；必要時靠近重拍。`);
+  if(low>0)warnings.push(`原始 OCR 有 ${low} 行低於辨識分數門檻 ${threshold}，請依照片核對；這不是整張標籤的正確率。`);
+  if(ambiguous>0)warnings.push(`有 ${ambiguous} 行不同次讀取不一致，請查看該行明細或重拍。`);
+  if(width>0 && height>0 && Math.max(width,height)<1000)warnings.push("保存照片較小，細字可能缺少細節；請優先選原始照片或靠近重拍。");
+  if(!lines.length)warnings.push("沒有辨識到文字，請確認照片清楚且只有一張完整標籤。");
+  return {facts,warnings,review};
+}
+function renderRecognitionInfo(inspection,result,rows,area){
+  const info=recognitionInfo(inspection,result,rows),panel=element("details","recognition-info");panel.id="recognition-info";panel.open=!!result.label_scope?.blocked;
+  panel.append(element("summary","",`照片與辨識資訊${info.warnings.length ? " · 有拍攝／讀取提醒" : ""}`));
+  const list=element("ul","recognition-facts");info.facts.forEach(text=>list.append(element("li","",text)));panel.append(list);
+  if(info.warnings.length){const warnings=element("div","recognition-warnings");info.warnings.forEach(text=>warnings.append(element("p","",text)));panel.append(warnings);}
+  panel.append(element("p","help","辨識分數與照片尺寸只用來協助判讀，不能保證無錯字；標籤內容仍依逐行比對結果判定。"));
+  const recovery=result.recognition_of;
+  if(recovery?.inspection_id)panel.append(element("p","help",recovery.crop ? "本筆使用先前照片的人工選定範圍重新辨識；原紀錄保留，未帶入先前人工訂正。" : "本筆重新讀取先前整張照片；原紀錄保留，未帶入先前人工訂正。"));
+  area.append(panel);
+  const actions=element("div","recognition-actions"),crop=element("button","button secondary","裁切單張後重新辨識"),retake=element("button","button secondary","重新拍攝"),choose=element("button","button secondary","改選清楚照片");
+  for(const button of [crop,retake,choose]){button.type="button";button.disabled=state.busy;button.dataset.recognitionAction="true";}
+  crop.onclick=()=>openCropDialog(inspection);retake.onclick=()=>openCamera();choose.onclick=()=>{if(!state.busy)$("#inspect-file").click();};actions.append(crop,retake,choose);
+  actions.append(element("p","help","重新核對會沿用現有文字；重新辨識才會讀取照片。多張標籤請先裁切單張；模糊反光請重拍。"));area.append(actions);
 }
 function historyPresentation(item) {
   const name=String(item.name || ""),version=Number(item.version) || 0;
@@ -1182,6 +1244,83 @@ async function initialize() {
     try { await pollJob(pending.id,pending.kind); } catch(e) { reportUploadFailure(pending.kind, e); } finally { setBusy(false); }
   }
 }
+function cropBounds(selection,width,height){
+  if(!selection || !["x","y","width","height"].every(key=>Number.isFinite(selection[key])))throw new Error("請填寫完整的裁切座標與尺寸。");
+  if(selection.x<0 || selection.y<0 || selection.width<100 || selection.height<100)throw new Error("每個裁切範圍至少需要 100 × 100 像素；請框住完整標籤。");
+  if(selection.x+selection.width>width || selection.y+selection.height>height)throw new Error("裁切範圍超出照片，請調整座標或尺寸。");
+  return {...selection};
+}
+function selectionFromPoints(first,last,width,height){
+  const point=value=>({x:Math.round(Math.max(0,Math.min(width,value.x))),y:Math.round(Math.max(0,Math.min(height,value.y)))}),a=point(first),b=point(last);
+  return {x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.abs(b.x-a.x),height:Math.abs(b.y-a.y)};
+}
+function cropInputSelection(){
+  const result={};for(const key of ["x","y","width","height"]){const value=$("#crop-"+key).value;if(value==="")throw new Error("請填寫完整的裁切座標與尺寸。");result[key]=Number(value);}
+  return cropBounds(result,state.crop.width,state.crop.height);
+}
+function invalidateCropPreview(){
+  if(state.crop)state.crop.preview=null;$("#crop-preview-panel").hidden=true;$("#crop-submit").disabled=true;
+}
+function updateCropSelection(selection){
+  const context=state.crop;if(!context)return;context.selection={...selection};invalidateCropPreview();
+  for(const key of ["x","y","width","height"])$("#crop-"+key).value=selection[key];
+  $("#crop-selection-note").textContent=`選取：左 ${selection.x}、上 ${selection.y}，${selection.width} × ${selection.height} 像素。`;
+  drawCropSelection();
+}
+function drawCropSelection(){
+  const context=state.crop;if(!context?.photo)return;
+  const canvas=$("#crop-canvas"),scale=Math.min(1,1400/context.width);canvas.width=Math.max(1,Math.round(context.width*scale));canvas.height=Math.max(1,Math.round(context.height*scale));
+  const drawing=canvas.getContext("2d");if(!drawing)return;drawing.drawImage(context.photo,0,0,canvas.width,canvas.height);
+  const s=context.selection;if(!s)return;
+  const sx=canvas.width/context.width,sy=canvas.height/context.height,x=s.x*sx,y=s.y*sy,w=s.width*sx,h=s.height*sy;
+  drawing.fillStyle="rgba(0,0,0,.48)";drawing.fillRect(0,0,canvas.width,y);drawing.fillRect(0,y,x,h);drawing.fillRect(x+w,y,canvas.width-x-w,h);drawing.fillRect(0,y+h,canvas.width,canvas.height-y-h);
+  drawing.strokeStyle="#f2df6a";drawing.lineWidth=Math.max(2,canvas.width/350);drawing.strokeRect(x,y,w,h);
+}
+function cropPointerPoint(event){const rect=$("#crop-canvas").getBoundingClientRect();return {x:(event.clientX-rect.left)/rect.width*state.crop.width,y:(event.clientY-rect.top)/rect.height*state.crop.height};}
+function startCropPointer(event){
+  const context=state.crop;if(state.busy || !context?.photo || event.isPrimary===false || (event.pointerType==="mouse" && event.button!==0))return;
+  event.preventDefault();context.drag={pointer:event.pointerId,start:cropPointerPoint(event)};$("#crop-canvas").setPointerCapture?.(event.pointerId);setDialogError("#crop-error");
+}
+function moveCropPointer(event){const context=state.crop;if(!context?.drag || context.drag.pointer!==event.pointerId || state.busy)return;event.preventDefault();updateCropSelection(selectionFromPoints(context.drag.start,cropPointerPoint(event),context.width,context.height));}
+function endCropPointer(event){const context=state.crop;if(!context?.drag || context.drag.pointer!==event.pointerId)return;moveCropPointer(event);context.drag=null;if($("#crop-canvas").hasPointerCapture?.(event.pointerId))$("#crop-canvas").releasePointerCapture(event.pointerId);}
+function closeCropDialog(){state.crop=null;if($("#crop-dialog").open)$("#crop-dialog").close();for(const id of ["crop-canvas","crop-preview-canvas"]){const canvas=$("#"+id);canvas.width=1;canvas.height=1;}}
+function openCropDialog(inspection=state.inspection){
+  if(state.busy || !inspection?.image?.url)return;
+  const context={inspectionId:inspection.id,photo:null,width:0,height:0,selection:null,preview:null};state.crop=context;
+  $("#crop-source-note").textContent="載入保存照片中…";$("#crop-selection-note").textContent="";$("#crop-selection-fields").disabled=true;$("#crop-preview-button").disabled=true;$("#crop-reset").disabled=true;
+  invalidateCropPreview();setDialogError("#crop-error");for(const id of ["crop-canvas","crop-preview-canvas"]){$("#"+id).width=1;$("#"+id).height=1;}
+  $("#crop-dialog").showModal();const photo=new Image();
+  photo.onload=()=>{if(state.crop!==context)return;const width=Number(inspection.image.width) || photo.naturalWidth,height=Number(inspection.image.height) || photo.naturalHeight;if(!(width>=100 && height>=100)){setDialogError("#crop-error","照片尺寸不足，請重新拍攝清楚標籤。");return;}
+    Object.assign(context,{photo,width,height});$("#crop-source-note").textContent=`保存照片 ${width} × ${height} 像素。框選時保留同一張標籤的品名、日期與右下角公司資訊。`;
+    for(const key of ["x","width"])$("#crop-"+key).max=width;for(const key of ["y","height"])$("#crop-"+key).max=height;
+    $("#crop-selection-fields").disabled=false;$("#crop-preview-button").disabled=false;$("#crop-reset").disabled=false;updateCropSelection({x:0,y:0,width,height});
+  };
+  photo.onerror=()=>{if(state.crop===context)setDialogError("#crop-error","無法載入保存照片，請稍後再試或重新拍攝。");};photo.src=inspection.image.url;
+}
+function previewCrop(){
+  const context=state.crop;if(state.busy || !context?.photo)return;setDialogError("#crop-error");let selection;
+  try{selection=cropInputSelection();}catch(error){invalidateCropPreview();setDialogError("#crop-error",error.message);return;}
+  context.selection=selection;drawCropSelection();
+  const whole=selection.x===0 && selection.y===0 && selection.width===context.width && selection.height===context.height;
+  const signature=JSON.stringify(whole ? null : selection),prior=context.lastRequest;
+  const requestId=prior?.signature===signature ? prior.id : [...window.crypto.getRandomValues(new Uint8Array(16))].map(value=>value.toString(16).padStart(2,"0")).join("");
+  context.lastRequest={signature,id:requestId};context.preview={selection:{...selection},body:{...(whole ? {} : {crop:selection}),request_id:requestId}};
+  const canvas=$("#crop-preview-canvas"),scale=Math.min(1,1400/selection.width);canvas.width=Math.max(1,Math.round(selection.width*scale));canvas.height=Math.max(1,Math.round(selection.height*scale));
+  canvas.getContext("2d").drawImage(context.photo,selection.x,selection.y,selection.width,selection.height,0,0,canvas.width,canvas.height);
+  $("#crop-preview-title").textContent=whole ? "預覽：整張照片重新辨識" : `預覽：${selection.width} × ${selection.height} 像素的選取範圍`;
+  $("#crop-preview-note").textContent=whole ? "目前選的是整張照片。使用相同照片重新辨識不保證改善；模糊反光請重拍，多張標籤請先框選單張。" : "請確認沒有裁掉品名、日期、規格或公司資料，也沒有包含另一張標籤。";
+  $("#crop-preview-panel").hidden=false;$("#crop-submit").disabled=false;$("#crop-submit").textContent=whole ? "整張重新辨識" : "依此範圍重新辨識";$("#crop-preview-panel").scrollIntoView({block:"start",behavior:"instant"});
+}
+async function recognizeCrop(){
+  const context=state.crop;if(state.busy || !context?.preview)return;let selection;
+  try{selection=cropInputSelection();}catch(error){invalidateCropPreview();setDialogError("#crop-error",error.message);return;}
+  if(JSON.stringify(selection)!==JSON.stringify(context.preview.selection)){invalidateCropPreview();setDialogError("#crop-error","範圍已變更，請重新預覽後送出。");return;}
+  setDialogError("#crop-error");setBusy(true);$$("#crop-dialog button").forEach(node=>{node.disabled=true;});$("#crop-selection-fields").disabled=true;setUploadError("inspection");
+  try{const job=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/recognize`,{method:"POST",body:context.preview.body});
+    if(state.crop!==context)return;sessionStorage.setItem("labelcheck-pending",JSON.stringify({id:job.id,kind:"recognition"}));closeCropDialog();showView("inspect");setBusy(true,"recognition");$("#inspect-progress span:last-child").textContent="正在重新讀取照片；原紀錄仍保留…";await pollJob(job.id,"recognition");
+  }catch(error){if(state.crop===context)setDialogError("#crop-error",error.message);else reportUploadFailure("inspection",error);}
+  finally{setBusy(false);$$("#crop-dialog button").forEach(node=>{node.disabled=false;});$("#crop-selection-fields").disabled=false;$("#crop-submit").disabled=!state.crop?.preview;}
+}
 let cameraStream = null, cameraRequest = 0;
 function stopCamera() {
   cameraRequest++;
@@ -1214,6 +1353,13 @@ $("#scan-button").onclick = openCamera;
 $("#camera-close").onclick = closeCamera;
 $("#camera-dialog").addEventListener("close", stopCamera);
 $("#camera-native").onclick = () => { closeCamera(); $("#inspect-camera").click(); };
+$("#crop-close").onclick=()=>{if(!state.busy)closeCropDialog();};
+$("#crop-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();else closeCropDialog();});
+$("#crop-canvas").onpointerdown=startCropPointer;$("#crop-canvas").onpointermove=moveCropPointer;$("#crop-canvas").onpointerup=endCropPointer;
+$("#crop-canvas").onpointercancel=()=>{if(state.crop)state.crop.drag=null;};
+$("#crop-selection-fields").addEventListener("input",()=>{if(state.busy)return;invalidateCropPreview();setDialogError("#crop-error");try{const selection=cropInputSelection();updateCropSelection(selection);}catch(_){/* Keep typed values while the user completes the coordinate. */}});
+$("#crop-preview-button").onclick=previewCrop;$("#crop-submit").onclick=recognizeCrop;
+$("#crop-reset").onclick=()=>{const context=state.crop;if(!state.busy && context?.photo){setDialogError("#crop-error");updateCropSelection({x:0,y:0,width:context.width,height:context.height});}};
 async function captureCameraPhoto(video, track) {
   if (typeof window.ImageCapture === "function" && track?.readyState === "live") {
     try {
@@ -1326,6 +1472,8 @@ $("#history-filter").onchange=()=>{ state.page=1; loadHistory().catch(e=>toast(e
 $("#history-prev").onclick=()=>{ state.page=Math.max(1,state.page-1); loadHistory().catch(e=>toast(e.message,true)); };
 $("#history-next").onclick=()=>{ state.page++; loadHistory().catch(e=>toast(e.message,true)); };
 $("#admin-access").onclick=openAdminDialog;
+$("#recognition-sample-refresh").onclick=loadRecognitionSamples;
+$("#recognition-sample-download").onclick=downloadRecognitionSamples;
 $("#admin-close").onclick=()=>{if(!state.busy)$("#admin-dialog").close();};
 $("#admin-dialog").addEventListener("close",()=>{$("#admin-password").value="";});
 $("#admin-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();});

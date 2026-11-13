@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261113-admin2">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261113-ocr">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261113-admin2" defer></script>
+  <script src="/static/app.js?v=20261113-ocr" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -43,9 +43,9 @@
           <p class="help base-date-help">依此日期與標籤系統設定核對日期；查歷史標籤時可調整。</p>
           <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
-            <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>讓整張標籤清楚入鏡</h3><p>靠近拍清細字，保留四邊；避開反光與遮擋</p>
+            <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>每次拍一張完整標籤</h3><p>靠近拍清細字，保留四邊與公司資訊；避開反光與遮擋</p>
             <div class="upload-actions"><button id="scan-button" class="button primary capture-button"><svg><use href="#i-camera"/></svg>掃描標籤</button><button class="button secondary" data-file="inspect-file"><svg><use href="#i-upload"/></svg>選擇照片</button></div>
-            <p class="photo-guidance">優先使用原始照片，避免通訊軟體縮圖或螢幕截圖。</p><small>JPG、PNG、WebP、HEIC · 每張最多 15 MB</small>
+            <p class="photo-guidance">優先使用原始照片，避免通訊軟體縮圖。多張標籤可在結果中框選單張，再重新辨識。</p><small>JPG、PNG、WebP、HEIC · 每張最多 15 MB</small>
           </div>
           <input id="inspect-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
@@ -116,7 +116,18 @@
     <footer>以人工確認的標準逐字核對 · 辨識不確定時請對照原圖複核</footer>
   </main>
 </div>
-<dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">正面靠近拍攝，讓標籤盡量填滿畫面並保留四邊。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
+<dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">一次只拍一張標籤，正面靠近、填滿畫面並保留四邊與公司資訊。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
+<dialog id="crop-dialog" class="edit-dialog" aria-labelledby="crop-title">
+  <div class="edit-heading"><h2 id="crop-title">選取單張標籤重新辨識</h2><button id="crop-close" class="button secondary" type="button">取消</button></div>
+  <p class="help">用手指或滑鼠從一角拖到對角，框住一張完整標籤；也可用下方座標欄位調整。先預覽，再送出。</p>
+  <p id="crop-source-note" class="help"></p>
+  <div class="crop-surface"><canvas id="crop-canvas" aria-label="原始保存照片與選取範圍；可拖曳框選，或使用下方數字欄位"></canvas></div>
+  <p id="crop-selection-note" class="help" role="status"></p>
+  <fieldset id="crop-selection-fields" class="crop-fields" disabled><legend>選取範圍（像素）</legend><label>左邊 X<input id="crop-x" type="number" min="0" step="1" required></label><label>上邊 Y<input id="crop-y" type="number" min="0" step="1" required></label><label>寬度<input id="crop-width" type="number" min="100" step="1" required></label><label>高度<input id="crop-height" type="number" min="100" step="1" required></label></fieldset>
+  <div class="edit-actions"><button id="crop-preview-button" class="button primary" type="button" disabled>預覽選取範圍</button><button id="crop-reset" class="button secondary" type="button" disabled>改選整張照片</button></div>
+  <section id="crop-preview-panel" class="standard-preview" hidden><h3 id="crop-preview-title">裁切預覽</h3><canvas id="crop-preview-canvas" role="img" aria-label="將送出重新辨識的照片範圍"></canvas><p id="crop-preview-note" class="help"></p><p class="help">另存新的辨識紀錄，原照片與原判定保留。沿用原本批次日期；系統來源會重新尋找、照片標準沿用原版。先前人工訂正不會搬入新辨識。</p><button id="crop-submit" class="button primary" type="button" disabled>依此範圍重新辨識</button></section>
+  <p id="crop-error" class="upload-error" role="alert" hidden></p>
+</dialog>
 <dialog id="correction-dialog" class="edit-dialog" aria-labelledby="correction-title">
   <div class="edit-heading"><h2 id="correction-title">訂正辨識文字</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div>
   <p class="help">請依照片實際印字訂正，只影響這筆檢查。原始辨識與訂正紀錄都會保留。</p>
@@ -184,6 +195,7 @@
   <form id="admin-unlock-form"><label>管理碼<input id="admin-password" type="password" autocomplete="current-password" required></label><button class="button primary" type="submit">解鎖管理功能</button></form>
   <p id="admin-error" class="upload-error" role="alert" hidden></p>
   <div class="edit-actions"><button id="admin-lock" class="button secondary" type="button" hidden>鎖定管理功能</button><button id="admin-logout" class="button secondary" type="button">登出帳號</button></div>
+  <section id="recognition-samples" class="recognition-samples" hidden><h3>OCR 改善候選樣本</h3><p id="recognition-sample-summary" class="help"></p><p id="recognition-sample-note" class="help"></p><p class="help">僅匯出文字、位置與來源紀錄，不含照片；候選仍需人工審查，不會自動訓練。</p><div class="edit-actions"><button id="recognition-sample-refresh" class="button secondary" type="button">更新摘要</button><button id="recognition-sample-download" class="button secondary" type="button" hidden>匯出候選資料</button></div></section>
 </dialog>
 <dialog id="history-cleanup-dialog" class="edit-dialog" aria-labelledby="cleanup-title">
   <div class="edit-heading"><h2 id="cleanup-title">整理檢查紀錄</h2><button id="cleanup-close" class="button secondary" type="button">關閉</button></div>

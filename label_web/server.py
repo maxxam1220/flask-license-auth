@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 import hashlib
 import io
 import os
+import re
 import secrets
 import threading
 import time
@@ -29,6 +30,8 @@ import label_source
 import corrections
 import standard_reference
 import history_cleanup
+import photo_regions
+import recognition_samples
 from access_control import AccessControl
 
 register_heif_opener()
@@ -393,7 +396,7 @@ def create_app(config=None, ocr=None):
                       "source_code": saved_request.get("source_code", ""),
                       "base_date": saved_request.get("base_date") or taiwan_today()}
             result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
-            for key in ("retry_of", "retry_root"):
+            for key in ("retry_of", "retry_root", "recognition_of", "recognition_request_id", "recognition_spec"):
                 if (job.get("result") or {}).get(key):
                     result[key] = job["result"][key]
             source_evaluation = None
@@ -402,11 +405,14 @@ def create_app(config=None, ocr=None):
             with engine.begin() as conn:
                 if job["kind"] in {"inspection", "recognition"}:
                     if job["kind"] == "inspection":
-                        standard = dict(conn.execute(select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
+                        standard = (job.get("result") or {}).get("recognition_standard") or dict(conn.execute(
+                            select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
                         evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
                     else:
                         standard, evaluation = source_evaluation
                     evaluation["inputs"] = inputs
+                    if result.get("recognition_of"):
+                        evaluation["recognition_of"] = result["recognition_of"]
                     inspection_id = db.uid()
                     conn.execute(insert(db.inspections).values(id=inspection_id, image_id=job["image_id"],
                         template_id=standard["id"], template_snapshot=standard, status=evaluation["status"],
@@ -472,6 +478,77 @@ def create_app(config=None, ocr=None):
             raise
         return jsonify(id=row["id"], image=image_payload(image["id"])), 202
 
+    @app.post("/api/inspections/<identifier>/recognize")
+    def recognize_inspection(identifier):
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("request_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", body["request_id"]):
+            abort(400, description="重新辨識的請求編號不正確，請重新開啟裁切視窗。")
+        # Same browser submission is idempotent, including after a lost response.
+        # This service intentionally has one instance; retry_lock serializes writers.
+        with retry_lock:
+            original = get_one(db.inspections, identifier)
+            image = get_one(db.images, original["image_id"])
+            try:
+                region = photo_regions.validate_region(body.get("crop"), image["width"], image["height"])
+            except ValueError as error:
+                abort(400, description=str(error))
+            spec = {"inspection_id":identifier, "image_id":image["id"], "crop":region}
+            with engine.connect() as conn:
+                existing = conn.execute(select(db.jobs).where(
+                    db.jobs.c.result["recognition_request_id"].as_string() == body["request_id"])
+                    .order_by(db.jobs.c.created_at).limit(1)).mappings().first()
+            if existing:
+                if existing["result"].get("recognition_spec") != spec:
+                    abort(409, description="這個請求已用於不同裁切範圍，請重新確認後送出。")
+                return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
+            if not (data_dir / "images" / image["id"] / "image.jpg").is_file():
+                abort(404, description="原照片已不存在，請重新上傳。")
+            old_inputs = original["result"].get("inputs") or {}
+            inputs = scan_inputs({**old_inputs, "base_date":old_inputs.get("base_date") or
+                datetime.fromisoformat(original["created_at"]).astimezone(timezone(timedelta(hours=8))).date().isoformat(),
+                "source_code":""})
+            snapshot = original["template_snapshot"]
+            kind = "recognition" if snapshot.get("mode") == "system_label" or "source" in snapshot else "inspection"
+            if not slots.acquire(blocking=False):
+                abort(429, description="目前等待辨識的照片較多，請稍後再試。")
+            derivative = None
+            committed = False
+            try:
+                if not image_lock.acquire(timeout=0.1):
+                    abort(429, description="正在處理上一張照片，請稍後再試。")
+                try:
+                    if region:
+                        derivative = photo_regions.save_region(data_dir, image, region)
+                except ValueError as error:
+                    abort(409, description=str(error))
+                finally:
+                    image_lock.release()
+                saved = {"request":inputs, "recognition_of":spec, "recognition_spec":spec,
+                         "recognition_request_id":body["request_id"]}
+                if kind == "inspection":
+                    saved["recognition_standard"] = snapshot
+                row = dict(id=db.uid(), image_id=(derivative or image)["id"], kind=kind,
+                           template_id=original["template_id"] or None, batch_date=inputs["batch_date"],
+                           state="pending", created_at=db.now(), result=saved)
+                with engine.begin() as conn:
+                    conn.execute(select(db.inspections.c.id).where(db.inspections.c.id == identifier).with_for_update()).first()
+                    history_cleanup.ensure_active(conn, identifier)
+                    if derivative:
+                        conn.execute(insert(db.images).values(**derivative))
+                    conn.execute(insert(db.jobs).values(**row))
+                committed = True
+                worker.submit(process_job, row)
+            except Exception:
+                slots.release()
+                if derivative and not committed:
+                    photo_regions.remove_uncommitted_region(data_dir / "images" / derivative["id"])
+                if committed:
+                    with engine.begin() as conn:
+                        conn.execute(update(db.jobs).where(db.jobs.c.id == row["id"]).values(
+                            state="failed", error="工作未能啟動，照片已保留，請稍後重新辨識。"))
+                raise
+            return jsonify(id=row["id"], image=image_payload(row["image_id"])), 202
+
     @app.get("/api/jobs/failed")
     def failed_jobs():
         # Shared workspace, like inspection history. Show only the newest failed
@@ -517,7 +594,7 @@ def create_app(config=None, ocr=None):
                 return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
             if not (data_dir / "images" / original["image_id"] / "image.jpg").is_file():
                 abort(404, description="原照片已不存在，請重新上傳。")
-            if original["kind"] == "inspection":
+            if original["kind"] == "inspection" and not (original.get("result") or {}).get("recognition_standard"):
                 standard = get_one(db.templates, original["template_id"])
                 if not standard["active"]:
                     abort(409, description="原標準已更新，請選擇新版標準後重新上傳。")
@@ -534,6 +611,9 @@ def create_app(config=None, ocr=None):
                 row = dict(id=db.uid(), image_id=original["image_id"], kind=original["kind"],
                     template_id=original["template_id"], batch_date=original["batch_date"], state="pending",
                     created_at=db.now(), result={"request":inputs, "retry_of":identifier, "retry_root":root})
+                for key in ("recognition_of", "recognition_spec", "recognition_request_id", "recognition_standard"):
+                    if key in (original.get("result") or {}):
+                        row["result"][key] = original["result"][key]
                 with engine.begin() as conn:
                     conn.execute(insert(db.jobs).values(**row))
                 worker.submit(process_job, row)
@@ -683,4 +763,5 @@ def create_app(config=None, ocr=None):
 
     standard_reference.register_routes(app, engine)
     history_cleanup.register_routes(app, engine, access.require_admin)
+    recognition_samples.register_routes(app, engine, access.require_admin, data_dir)
     return app

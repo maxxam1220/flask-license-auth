@@ -1,6 +1,9 @@
 """Local OCR: preserve the printed characters; never spell-correct the evidence."""
 from pathlib import Path
+from copy import deepcopy
+import errno
 import json
+import math
 import re
 import threading
 import time
@@ -96,6 +99,90 @@ def _needs_retry(lines):
     return count < 8 or average < .72
 
 
+def recognition_diagnostics(lines, original_shape, *, rotation_retry_count=0, line_retry_count=0,
+                            line_retry_failure_count=0, line_retry_skipped_count=0):
+    """Observable photo/recognition measurements, not a label accuracy score."""
+    height, width = original_shape
+    small = 0
+    for line in lines:
+        box = line.get("box") or []
+        if len(box) != 4:
+            continue
+        edges = [math.hypot(float(box[(index + 1) % 4][0]) - float(box[index][0]),
+                            float(box[(index + 1) % 4][1]) - float(box[index][1])) for index in range(4)]
+        short_edge = min(edges)
+        if math.isfinite(short_edge) and 0 < short_edge < 12:
+            small += 1
+    return {"image_width": int(width), "image_height": int(height), "line_count": len(lines),
+            "low_score_count": sum(float(line.get("score", 0)) < .65 for line in lines),
+            "low_score_threshold": .65, "small_text_line_count": small, "small_text_height_threshold_px": 12,
+            "ambiguous_line_count": sum(bool(line.get("ambiguous")) for line in lines),
+            "line_retry_count": line_retry_count, "rotation_retry_count": rotation_retry_count,
+            "line_retry_failure_count": line_retry_failure_count, "line_retry_skipped_count": line_retry_skipped_count}
+
+
+def retry_bold_lines(engine, prepared, lines, scale_x=1., scale_y=1., *, enabled=True):
+    """Offer observed alternatives for a few large, low-score text crops.
+
+    Thinning dark strokes can separate visibly merged print. It can also make
+    a correct reading worse, so never replace the original or select by score.
+    """
+    import cv2
+    import numpy as np
+    from rapidocr.utils.process_img import get_rotate_crop_image
+    from ocr_worker import OCRMemoryLimitError
+
+    observed = deepcopy(lines)
+    stats = {"line_retry_count": 0, "line_retry_failure_count": 0, "line_retry_skipped_count": 0}
+    attempts = 0
+    candidates = [line for line in observed if line["score"] < .90 and len(re.findall(r"[\u4e00-\u9fff]", line["text"])) >= 3]
+    for line in sorted(candidates, key=lambda item: item["score"]):
+        if not enabled or line.get("ambiguous") or attempts >= 3:
+            stats["line_retry_skipped_count"] += 1
+            continue
+        box = line["box"]
+        edges = [math.hypot(box[(index+1)%4][0]-box[index][0], box[(index+1)%4][1]-box[index][1]) for index in range(4)]
+        points = np.asarray([[x*scale_x,y*scale_y] for x,y in box], dtype=np.float32)
+        scaled_edges = [float(np.linalg.norm(points[(index+1)%4]-points[index])) for index in range(4)]
+        crop_dimensions = (max(scaled_edges[0], scaled_edges[2]), max(scaled_edges[1], scaled_edges[3]))
+        # Dimensions are checked before allocating the crop, including upscaled
+        # screenshots. Small glyphs lose information when their strokes shrink.
+        if min(edges) < 24 or max(crop_dimensions) > 1024 or min(crop_dimensions) > 256:
+            stats["line_retry_skipped_count"] += 1
+            continue
+        attempts += 1
+        crop = gray = thinned = reread = None
+        try:
+            crop = get_rotate_crop_image(prepared, points)
+            if max(crop.shape[:2]) > 1024 or min(crop.shape[:2]) > 256:
+                stats["line_retry_skipped_count"] += 1
+                continue
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            thinned = cv2.dilate(gray, np.ones((2,2), dtype=np.uint8))
+            stats["line_retry_count"] += 1
+            reread = engine(thinned, use_det=False, use_cls=False, use_rec=True)
+            if reread.txts is None or reread.scores is None or len(reread.txts) != 1 or len(reread.scores) != 1:
+                continue
+            text, score = str(reread.txts[0]), float(reread.scores[0])
+            if not text.strip() or not math.isfinite(score) or score < .65:
+                continue
+            if re.sub(r"\s+", "", text) != re.sub(r"\s+", "", line["text"]):
+                line["ambiguous"] = True
+                line["ambiguity_reason"] = "line_retry_disagrees"
+                line.setdefault("alternatives", []).append({"text":text,"score":round(score,4),"box":deepcopy(box),"method":"stroke_thin_2x2"})
+        except Exception as error:
+            message = str(error).lower()
+            if (isinstance(error, (MemoryError, OCRMemoryLimitError))
+                    or (isinstance(error, OSError) and error.errno == errno.ENOMEM)
+                    or any(hint in message for hint in ("bad_alloc", "out of memory", "failed to allocate", "memory allocation"))):
+                raise  # Resource protection must still fail closed.
+            stats["line_retry_failure_count"] += 1
+        finally:
+            # Do not retain pixel arrays between crops or in exported evidence.
+            crop = gray = thinned = reread = None
+    return observed, stats
+
+
 def _overlap(first, second):
     def bounds(box):
         return min(p[0] for p in box), min(p[1] for p in box), max(p[0] for p in box), max(p[1] for p in box)
@@ -184,6 +271,7 @@ class OCREngine:
             lines = _read_lines(result, scale_x, scale_y, original_shape)
             del result
             passes, rotation = 1, 0
+            line_retry_stats = {}
             if _needs_retry(lines):
                 retry_source, retry_x, retry_y = prepared, scale_x, scale_y
                 height, width = prepared.shape[:2]
@@ -205,9 +293,16 @@ class OCREngine:
                     lines, rotation = merge_retry(retry, lines), 90
                 else:
                     lines = merge_retry(lines, retry)
+                lines, line_retry_stats = retry_bold_lines(self.engine, None, lines, enabled=False)
+            else:
+                _write_model_diagnostic(self.diagnostics_path, "before_line_retries", self.model_cache[-1] if self.model_cache else None)
+                lines, line_retry_stats = retry_bold_lines(self.engine, prepared, lines, scale_x, scale_y)
+                del prepared
+                _write_model_diagnostic(self.diagnostics_path, "after_line_retries", self.model_cache[-1] if self.model_cache else None)
             characters = set(self.engine.text_rec.postprocess_op.character) if self.engine.text_rec is not None else set()
             return {"lines": lines, "engine": "RapidOCR 3.10 / PP-OCRv6 small-det + medium-rec",
                     "model_cache": self.model_cache,
+                    "diagnostics": recognition_diagnostics(lines, original_shape, rotation_retry_count=passes-1, **line_retry_stats),
                     "preprocessing": {"det_limit": self.det_limit, "scale_x": round(scale_x, 4), "scale_y": round(scale_y, 4),
                                       "passes": passes, "selected_rotation": rotation},
                     "capabilities": {
