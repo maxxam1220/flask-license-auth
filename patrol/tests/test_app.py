@@ -39,6 +39,9 @@ def application(monkeypatch):
             "CSRF_ENABLED": False,
             "PUBLIC_BASE_URL": "https://patrol.example.test",
             "COOKIE_SECURE": False,
+            # Historical regressions explicitly exercise the pre-launch rules.
+            # Go-live route tests separately use the production 2026-11-16 cutoff.
+            "MISSED_START_DATE": "2000-01-01",
         }
     )
     with application.app_context():

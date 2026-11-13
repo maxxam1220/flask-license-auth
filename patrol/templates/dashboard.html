@@ -90,7 +90,7 @@
   <article class="stat-card"><span class="stat-label">{{ label }}</span><div class="stat-value{% if tone %} {{ tone }}{% endif %}">{{ value }}<small>次</small></div><span class="stat-icon {{ accent }}">{{ icon(symbol) }}</span></article>
   {% endfor %}
 </section>
-<div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · 僅計已到期次數</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
+<div class="dashboard-missed-help"><p><strong>已到期漏打 {{ missed_count }} 次</strong> · {% if missed_start_date|default(none) %}<span data-missed-start>{{ t('{date} 起計算', date=missed_start_date) }}</span>{% if following_period and following_period <= missed_start_date %}<br><span>{{ t('本期為正式啟用前的測試期間，不列入漏打。') }}</span>{% endif %}{% else %}僅計已到期次數{% endif %}</p><a class="stat-detail-link" href="{{ missed_query_url }}">漏打查詢 {{ icon('arrow') }}</a></div>
 {% if calendar_unavailable %}<p class="notice-strip">{{ t('假日日曆尚未涵蓋此年份，請聯絡系統管理員更新。') }}</p>{% endif %}
 <section class="panel floor-overview" aria-labelledby="floor-progress">
   <div class="section-heading">

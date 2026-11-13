@@ -50,6 +50,31 @@ def period_bounds(day, view):
     return day, day
 
 
+def _optional_date(value, name):
+    if value is not None and (not isinstance(value, date) or isinstance(value, datetime)):
+        raise ValueError(f"{name} must be a date or None")
+    return value
+
+
+def missed_period_required(day, frequency, category, *, count_from=None, safety_leave_dates=(),
+                           respect_calendar=True, calendar_policy_start=CALENDAR_POLICY_START):
+    """Whether this period has an obligation on/after the missed-count start.
+
+    This does not determine whether its deadline has passed. Attendance retains
+    its original period identity, including any completion before count_from.
+    """
+    _optional_date(count_from, "count_from")
+    if frequency == "irregular" or not is_fixed_schedule_day(day, frequency):
+        return False
+    start, end = period_bounds(day, frequency)
+    if count_from is not None:
+        start = max(start, count_from)
+    if start > end:
+        return False
+    return (not respect_calendar or obligation_required(start, end, category, safety_leave_dates,
+                                                        policy_start=calendar_policy_start))
+
+
 def _value(item, name, default=None):
     return item.get(name, default) if isinstance(item, Mapping) else getattr(item, name, default)
 
@@ -113,8 +138,9 @@ def schedule_snapshot(point, schedule):
 
 
 def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_calendar=True,
-               safety_leave_dates=(), calendar_policy_start=CALENDAR_POLICY_START):
+               safety_leave_dates=(), calendar_policy_start=CALENDAR_POLICY_START, obligation_start=None):
     """Yield the schedule binding each slot immediately before its Taipei deadline."""
+    _optional_date(obligation_start, "obligation_start")
     dates, schedules = timeline
     last = bisect_right(dates, day) - 1
     if schedules and last < 0:
@@ -173,7 +199,7 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_
                 binding_start = dates[binding_index]
             # A rename on Sunday must not discard the preceding working days
             # of an unchanged weekly obligation.
-            starts = [start, _value(point, "schedule_start"), binding_start]
+            starts = [start, _value(point, "schedule_start"), binding_start, obligation_start]
             created = _value(point, "created_at")
             if created is not None:
                 starts.append(_utc(created).astimezone(TAIPEI).date())
@@ -192,7 +218,7 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_
 
 def calculate_missed(points, completions, date_from, date_to, now, *, category="", floor=None, frequency="",
                      executions=(), two_stage_only=False, respect_calendar=True, safety_leave_dates=(),
-                     calendar_policy_start=CALENDAR_POLICY_START):
+                     calendar_policy_start=CALENDAR_POLICY_START, count_from=None):
     """Return expired missing occurrences as plain dicts, newest deadline first.
 
     The inputs may be preloaded ORM objects or attribute/mapping-based fixtures;
@@ -204,6 +230,8 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
     points or completion rows by their current category/floor or by employee.
     A deadline at or before Point.created_at is excluded, so a newly created
     afternoon point does not acquire a fabricated missed morning obligation.
+    count_from limits obligation due dates; it never alters saved period keys
+    or discards an earlier completion belonging to the same period.
     """
     if not isinstance(date_from, date) or isinstance(date_from, datetime) or not isinstance(date_to, date) or isinstance(date_to, datetime):
         raise ValueError("date_from and date_to must be dates")
@@ -222,6 +250,9 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
     else:
         floor = None
 
+    _optional_date(count_from, "count_from")
+    if count_from is not None:
+        date_from = max(date_from, count_from)
     instant = _utc(now)
     last_due_day = min(date_to, instant.astimezone(TAIPEI).date())
     if date_from > last_due_day or frequency == "irregular":
@@ -251,7 +282,7 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         while due_day <= last_due_day:
             for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True,
                     respect_calendar=respect_calendar, safety_leave_dates=safety_leave_dates,
-                    calendar_policy_start=calendar_policy_start):
+                    calendar_policy_start=calendar_policy_start, obligation_start=count_from):
                 period_frequency, mode = snapshot["frequency"], snapshot["workflow_mode"]
                 if ((two_stage_only and mode != "two_stage")
                         or (category and snapshot["category"] != category)

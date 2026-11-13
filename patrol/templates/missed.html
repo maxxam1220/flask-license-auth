@@ -13,7 +13,7 @@
   <article class="stat-card"><span class="stat-label">已到期漏打總數</span><div class="stat-value {{ 'danger-text' if totals.missed }}">{{ totals.missed }}<small>次巡檢</small></div><span class="stat-icon {{ 'amber' if totals.missed else 'positive' }}">{{ icon('clock' if totals.missed else 'circle-check') }}</span></article>
   <article class="stat-card"><span class="stat-label">受影響點位</span><div class="stat-value">{{ totals.points }}<small>個點位</small></div><span class="stat-icon neutral">{{ icon('pin') }}</span></article>
 </section>
-<div class="missed-scope-note report-scope-line"><p>同一點位按應完成次數計算，只計已到期的巡檢。</p>{% if occurrences %}<a class="text-link" href="#missed-results">查看漏打明細 {{ icon('down') }}</a>{% endif %}</div>
+<div class="missed-scope-note report-scope-line"><p>{% if missed_start_date|default(none) %}<span data-missed-start>{{ t('正式啟用日：{date}；此前不列入漏打。', date=missed_start_date) }}</span><br>{% endif %}同一點位按應完成次數計算，只計已到期的巡檢。</p>{% if occurrences %}<a class="text-link" href="#missed-results">查看漏打明細 {{ icon('down') }}</a>{% endif %}</div>
 {% if calendar_unavailable %}<p class="notice-strip">假日日曆尚未涵蓋此年份，請聯絡系統管理員更新。</p>{% endif %}
 <section class="panel filter-panel records-query-panel" data-records-query>
   <button class="records-query-toggle" type="button" aria-expanded="true" aria-controls="missed-query-fields" data-query-toggle hidden>
@@ -35,7 +35,7 @@
     <div class="records-filter-actions"><button class="button button-primary">查詢漏打</button><a class="text-link" href="{{ url_for('missed', inspection_team='') }}">重設</a></div>
   </form></div>
 </section>
-<details class="missed-rules"><summary>{{ icon('info') }}漏打次數與到期時間如何計算？{{ icon('down') }}</summary><ul><li>每日一次：當日為應完成日，隔日 00:00 到期。</li><li>每日兩次：當日可隨時完成兩次，未完成次數於隔日 00:00 到期。</li><li>每3日一次：自 2026/11/10 起，每連續 3 日為一期；第 3 日為應完成日，下一日 00:00 到期。</li><li>每週一次：週日為應完成日，隔週一 00:00 到期。</li><li>每月一次：該月最後一日為應完成日，次月 1 日 00:00 到期。</li><li>不定期：不設應完成日，不列入漏打。</li></ul><p>總數涵蓋所選條件的全部結果，依當時的點位設定計算；2026/11/06 前的紀錄保留原到期規則。{% if is_patrol_admin or viewer_category == 'general' %}兩階段點每次最多計一次漏打。{% endif %}</p></details>
+<details class="missed-rules"><summary>{{ icon('info') }}漏打次數與到期時間如何計算？{{ icon('down') }}</summary><p>{{ t('依應完成日判斷，當期截止後才列漏打。') }}</p><ul><li>每日一次：當日為應完成日，隔日 00:00 到期。</li><li>每日兩次：當日可隨時完成兩次，未完成次數於隔日 00:00 到期。</li><li>{{ t('固定週三／週五：指定當日為應完成日，隔日 00:00 到期；遇假日或職安請休免巡，不順延。') }}</li><li>每3日一次：自 2026/11/10 起，每連續 3 日為一期；第 3 日為應完成日，下一日 00:00 到期。</li><li>每週一次：週日為應完成日，隔週一 00:00 到期。</li><li>每月一次：該月最後一日為應完成日，次月 1 日 00:00 到期。</li><li>不定期：不設應完成日，不列入漏打。</li></ul><p>總數涵蓋所選條件的全部結果，依當時的點位設定計算。{% if is_patrol_admin or viewer_category == 'general' %}兩階段點每次最多計一次漏打。{% endif %}</p></details>
 {% if point_summaries %}
 <details class="panel disclosure missed-point-summary spaced" open data-responsive-summary>
   <summary><span><strong>依點位彙總</strong><small>{{ totals.points }} 個點位 · 查看各點漏打次數</small></span>{{ icon('down') }}</summary>

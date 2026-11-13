@@ -42,7 +42,7 @@ from general_numbering import (apply_general_numbering, lock_general_numbering,
                                numbering_enabled, preview_general_numbering)
 from catalog_general import catalogue_rows as general_catalogue_rows
 from domain import CATEGORY_OPTIONS, FLOOR_OPTIONS, FLOOR_ORDER, category_label, floor_label
-from missed import period_bounds
+from missed import period_bounds, missed_period_required
 from images import PhotoValidationError, photo_storage_used, process_uploads
 from patrol_access import (apply_point_scope, can_access_category, can_access_point, can_access_point_team,
                            can_read_inspection, can_view_execution_records, can_view_general_team,
@@ -274,8 +274,22 @@ def create_app(config=None):
         PHOTO_STORAGE_LIMIT_BYTES=int(os.environ.get("PHOTO_STORAGE_LIMIT_BYTES", str(200 * 1024 * 1024))),
         CSRF_ENABLED=True,
         DEMO_MODE=os.environ.get("DEMO_MODE", "0") == "1",
+        MISSED_START_DATE=os.environ.get("MISSED_START_DATE", "2026-11-16"),
     )
     app.config.update(provided)
+    # This reporting cutoff never changes point schedules, QR codes or attendance.
+    missed_start = app.config["MISSED_START_DATE"]
+    if isinstance(missed_start, str):
+        try:
+            parsed_start = date.fromisoformat(missed_start)
+        except ValueError as error:
+            raise RuntimeError("MISSED_START_DATE must be an ISO date (YYYY-MM-DD).") from error
+        if missed_start != parsed_start.isoformat():
+            raise RuntimeError("MISSED_START_DATE must be an ISO date (YYYY-MM-DD).")
+        missed_start = parsed_start
+    if type(missed_start) is not date or not 2000 <= missed_start.year <= 2100:
+        raise RuntimeError("MISSED_START_DATE must be a date between 2000-01-01 and 2100-12-31.")
+    app.config["MISSED_START_DATE"] = missed_start
     # The private register is supplied only to the designated patrol service.
     register = general_catalogue_rows()
     general_codes = {row["code"].casefold(): (row["code"], row["floor"]) for row in register}
@@ -360,6 +374,7 @@ def create_app(config=None):
                 "simple_executor_ui": uses_simple_executor_ui(user), "home_url": home_url(user),
                 "can_manage_safety_leave": can_manage_safety_leave(user),
                 "calendar_coverage_end": CALENDAR_COVERAGE_END,
+                "missed_start_date": app.config["MISSED_START_DATE"],
                 "localized_point_name": localized_point_name, "client_i18n": client_catalog(),
                 "account_role_labels": ACCOUNT_ROLE_LABELS, "account_role_choice": account_role_choice,
                 "viewer_category": patrol_scope(user) or None, "can_view_general_team": can_view_general_team(user),
@@ -1115,7 +1130,9 @@ def create_app(config=None):
                                                   record if team_view and record.category == scope else None)
                     executed = executed_at.get((point.id, group_frequency, slot)) if group_mode == "two_stage" else None
                     stage_status = None
-                    expired = status == "pending" and local_now >= slot_deadline
+                    expired = (status == "pending" and local_now >= slot_deadline
+                               and missed_period_required(group_day, group_frequency, group_category,
+                                   count_from=app.config["MISSED_START_DATE"], safety_leave_dates=leave_dates))
                     if group_mode == "two_stage":
                         if record:
                             stage_status = "done"
@@ -2251,11 +2268,14 @@ def create_app(config=None):
         # Read historical schedules, not the point's current classification.
         filters = {"date_from": begin.isoformat(), "date_to": end.isoformat(), "category": category,
                    "floor": floor, "frequency": frequency}
-        if begin > today or frequency == "irregular":
+        count_from = app.config["MISSED_START_DATE"]
+        if begin > today or end < count_from or today < count_from or frequency == "irregular":
             return [], filters
         scope = patrol_scope(g.user)
         points = historical_points(scope)
-        first_period = min(begin.replace(day=1), begin - timedelta(days=begin.weekday()), period_bounds(begin, "three_day")[0])
+        effective_begin = max(begin, count_from)
+        first_period = min(effective_begin.replace(day=1), effective_begin - timedelta(days=effective_begin.weekday()),
+                           period_bounds(effective_begin, "three_day")[0])
         completion_query = select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot,
                                   Inspection.workflow_mode).distinct().where(Inspection.period_key >= first_period.isoformat(),
                                       Inspection.period_key <= end.isoformat(), Inspection.legacy_unscheduled.is_(False),
@@ -2270,7 +2290,7 @@ def create_app(config=None):
         rows = calculate_missed(points, completions, begin, end, instant,
                                 category=category, floor=int(floor) if floor else None, frequency=frequency,
                                 executions=executions, two_stage_only=g.user.role == "executor",
-                                safety_leave_dates=get_safety_leave_dates(first_period, end))
+                                safety_leave_dates=get_safety_leave_dates(first_period, end), count_from=count_from)
         teams = {point.id: point.inspection_team for point in points}
         for row in rows:
             row["inspection_team"] = teams.get(row["point_id"], "general")
