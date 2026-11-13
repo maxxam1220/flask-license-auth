@@ -84,12 +84,6 @@
 {% if weekday_schedule|default(none) %}
 <div class="dashboard-missed-help" data-weekday-schedule><p><strong>{{ t('本週巡檢日') }} <time datetime="{{ weekday_schedule.day }}">{{ weekday_schedule.day }}</time>（{{ t(weekday_schedule.label) }}）</strong> · {{ t('本日免巡，不列漏打' if weekday_schedule.exempt else '指定當日巡檢，當日結束才列漏打') }}</p></div>
 {% endif %}
-<details class="dashboard-guide dashboard-history" data-history-schedules{% if view in ('three_day', 'weekly', 'monthly') %} open{% endif %}>
-  <summary>{{ t('其他／歷史排程') }}{% if view in ('three_day', 'weekly', 'monthly') %} · {{ t({'three_day':'3日巡檢','weekly':'每週綜合','monthly':'每月巡檢'}[view]) }}{% endif %}</summary>
-  <div class="toolbar"><nav class="segmented" aria-label="{{ t('其他／歷史排程') }}">
-    {% for value,label in [('three_day','3日巡檢'),('weekly','每週綜合'),('monthly','每月巡檢')] %}<a class="{{ 'selected' if view == value }}" aria-current="{{ 'page' if view == value else 'false' }}" href="{{ url_for('dashboard', view=value, date=selected_date, floor=selected_floor or none, category=selected_category or none) }}">{{ t(label) }}</a>{% endfor %}
-  </nav></div>
-</details>
 {% if pending_schedule_notice|default('') %}<div class="dashboard-missed-help" data-pending-schedule><p>{{ t(pending_schedule_notice) }}</p>{% if pending_schedule_url|default('') %}<a class="text-link" href="{{ pending_schedule_url }}">{{ t('查看新排程') }} {{ icon('arrow') }}</a>{% endif %}</div>{% endif %}
 <section class="stats-grid dashboard-stats" aria-label="{{ '所選3日' if view == 'three_day' else '所選月' if view == 'monthly' else '所選週' if weekly_view else '所選日' }}巡檢次數">
   {% for label,value,tone,accent,symbol in [('應巡',totals.total,'','neutral','pin'),('已完成',totals.done,'teal-text','positive','circle-check'),('尚未完成',totals.pending,'','amber','clock')] %}

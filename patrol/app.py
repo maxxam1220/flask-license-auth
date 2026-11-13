@@ -1004,7 +1004,7 @@ def create_app(config=None):
                 and point.frequency_effective_date > period_end]
             if pending:
                 effective = min(point.frequency_effective_date for point in pending)
-                pending_schedule_notice = f"{len(pending)} 個點位預定於 {effective.isoformat()} 啟用新排程；本期仍可從其他／歷史排程查看。"
+                pending_schedule_notice = f"{len(pending)} 個點位預定於 {effective.isoformat()} 啟用新排程。"
                 pending_schedule_url = url_for("dashboard", view=view, date=effective,
                     floor=floor_filter or None, category=category_filter or None)
         executor = g.user.role == "executor"
