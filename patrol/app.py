@@ -2693,11 +2693,29 @@ def create_app(config=None):
             query = query.where(Point.floor == int(floor))
         if category:
             query = query.where(Point.category == category)
-        ids = request.args.get("ids", "")
-        if ids:
-            if len(ids) > 2000:
-                abort(400)
-            query = query.where(Point.id.in_([parse_id(x) for x in ids.split(",")]))
+        # Native checkbox forms submit repeated ids; existing QR links use CSV.
+        # Both identify stable point IDs, independent of later code/name edits.
+        raw_ids = ",".join(value for value in request.args.getlist("ids") if value)
+        if len(raw_ids) > 2000:
+            abort(400)
+        selected_ids = set(parse_id(value) for value in raw_ids.split(",")) if raw_ids else set()
+        search_query = request.args.get("q", "").strip()
+        if len(search_query) > 100:
+            abort(400, description="搜尋文字請勿超過 100 字。")
+        if request.args.get("select") == "1":
+            choices = db.session.scalars(query.order_by(*point_order())).all()
+            if search_query:
+                needle = search_query.casefold()
+                choices = [point for point in choices if needle in point.code.casefold() or needle in point.name.casefold()]
+            return render_template("qr_select.html", points=choices,
+                selected_ids=selected_ids.intersection(point.id for point in choices), search_query=search_query,
+                selected_floor=floor, selected_category=category)
+        if request.args.get("selected") == "1" and not selected_ids:
+            flash("請至少勾選一個巡檢點，再預覽列印。", "warning")
+            return redirect(url_for("print_qr", select="1", floor=floor or None, category=category or None,
+                                    q=search_query or None))
+        if selected_ids:
+            query = query.where(Point.id.in_(selected_ids))
         points = db.session.scalars(query.order_by(*point_order())).all()
         # The code and label come from the same snapshot, in one HTTP response.
         qr_images = {point.id: base64.b64encode(qr_image(point)).decode("ascii") for point in points}
@@ -2712,7 +2730,7 @@ def create_app(config=None):
                     mode = planned.workflow_mode
             qr_workflows[point.id] = mode
         return render_template("print_qr.html", points=points, qr_images=qr_images, selected_floor=floor, selected_category=category,
-                               qr_workflows=qr_workflows,
+                               qr_workflows=qr_workflows, search_query=search_query,
                                public_base_url=app.config["PUBLIC_BASE_URL"], base_url_set=app.config["PUBLIC_BASE_URL"].startswith("https://"))
 
     @app.get("/admin/users")
