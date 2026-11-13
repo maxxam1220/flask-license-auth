@@ -123,7 +123,7 @@ def test_inspector_completes_team_period_while_other_people_and_next_day_still_a
     assert without_voice_feedback(saved.location) == without_voice_feedback(repeated.location)
     current, overview, response = card(e)
     assert current["status"] == "done" and overview["totals"]["done"] == 1
-    assert "3日巡檢" in response.text and "每月巡檢" not in response.text
+    assert "3日巡檢" in response.text and "data-history-schedules open" in response.text
     checkin(e.peer, e.url)
     e.clock[0] = local("2026-11-11")
     checkin(e.inspector, e.url)

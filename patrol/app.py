@@ -161,9 +161,7 @@ def frequency_label(frequency):
 
 
 def progress_view(frequency):
-    if frequency in ("weekly_wed", "weekly_fri"):
-        return "weekly"
-    return frequency if frequency in ("three_day", "weekly", "monthly") else "daily"
+    return frequency if frequency in ("three_day", "weekly", "monthly", "weekly_wed", "weekly_fri") else "daily"
 
 
 def normalise_return_to(value, user):
@@ -965,18 +963,25 @@ def create_app(config=None):
         today = local_now.date()
         selected = parse_date(request.args.get("date"), today)
         view = request.args.get("view", "daily")
-        if view not in ("daily", "three_day", "weekly", "monthly"):
+        if view not in ("daily", "three_day", "weekly", "monthly", "weekly_wed", "weekly_fri"):
             abort(400)
-        period_day, period_end = period_bounds(selected, view)
+        # Overview tabs span a calendar week; fixed-day check-in keys remain
+        # the actual Wednesday/Friday date, not the week's Monday.
+        weekday_view = fixed_weekday(view)
+        weekly_view = view == "weekly" or weekday_view is not None
+        overview_period = "weekly" if weekly_view else view
+        period_day, period_end = period_bounds(selected, overview_period)
         leave_dates = get_safety_leave_dates(period_day, period_end)
         def period_match(model):
+            if weekday_view is not None:
+                return model.period_key == (period_day + timedelta(days=weekday_view)).isoformat()
             if view == "weekly":
                 return db.or_(
                     db.and_(model.frequency == "weekly", model.period_key == period_day.isoformat()),
                     db.and_(model.frequency == "weekly_wed", model.period_key == (period_day + timedelta(days=2)).isoformat()),
                     db.and_(model.frequency == "weekly_fri", model.period_key == (period_day + timedelta(days=4)).isoformat()))
             return model.period_key == period_day.isoformat()
-        previous_period = period_bounds(period_day - timedelta(days=1), view)[0]
+        previous_period = period_bounds(period_day - timedelta(days=1), overview_period)[0]
         following_period = period_end + timedelta(days=1)
         # Live periods use today's schedule. For another period, show the
         # schedule effective in that period, even when it has not started yet.
@@ -984,6 +989,24 @@ def create_app(config=None):
         scope = patrol_scope(g.user)
         points = historical_points(scope)
         floor_filter, category_filter = scope_filters()
+        weekday_schedule = None
+        pending_schedule_notice = None
+        pending_schedule_url = None
+        if weekday_view is not None:
+            target_day = period_day + timedelta(days=weekday_view)
+            weekday_schedule = {"day": target_day, "label": "週三" if weekday_view == 2 else "週五",
+                "exempt": is_excluded_day(target_day, category_filter or scope or "general", safety_leave_dates=leave_dates)}
+            pending = [point for point in points if point.active and point.deleted_at is None
+                and (not category_filter or point.category == category_filter)
+                and (not floor_filter or str(point.floor) == floor_filter)
+                and getattr(point, "pending_frequency", None) == view
+                and getattr(point, "frequency_effective_date", None) is not None
+                and point.frequency_effective_date > period_end]
+            if pending:
+                effective = min(point.frequency_effective_date for point in pending)
+                pending_schedule_notice = f"{len(pending)} 個點位預定於 {effective.isoformat()} 啟用新排程；本期仍可從其他／歷史排程查看。"
+                pending_schedule_url = url_for("dashboard", view=view, date=effective,
+                    floor=floor_filter or None, category=category_filter or None)
         executor = g.user.role == "executor"
         team_view = can_view_general_team(g.user)
         issue_counts = {} if executor else open_issue_counts(category=category_filter or scope)
@@ -1021,7 +1044,7 @@ def create_app(config=None):
         cards, floors = [], [{"floor": f, "label": label, "total": 0, "done": 0} for f, label in FLOOR_OPTIONS]
         irregular_points = []
         floor_counts = {item["floor"]: item for item in floors}
-        period_label = f"{period_day:%Y/%m}" if view == "monthly" else (f"{period_day:%m/%d} – {period_end:%m/%d}" if view in ("three_day", "weekly") else selected.isoformat())
+        period_label = f"{period_day:%Y/%m}" if view == "monthly" else (f"{period_day:%m/%d} – {period_end:%m/%d}" if view == "three_day" or weekly_view else selected.isoformat())
         for point in points:
             point_records = found.get(point.id, [])
             schedule = next((s for s in reversed(point.schedules) if s.effective_date <= reference_day), None)
@@ -1030,7 +1053,10 @@ def create_app(config=None):
             scheduled_floor, scheduled_code, scheduled_name = settings["floor"], settings["code"], settings["name"]
             mode, legacy_unscheduled = settings["workflow_mode"], settings["legacy_unscheduled"]
             direct_visit = (executor and mode == "spot" and frequency in ("irregular", "three_day", "daily", "weekly_wed", "weekly_fri") and not legacy_unscheduled
-                            and point.code == scheduled_code and point.frequency == frequency
+                            and point.code == scheduled_code and (point.frequency == frequency or
+                                (getattr(point, "pending_frequency", None) == frequency
+                                 and getattr(point, "frequency_effective_date", None) is not None
+                                 and point.frequency_effective_date <= reference_day))
                             and point.workflow_mode == "spot" and executor_can_scan(point))
             if ((frequency == "irregular" or legacy_unscheduled) and (schedule or not point.schedules) and active
                     and (not executor or mode == "two_stage" or direct_visit) and point.schedule_start <= reference_day
@@ -1042,7 +1068,9 @@ def create_app(config=None):
             # Fixed weekdays use their own day's historical schedule and period
             # identity, even when today's settings have changed since that day.
             plan_days = {reference_day}
-            if view == "weekly":
+            if weekday_view is not None:
+                plan_days = {period_day + timedelta(days=weekday_view)}
+            elif view == "weekly":
                 plan_days.update((period_day + timedelta(days=2), period_day + timedelta(days=4)))
             for plan_day in sorted(plan_days):
                 for plan, slot, _ in slot_plans(point, plan_day, schedule_timeline(point), view=view, safety_leave_dates=leave_dates):
@@ -1059,7 +1087,7 @@ def create_app(config=None):
                     continue
                 planned = planned_slots.get(group, {})
                 weekday = fixed_weekday(group_frequency)
-                group_day = period_day + timedelta(days=weekday) if weekday is not None and view == "weekly" else period_day
+                group_day = period_day + timedelta(days=weekday) if weekday is not None and weekly_view else period_day
                 slot_keys = ("am", "pm") if group_frequency == "daily2" else ("any",)
                 slots = []
                 for slot in slot_keys:
@@ -1091,6 +1119,8 @@ def create_app(config=None):
                     if group_mode == "two_stage":
                         if record:
                             stage_status = "done"
+                        elif status == "not_due":
+                            stage_status = "not_due"
                         elif expired:
                             stage_status = "expired_unreviewed" if executed else "expired_unexecuted"
                         else:
@@ -1151,6 +1181,8 @@ def create_app(config=None):
                                previous_period=max(previous_period, first_date) if period_day > first_date else None,
                                following_period=following_period if following_period <= last_date else None,
                                current_period=period_day <= today <= period_end,
+                               weekday_schedule=weekday_schedule, pending_schedule_notice=pending_schedule_notice,
+                               pending_schedule_url=pending_schedule_url,
                                calendar_unavailable=not has_calendar_year(period_end),
                                missed_count=sum(card["missed_count"] for card in cards),
                                open_issue_counts=issue_counts, outstanding_issue_count=visible_open_issue_total(),

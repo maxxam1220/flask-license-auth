@@ -152,5 +152,7 @@ def test_calendar_coverage_warning_and_dashboard_view_allowlist(calendar):
         result, page = context(env.app, env.inspector, path)
         assert result["calendar_unavailable"] is True
         assert "假日日曆尚未涵蓋此年份" in page.text
-    for value in ("weekly_wed", "weekly_fri", "weekly_all", "unknown"):
+    for value in ("weekly_wed", "weekly_fri"):
+        assert env.inspector.get("/dashboard?view=" + value).status_code == 200
+    for value in ("weekly_all", "unknown"):
         assert env.inspector.get("/dashboard?view=" + value).status_code == 400
