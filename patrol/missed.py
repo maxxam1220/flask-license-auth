@@ -141,6 +141,10 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_
                safety_leave_dates=(), calendar_policy_start=CALENDAR_POLICY_START, obligation_start=None):
     """Yield the schedule binding each slot immediately before its Taipei deadline."""
     _optional_date(obligation_start, "obligation_start")
+    # A reporting launch date remains binding even when holiday exclusions are
+    # disabled. Overview plans retain their pre-launch historical visibility.
+    if for_missed and obligation_start is not None and day < obligation_start:
+        return
     dates, schedules = timeline
     last = bisect_right(dates, day) - 1
     if schedules and last < 0:
