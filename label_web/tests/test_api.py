@@ -140,6 +140,36 @@ class APITests(unittest.TestCase):
             response = self.client.post("/api/jobs",data={"kind":"recognition","photo":(self.photo(),"label.png"),**inputs},headers=self.headers)
             self.assertEqual(response.status_code,400,response.json)
 
+    def test_recheck_uses_selected_latest_photo_without_cloud_or_source_matching(self):
+        first = self.standard().json
+        identifier = self.job("inspection", first["id"])["result"]["inspection_id"]
+        original = self.client.get("/api/inspections/" + identifier).json
+        updated_fields = dict(STANDARD["fields"], origin="紐西蘭")
+        latest = self.standard(supersedes_id=first["id"], fields=updated_fields).json
+        with patch.object(FakeOCR, "recognize", side_effect=AssertionError("must reuse OCR")), \
+             patch("server.label_source.resolve", side_effect=AssertionError("explicit photo only")):
+            response = self.client.post(f"/api/inspections/{identifier}/recheck", json={
+                "template_id":latest["id"], "base_date":"2026-11-10"}, headers=self.headers)
+        self.assertEqual(response.status_code, 201, response.json)
+        result = self.client.get("/api/inspections/" + response.json["inspection_id"]).json
+        self.assertEqual(result["template_id"], latest["id"])
+        self.assertEqual(result["template_snapshot"]["version"], 2)
+        self.assertEqual(result["template_snapshot"]["fields"]["origin"], "紐西蘭")
+        self.assertEqual(result["ocr"], original["ocr"])
+        self.assertEqual(result["result"]["inputs"]["base_date"], "2026-11-10")
+        self.assertEqual(self.client.get("/api/inspections/"+identifier).json["template_snapshot"], original["template_snapshot"])
+
+    def test_recheck_rejects_stale_or_mixed_photo_selection(self):
+        first = self.standard().json
+        identifier = self.job("inspection", first["id"])["result"]["inspection_id"]
+        self.standard(supersedes_id=first["id"])
+        for body, status in (({"template_id":first["id"]}, 409),
+                             ({"template_id":"missing"}, 404),
+                             ({"template_id":first["id"], "source_code":"list:1623"}, 400),
+                             ({"template_id":[]}, 400)):
+            response = self.client.post(f"/api/inspections/{identifier}/recheck", json=body, headers=self.headers)
+            self.assertEqual(response.status_code, status, response.json)
+
     def test_source_standard_without_photo_and_stale_revision(self):
         source = {"code":"123", "name":"系統標籤", "revision":"revision1", "keep_days":9,
                   "date_settings":[{"content":"到店日", "shift_days":1}]}

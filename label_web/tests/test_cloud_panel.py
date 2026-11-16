@@ -39,6 +39,28 @@ class CloudPanelTests(unittest.TestCase):
             self.parse(panel_document(lines=[line(),footer]))
         self.assertEqual(caught.exception.code,"scope_unclear")
 
+    def test_distributed_fields_are_not_trimmed_or_rewritten(self):
+        def placed(text,x,y,width=220,**kw):
+            return line(text,box=[{"x":x,"y":y},{"x":x+width,"y":y},
+                                  {"x":x+width,"y":y+25},{"x":x,"y":y+25}],**kw)
+        expected=[placed("愛妃蘋果單顆裝",15,10),placed("製造日期:2026.11.12",15,50),
+                  placed("有效日期:2026.11.21 03時",350,50),
+                  placed("熱量 大/份 106.2 卡",350,200),placed("2803993832539",40,300),
+                  placed("※保存條件:7℃以下 185g±9g",15,350,280),
+                  placed("福和生鮮農產股份有限公司",350,390),
+                  placed("新北市土城區中興路9號",350,420),
+                  placed("0800-200-859",350,450)]
+        document=panel_document(label_region={"x":5,"y":5,"width":625,"height":470},lines=expected)
+        actual,region=self.parse(document)
+        self.assertEqual([row["text"] for row in actual],[row["text"] for row in expected])
+        self.assertEqual(region["width"],625)
+        self.assertEqual(actual[-1]["box"],[[350,450],[570,450],[570,475],[350,475]])
+
+    def test_original_unreadable_text_remains_evidence_not_silently_removed(self):
+        actual,_=self.parse(panel_document(lines=[line("□",uncertain=True),line("福□股份有限公司")]))
+        self.assertEqual([row["text"] for row in actual],["□","福□股份有限公司"])
+        self.assertTrue(all(row["uncertain"] for row in actual))
+
     def test_uncertain_selection_is_not_a_successful_full_image_fallback(self):
         with self.assertRaises(cloud.CloudVisionError) as caught:
             self.parse(panel_document(selection_status="needs_crop"))
@@ -75,8 +97,8 @@ class CloudPanelTests(unittest.TestCase):
             self.assertEqual(payload["instructions"],cloud.PANEL_INSTRUCTIONS)
             self.assertFalse(payload["store"])
             self.assertEqual(result["cloud_call_count"],1)
-            self.assertEqual(result["scope_policy_version"],"main-label-v1")
-            self.assertEqual(result["label_region"]["method"],"cloud_main_label_v1")
+            self.assertEqual(result["scope_policy_version"],"main-label-v2")
+            self.assertEqual(result["label_region"]["method"],"cloud_main_label_v2")
 
     def test_scope_rejection_retains_usage_and_does_not_make_a_second_call(self):
         with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{"OPENAI_API_KEY":"sk-test-not-a-real-key"},clear=True):

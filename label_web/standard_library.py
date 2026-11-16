@@ -7,7 +7,7 @@ import secrets
 import unicodedata
 
 from flask import abort, jsonify, request, session
-from sqlalchemy import (Table, Column, String, Integer, Boolean, Text, JSON, UniqueConstraint,
+from sqlalchemy import (Table, Column, String, Integer, Boolean, Text, JSON, UniqueConstraint, inspect,
                         select, insert, update, func, literal, union_all, and_, or_, cast)
 from sqlalchemy.exc import IntegrityError, OperationalError
 from werkzeug.exceptions import HTTPException
@@ -37,10 +37,12 @@ def _conflict():
 
 
 def _key(kind,key):
-    if kind not in {"manual","photo"} or not isinstance(key,str) or not key or len(key)>80 or any(ord(c)<32 for c in key):
+    if kind not in {"manual","source","photo"} or not isinstance(key,str) or not key or len(key)>80 or any(ord(c)<32 for c in key):
         abort(400,description="標準識別格式不正確。")
     if kind=="manual" and not key.startswith("manual:"):
         abort(400,description="請選擇人工文字標準代碼。")
+    if kind=="source" and key.startswith("manual:"):
+        abort(400,description="請選擇清單或系統來源代碼。")
     return kind,key
 
 
@@ -48,6 +50,14 @@ def _state(conn,kind,key,lock=False):
     query=select(items).where(items.c.kind==kind,items.c.key==key)
     row=conn.execute(query.with_for_update() if lock else query).mappings().first()
     return dict(row) if row else {"kind":kind,"key":key,"revision":0,"category_id":None,"removed":False,"updated_at":None}
+
+
+def removed_source_codes(engine):
+    inspector=inspect(engine,raiseerr=False)
+    if inspector is None or not inspector.has_table(items.name):
+        return set()
+    with engine.connect() as conn:
+        return set(conn.execute(select(items.c.key).where(items.c.kind=="source",items.c.removed.is_(True))).scalars())
 
 
 def _photo_family(conn,family_id,lock=False):
@@ -75,6 +85,10 @@ def ensure_selectable(conn, *, code=None, template_id=None, allow_superseded=Fal
         if not row or not row["active"] or _state(conn,"manual",str(code))["removed"]:
             abort(409,description="這份文字標準已移除，請先還原或重新選擇標準。")
         return dict(row)
+    if code:
+        conn.execute(select(standards.heads.c.revision).where(standards.heads.c.code==str(code)).with_for_update()).first()
+        if _state(conn,"source",str(code))["removed"]:
+            abort(409,description="這份網站文字標準已移除，請先還原或重新選擇標準。")
     if template_id:
         row=conn.execute(select(db.templates).where(db.templates.c.id==template_id)).mappings().first()
         if row:
@@ -94,6 +108,21 @@ def ensure_selectable(conn, *, code=None, template_id=None, allow_superseded=Fal
 
 def _load(conn,kind,key,lock=False):
     _key(kind,key)
+    if kind=="source":
+        query=select(standards.heads.c.revision).where(standards.heads.c.code==key)
+        revision=conn.execute(query.with_for_update() if lock else query).scalar_one_or_none()
+        prior=conn.execute(select(standards.versions).where(standards.versions.c.code==key,
+            standards.versions.c.revision==revision)).mappings().first() if revision is not None else None
+        if not prior or not prior["snapshot"].get("web_text_approved"):
+            abort(404,description="找不到這份已核准的網站全文標準。")
+        from label_source import raw_draft
+        base=raw_draft(conn.engine,key)
+        available=base is not None
+        base=base or dict(deepcopy(prior["snapshot"]),revision=prior["source_revision"])
+        effective=standards.apply_current(None,base,dict(prior))
+        return {"master":{"active":available,"inspection_id":prior["inspection_id"],"created_at":prior["created_at"]},
+            "base":base,"source":effective,"base_revision":revision,"source_revision":str(base["revision"]),
+            "state":_state(conn,kind,key,lock)}
     if kind=="manual":
         query=select(db.manual_sources).where(db.manual_sources.c.code==key)
         row=conn.execute(query.with_for_update() if lock else query).mappings().first()
@@ -161,7 +190,7 @@ def detail(engine,kind,key,image_payload,summary=False):
         context=_load(conn,kind,key);state=context["state"]
         category=conn.execute(select(categories.c.name).where(categories.c.id==state["category_id"],
             categories.c.removed.is_(False))).scalar_one_or_none() if state["category_id"] else None
-        if kind=="manual":
+        if kind in {"manual","source"}:
             source=context["source"]
             origin=conn.execute(select(db.inspections.c.image_id).where(db.inspections.c.id==context["master"]["inspection_id"])).scalar_one_or_none()
             attached=conn.execute(select(reference_photos.photos.c.image_id).where(reference_photos.photos.c.source_code==key)
@@ -199,13 +228,17 @@ def detail(engine,kind,key,image_payload,summary=False):
         "updated_at":state["updated_at"] or (history[0]["created_at"] if history else context["master"]["created_at"]),
         "history":[dict(row) for row in history],"identity":{"spec":display_spec,"barcode":barcode,"sku":sku},
         "notice":"修改另存新版，只影響之後的比對；照片、舊版及既有檢查紀錄都會保留。"}
-    result["source" if kind=="manual" else "template"]=context["source" if kind=="manual" else "template"]
-    result["supports_line_replacement"]=kind=="manual"
+    result["source" if kind!="photo" else "template"]=context["source" if kind!="photo" else "template"]
+    result["source_kind"]=context.get("source",{}).get("source_kind","photo")
+    photo_text=(context.get("template",{}).get("rules") or {}).get("approved_text_source")
+    if photo_text:
+        result["source"]=deepcopy(photo_text)
+    result["supports_line_replacement"]=kind!="photo" or bool(photo_text)
     return result
 
 
 def listing(engine,image_payload,*,kind="all",state="active",category_id="all",query="",page=1,limit=24):
-    if kind not in {"all","manual","photo"} or state not in {"active","removed"}:
+    if kind not in {"all","manual","source","photo"} or state not in {"active","removed"}:
         abort(400,description="標準類型或狀態不正確。")
     if not isinstance(query,str) or len(query)>100 or not isinstance(category_id,str) or len(category_id)>32:
         abort(400,description="搜尋或分類格式不正確。")
@@ -219,7 +252,11 @@ def listing(engine,image_payload,*,kind="all",state="active",category_id="all",q
     photo=select(literal("photo").label("kind"),db.templates.c.family_id.label("key"),db.templates.c.name,
         db.templates.c.active.label("master_active"),db.templates.c.created_at.label("updated_at"),cast(db.templates.c.fields,Text).label("search_text"))
     photo=photo.join(latest,and_(db.templates.c.family_id==latest.c.family_id,db.templates.c.version==latest.c.version))
-    all_rows=union_all(manual,photo).subquery("library_rows")
+    external=select(literal("source").label("kind"),v.c.code.label("key"),v.c.snapshot["name"].as_string().label("name"),
+        literal(True).label("master_active"),v.c.created_at.label("updated_at"),cast(v.c.snapshot["lines"],Text).label("search_text"))
+    external=external.join(h,and_(h.c.code==v.c.code,h.c.revision==v.c.revision)).where(
+        ~v.c.code.like("manual:%"),v.c.snapshot["web_text_approved"].as_boolean().is_(True))
+    all_rows=union_all(manual,photo,external).subquery("library_rows")
     relation=all_rows.outerjoin(items,and_(items.c.kind==all_rows.c.kind,items.c.key==all_rows.c.key))
     removed=func.coalesce(items.c.removed,False).is_(True)
     clauses=[removed] if state=="removed" else [~removed,all_rows.c.master_active.is_(True)]
@@ -254,6 +291,14 @@ def listing(engine,image_payload,*,kind="all",state="active",category_id="all",q
 
 
 def _photo_changes(current,changes):
+    approved=(current.get("rules") or {}).get("approved_text_source")
+    if approved:
+        source=standards.changed_snapshot(approved,approved,changes)
+        result=deepcopy(current)
+        result.update(name=source["name"],fields={**result["fields"],**source.get("fields",{})})
+        result["rules"]["approved_text_source"]=source
+        result["rules"]["keep_days"]=source.get("keep_days")
+        return result
     if not isinstance(changes,dict) or set(changes)-{"name","fields","rules","reference_dates"}:
         abort(400,description="照片標準只可修改名稱、欄位及日期設定。")
     result=deepcopy(current)
@@ -314,8 +359,11 @@ def preview(engine,kind,key,body):
         if _removed(context):abort(409,description="請先還原標準再編輯。")
         changed=_changed(context,kind,body["changes"])
     from nutrition_checks import checks_for
-    return {"kind":kind,"key":key,"source" if kind=="manual" else "template":changed,
-        "preview_hash":_digest(kind,key,body,changed),"nutrition_checks":checks_for({"lines":changed.get("lines",[]),"context":"standard_draft"}) if kind=="manual" else []}
+    source=changed if kind!="photo" else (changed.get("rules") or {}).get("approved_text_source")
+    result={"kind":kind,"key":key,"source" if kind!="photo" else "template":changed,
+        "preview_hash":_digest(kind,key,body,changed),"nutrition_checks":checks_for({"lines":source.get("lines",[]),"context":"standard_draft"}) if source else []}
+    if kind=="photo" and source:result["source"]=source
+    return result
 
 
 def save(engine,kind,key,body,actor,image_payload):
@@ -328,7 +376,7 @@ def save(engine,kind,key,body,actor,image_payload):
         changed=_changed(context,kind,body["changes"])
         if body.get("preview_hash")!=_digest(kind,key,body,changed):abort(409,description="內容尚未預覽或已修改，請重新預覽。")
         revision=context["base_revision"]+1
-        if kind=="manual":
+        if kind!="photo":
             conn.execute(insert(standards.versions).values(id=db.uid(),code=key,revision=revision,source_revision=context["source_revision"],
                 operation="update",snapshot=changed,changes=body["changes"],inspection_id="",reviewer=reviewer,note=note,created_at=db.now()))
             if context["base_revision"]:
@@ -338,6 +386,8 @@ def save(engine,kind,key,body,actor,image_payload):
         else:
             conn.execute(update(db.templates).where(db.templates.c.family_id==key,db.templates.c.active.is_(True)).values(active=False))
             changed.update(id=db.uid(),family_id=key,version=revision,active=True,approved_by=reviewer,created_at=db.now())
+            if changed["rules"].get("approved_text_source"):
+                changed["rules"]["approved_text_source"]["revision"]=changed["id"]
             conn.execute(insert(db.templates).values(**changed))
         new_item=_write_state(conn,context["state"])
         _audit(conn,kind,key,"save",actor,note,{"item_revision":new_item,"base_revision":revision,"reviewer":reviewer})
@@ -355,7 +405,7 @@ def change_state(engine,kind,key,body,actor,image_payload):
         removed=body["operation"]=="remove"
         if removed==_removed(context):_conflict()
         if kind=="manual":conn.execute(update(db.manual_sources).where(db.manual_sources.c.code==key).values(active=not removed))
-        else:
+        elif kind=="photo":
             conn.execute(update(db.templates).where(db.templates.c.family_id==key,db.templates.c.active.is_(True)).values(active=False))
             if not removed:conn.execute(update(db.templates).where(db.templates.c.id==context["master"]["id"]).values(active=True))
         revision=_write_state(conn,context["state"],removed=removed)

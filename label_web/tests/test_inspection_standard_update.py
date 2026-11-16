@@ -215,7 +215,7 @@ class InspectionStandardUpdateTests(unittest.TestCase):
         kept,excluded=standards._inspection_draft_barcodes(rows,self.base,{})
         self.assertEqual([row["id"] for row in kept],[0,2,3,4])
         self.assertEqual([row["id"] for row in excluded],[1])
-        kept,excluded=standards._inspection_draft_barcodes(rows,dict(self.base,barcode_config={"kind":"1"}),{})
+        kept,excluded=standards._inspection_draft_barcodes(rows,dict(self.base,barcode_config={"kind":"1","solar":"2"}),{})
         self.assertEqual([row["id"] for row in excluded],[0,1])
         kept,excluded=standards._inspection_draft_barcodes([{"text":"AB:12.5"}],self.base,
             {"barcodes":{"items":[{"text":"AB:12.5","format":"Code128"}]}})

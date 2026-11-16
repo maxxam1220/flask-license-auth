@@ -238,15 +238,29 @@ def fields_from_lines(lines, name):
     return fields
 
 
-def validate_date_rules(source):
+def validate_date_rules(source,include_external=False):
     """Reject contradictory explicitly supplied rules, without inventing missing ones."""
-    if source.get("source_kind") != "manual":
+    manual=source.get("source_kind")=="manual"
+    if not manual and not include_external:
         return
     # Restore/reset also pass here: a historical fixed batch date must not
     # bypass today's creation/edit validation just because it was saved before.
-    for row in source.get("lines", []):
-        fixed_line_text(row["text"])
-    offsets = {_kind(setting.get("content", "")): setting["shift_days"]
+    if manual:
+        for row in source.get("lines", []):
+            fixed_line_text(row["text"])
+    def offset(setting):
+        raw=setting.get("shift_days")
+        if raw is None:
+            shift=0
+        elif isinstance(raw,bool) or not isinstance(raw,(int,str)) or not re.fullmatch(r"[+-]?\d+",str(raw).strip()):
+            abort(400,description="來源的日期位移格式不正確，請先確認原日期規則。")
+        else:
+            shift=int(raw)
+        code=str(setting.get("format") or "A")[:1]
+        if code not in "ABCDEFGHIJKL":
+            abort(400,description="來源的日期格式不支援，請先確認原日期規則。")
+        return shift+(int(source.get("keep_days") or 0) if not manual and code in "BDFHJL" else 0)
+    offsets = {_kind(setting.get("content", "")): offset(setting)
                for setting in source.get("date_settings", []) if _kind(setting.get("content", "")) in DATE_LABELS}
     for first, second, message in (
         ("manufacture", "expiry", "有效日位移不可早於製造日位移，請確認日期規則。"),
@@ -255,7 +269,7 @@ def validate_date_rules(source):
     ):
         if first in offsets and second in offsets and offsets[second] < offsets[first]:
             abort(400, description=message)
-    if source.get("keep_days") is not None and all(key in offsets for key in ("manufacture", "expiry")):
+    if manual and source.get("keep_days") is not None and all(key in offsets for key in ("manufacture", "expiry")):
         if offsets["expiry"] - offsets["manufacture"] != source["keep_days"]:
             abort(400, description="製造日與有效日位移的間隔不等於保存天數，請修正後再預覽。")
 
@@ -332,6 +346,12 @@ def payload(engine, inspection):
                 "reason": "此行已確認標籤印錯，不能直接作為正確標準。" if patch["kind"] == "label_misprint"
                           else "此行已標記看不清楚，請確認正確文字後另外填入。"})
     excluded_ids = {line["id"] for line in excluded_unconfirmed}
+    from observed_text import is_unreadable_placeholder_only
+    for line in lines:
+        if line.get("id") not in excluded_ids and is_unreadable_placeholder_only(line):
+            excluded_unconfirmed.append({"id":line["id"],"text":line["text"],"kind":"unreadable_placeholder",
+                "reason":"此段只有無法讀取的佔位符，沒有可帶入的文字；請查看原照片確認。"})
+            excluded_ids.add(line["id"])
     try:
         fields = extract_fields(lines)
     except (KeyError, ValueError, TypeError):

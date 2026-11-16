@@ -488,7 +488,13 @@ def _finish_result(lines, result):
     return result
 
 
-def evaluate(lines, template, batch_date="", arrival_date=""):
+def evaluate(lines, template, batch_date="", arrival_date="", *, base_date=""):
+    approved=(template.get("rules") or {}).get("approved_text_source")
+    if approved:
+        from source_validation import evaluate_source
+        from source_rules import prepare_source
+        source=prepare_source(approved,base_date) if base_date else approved
+        return evaluate_source(lines,source,batch_date,arrival_date,base_date=base_date)
     scope = analyze_label_scope(lines)
     if scope["blocked"]:
         return scope_review_result(lines, scope, RULE_VERSION, traditional_display)

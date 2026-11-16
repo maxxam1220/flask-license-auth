@@ -57,5 +57,7 @@ def equivalence_key(item):
     row = item.get("catalog_record")
     if not row:
         return None
+    if item.get("_web_text_approved"):
+        return ("approved_text",item.get("_source_revision"),item.get("code"))
     return (str(row["name"]).strip(), str(row.get("barcode") or "").strip(),
             row.get("keep_days"), str(row.get("barcode_type") or "").strip())

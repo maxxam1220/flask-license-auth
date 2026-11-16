@@ -84,7 +84,8 @@ class StandardReferenceTests(unittest.TestCase):
         result = self.get()
         self.assertEqual(result["source"]["lines"][0]["text"], "品名：原始蘋果")
         self.assertEqual(result["base_revision"], 0)
-        self.assertNotIn("照片錯字", str(result))
+        self.assertNotIn("照片錯字", str(result["source"]))
+        self.assertIn("照片錯字",str(result["regrouped_draft_lines"]))
 
     def test_archived_after_editor_open_cannot_write_comparison_revision(self):
         current = self.get()

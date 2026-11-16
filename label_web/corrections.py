@@ -119,7 +119,8 @@ def build_revision(original, current, action, created_at):
             inputs.get("arrival_date", ""), base_date=inputs.get("base_date", ""),
             ocr_capabilities=original["ocr"].get("capabilities"))
     else:
-        result = evaluate(ocr["lines"], standard, inputs.get("batch_date", ""), inputs.get("arrival_date", ""))
+        result = evaluate(ocr["lines"], standard, inputs.get("batch_date", ""), inputs.get("arrival_date", ""),
+            base_date=inputs.get("base_date", ""))
     from inspection_evidence import augment
     augment(result, ocr)
     affected = set(patches)

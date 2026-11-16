@@ -281,8 +281,8 @@ async function api(path, options = {}) {
 function when(iso) { return new Date(iso).toLocaleString("zh-TW", {timeZone: "Asia/Taipei", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"}); }
 function badge(status, text) { return element("span", `badge ${status}`, text || statusLabels[status]); }
 function isCatalogSource(source) { return source?.source_kind === "catalog" || String(source?.code || "").startsWith("list:"); }
-function sourceKindLabel(source) { return source?.source_kind === "manual" || String(source?.code || "").startsWith("manual:") ? "人工文字標準" : isCatalogSource(source) ? "清單" : "系統標籤"; }
-function sourceCodeLabel(source) { const code=String(source?.code || "");return code.startsWith("manual:") ? `M-${code.slice(7,15)}` : code.replace(/^list:/, ""); }
+function sourceKindLabel(source) { if(source?.comparison_scope==="approved_text")return isCatalogSource(source) ? "清單完整標準" : "已核准文字標準";return source?.source_kind === "manual" || String(source?.code || "").startsWith("manual:") ? "人工文字標準" : isCatalogSource(source) ? "清單" : "系統標籤"; }
+function sourceCodeLabel(source) { const code=String(source?.code || "");return code.startsWith("manual:") ? `M-${code.slice(7,15)}` : code.startsWith("photo:") ? `P-${code.slice(6,14)}` : code.replace(/^list:/, ""); }
 function sourceOptionLabel(source) { return `${sourceKindLabel(source)} ${sourceCodeLabel(source)} · ${source.name}`; }
 function showView(view) {
   if (!["inspect", "library", "standard", "history"].includes(view)) view = "inspect";
@@ -320,11 +320,13 @@ function setBusy(busy, kind = "") {
   updatePendingControls();
 }
 function clearResult() { state.inspection = null; state.resultDirty = false; state.standardSaved=false; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
-function markResultChanged() {
+function markResultChanged(preserveSaved = false) {
+  if (preserveSaved !== true) state.standardSaved = false;
   if (!state.inspection) return;
   state.resultDirty = true;
   if ($("#recheck-dirty")) $("#recheck-dirty").hidden = false;
   if ($("#result-maintenance")) $("#result-maintenance").open = true;
+  refreshResultStandardOffer();
 }
 function validBaseDate() {
   const input = $("#base-date");
@@ -333,8 +335,12 @@ function validBaseDate() {
 }
 function selectedStandard() {
   const standard = state.templates.find(t => t.id === $("#template-select").value);
-  const node = $("#selected-standard"); node.replaceChildren(); node.hidden = !standard;
-  $("#recognition-help").hidden = !!standard;
+  const node = $("#selected-standard"), missing = !standard && !!$("#template-select").value; node.replaceChildren(); node.hidden = !standard && !missing;
+  $("#recognition-help").hidden = !!standard || missing;
+  if (missing) {
+    state.inspectSource=null;renderInspectSource();$("#template-options").open=true;
+    const warning=element("p","recheck-dirty","這筆使用的照片標準已非可選用版本，可能已更新或移除。已保留原選擇，請改選有效照片標準後再核對；也可明確改選自動對應。");warning.id="unavailable-photo-standard";warning.setAttribute("role","status");node.append(warning);
+  }
   if (standard) {
     state.inspectSource = null; renderInspectSource();
     $("#template-options").open = true;
@@ -356,8 +362,20 @@ async function loadTemplates(selectedId) {
   select.append(new Option("自動對應系統標籤與清單", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
+  else if(previous) retainUnavailableTemplate(previous,state.inspection?.template_id===previous ? state.inspection.template_snapshot : null);
   $("#nav-count").textContent = String(manualLibraryTotal);
   selectedStandard(); if(admin)await loadManualLibrary(1);
+}
+function retainUnavailableTemplate(identifier, snapshot) {
+  const select=$("#template-select");
+  const options=Array.from(select.options || select.children);
+  if(!options.some(option=>option.value===identifier))select.append(new Option(`${snapshot?.name || "歷史照片標準"}${snapshot?.version ? ` · 第 ${snapshot.version} 版` : ""}（請改選有效版本）`,identifier));
+  select.value=identifier;
+}
+function validPhotoTemplateChoice() {
+  const identifier=$("#template-select").value;
+  if(!identifier || state.inspectSource?.code || state.templates.some(item=>item.id===identifier))return true;
+  selectedStandard();$("#template-options").open=true;$("#template-select").focus();toast("原照片標準已非可選用版本。請先選擇有效版本，或明確改選自動對應。",true);return false;
 }
 async function loadScanConfig() {
   const config = await api("/api/scan-config");
@@ -487,6 +505,7 @@ async function upload(file, kind) {
   const sourceCode = state.inspectSource?.code || "";
   const template = sourceCode ? "" : $("#template-select").value;
   if (kind === "inspection" && !template) kind = "recognition";
+  if (kind !== "reference" && !validPhotoTemplateChoice()) { setUploadError(kind,"請先選擇有效照片標準，或明確改選自動對應。"); return; }
   if (kind !== "reference" && !validBaseDate()) { setUploadError(kind, "請設定本批基準日後再上傳。"); return; }
   let settings;try{settings=recognitionSettings(kind==="reference" ? "reference-" : "");}catch(error){reportUploadFailure(kind,error);return;}
   const pending=uploadRequest(file,kind,{kind,template,sourceCode,...settings,base_date:$("#base-date").value,batch_date:$("#batch-date").value,arrival_date:$("#arrival-date").value,supersedes:state.supersedes?.id || ""});
@@ -584,8 +603,9 @@ async function loadPendingStandards(page=1){
   finally{if(token===pendingStandardsRequest && epoch===state.authEpoch){pendingStandardsLoading=false;updatePendingControls();}}
 }
 function libraryPath(data){return `/api/standard-library/${encodeURIComponent(data.kind)}/${encodeURIComponent(data.key)}`;}
-function libraryKindLabel(kind){return kind==="photo" ? "照片標準" : "文字標準";}
-function libraryIdentity(item){const identity=item.identity || {},parts=[];if(identity.spec)parts.push(`規格：${identity.spec}`);if(identity.barcode)parts.push(`條碼：${identity.barcode}`);if(identity.sku)parts.push(`貨號：${identity.sku}`);parts.push(item.kind==="manual" ? sourceCodeLabel({code:item.key}) : `P-${String(item.key || "").slice(0,8)} · 第 ${item.base_revision ?? item.template?.version ?? 1} 版`);return parts;}
+function libraryTextMode(data){return data?.supports_line_replacement===true || data?.kind!=="photo";}
+function libraryKindLabel(kind,sourceKind){return kind==="photo" ? "照片標準" : kind==="source" ? sourceKind==="catalog" ? "清單完整標準" : "系統完整標準" : "文字標準";}
+function libraryIdentity(item){const identity=item.identity || {},parts=[];if(identity.spec)parts.push(`規格：${identity.spec}`);if(identity.barcode)parts.push(`條碼：${identity.barcode}`);if(identity.sku)parts.push(`貨號：${identity.sku}`);parts.push(item.kind!=="photo" ? sourceCodeLabel({code:item.key}) : `P-${String(item.key || "").slice(0,8)} · 第 ${item.base_revision ?? item.template?.version ?? 1} 版`);return parts;}
 function populateLibraryCategories(){
   const categories=state.libraryCategories || [];
   for(const [id,filter] of [["standard-library-category",true],["library-detail-category",false]]){const input=$("#"+id),previous=input.value;input.replaceChildren();if(filter)input.append(new Option("全部分類","all"));input.append(new Option("未分類",filter ? "uncategorized" : ""));categories.forEach(item=>input.append(new Option(item.name,item.id)));if([...categories.map(item=>String(item.id)),filter ? "all" : "",filter ? "uncategorized" : ""].includes(previous))input.value=previous;}
@@ -603,9 +623,9 @@ async function loadManualLibrary(page=1) {
     if(!query && category==="all" && !removed){manualLibraryTotal=data.total || 0;$("#nav-count").textContent=String(manualLibraryTotal);}
     $("#standard-library-total").textContent=`${data.total || 0} 份${removed ? "已刪除" : "標準"}`;const list=$("#standard-library-list");list.replaceChildren();
     for(const item of data.items || []){
-      if(!["manual","photo"].includes(item.kind) || !item.key)continue;const card=element("article","panel library-card unified-standard-card"),cover=element("div","standard-card-cover");
+      if(!["manual","photo","source"].includes(item.kind) || !item.key)continue;const card=element("article","panel library-card unified-standard-card"),cover=element("div","standard-card-cover");
       if(item.image?.thumbnail || item.image?.url){const img=element("img");img.src=item.image.thumbnail || item.image.url;img.alt=`${item.name} 參考照片`;img.loading="lazy";cover.append(img);}else cover.append(element("span","help","尚無參考照片"));
-      const content=element("div","library-card-content"),chips=element("div","standard-card-chips");chips.append(element("span","standard-chip",item.category_name || "未分類"),element("span","standard-chip subtle",libraryKindLabel(item.kind)));if(item.removed)chips.append(badge("review","已刪除"));
+      const content=element("div","library-card-content"),chips=element("div","standard-card-chips");chips.append(element("span","standard-chip",item.category_name || "未分類"),element("span","standard-chip subtle",libraryKindLabel(item.kind,item.source_kind)));if(item.removed)chips.append(badge("review","已刪除"));
       content.append(chips,element("h3","",item.name || "未命名標準"));libraryIdentity(item).forEach(value=>content.append(element("p","standard-card-identity",value)));if(item.photo_count>1)content.append(element("p","help",`${item.photo_count} 張參考照片`));
       const button=element("button","button primary","查看內容");button.type="button";button.onclick=()=>openLibraryDetail(item.kind,item.key);content.append(button);card.append(cover,content);list.append(card);
     }
@@ -619,22 +639,22 @@ function showLibraryPhoto(index){const context=state.libraryDetail;if(!context)r
 function renderLibraryDetail(data){
   const context=state.libraryDetail;if(!context)return;context.data=data;context.editing=false;context.preview=null;context.operation=null;context.conflict=false;context.rows=librarySections((data.source?.lines || []).map(row=>({text:row.text || "",row_type:row.row_type})));context.photos=[];
   const candidates=[data.current_image,...(data.photos || []).map(item=>item.image || item),data.image],seen=new Set();for(const photo of candidates){if(!photo?.url || seen.has(photo.url))continue;seen.add(photo.url);context.photos.push(photo);}
-  $("#library-detail-title").textContent=data.name || data.source?.name || data.template?.name || "標準內容";$("#library-detail-meta").textContent=`${libraryKindLabel(data.kind)} · ${libraryIdentity(data).join(" · ")}${data.category_name ? ` · ${data.category_name}` : ""}`;
+  $("#library-detail-title").textContent=data.name || data.source?.name || data.template?.name || "標準內容";$("#library-detail-meta").textContent=`${libraryKindLabel(data.kind,data.source_kind || data.source?.source_kind)} · ${libraryIdentity(data).join(" · ")}${data.category_name ? ` · ${data.category_name}` : ""}`;
   $("#library-detail-notice").textContent=data.removed ? "這份標準已刪除，不用於新掃描；照片、內容及歷史均保留，可還原。" : "此處顯示目前核准內容。修改會建立新版，既有檢查紀錄保留。";
   $("#library-detail-body").hidden=false;$("#library-detail-form").hidden=true;$("#library-detail-view").hidden=false;$("#library-detail-actions").hidden=false;$("#library-state-preview").hidden=true;$("#library-state-confirm").checked=false;$("#library-detail-reload").hidden=true;$("#library-detail-category").value=data.category_id || "";
   $("#library-detail-edit").hidden=data.removed || data.editable===false;$("#library-detail-remove").hidden=!!data.removed;$("#library-detail-restore").hidden=!data.removed;$("#library-detail-use").hidden=!!data.removed;$("#library-detail-advanced").open=false;
   const photos=$("#library-detail-photos");photos.replaceChildren();$("#library-detail-image").hidden=!context.photos.length;$("#library-detail-original").hidden=!context.photos.length;$("#library-detail-photo-note").textContent=context.photos.length ? "" : "尚無可讀取的參考照片；標準文字仍保留。";
   context.photos.forEach((photo,index)=>{const button=element("button","library-photo-choice");button.type="button";button.setAttribute("aria-label",`查看第 ${index+1} 張參考照片`);const img=element("img");img.src=photo.thumbnail || photo.url;img.alt="";button.append(img);button.onclick=()=>showLibraryPhoto(index);photos.append(button);});if(context.photos.length)showLibraryPhoto(0);
   const view=$("#library-detail-view");view.replaceChildren();
-  if(data.kind==="manual")for(const section of ["content","nutrition","uncertain"]){const rows=context.rows.filter(row=>row.section===section);if(!rows.length)continue;const block=element("section",`library-content-block ${section}`);block.append(element("h3","",textSectionLabels[section]));rows.forEach(row=>block.append(element("p","library-text-line",row.text)));view.append(block);}
+  if(libraryTextMode(data))for(const section of ["content","nutrition","uncertain"]){const rows=context.rows.filter(row=>row.section===section);if(!rows.length)continue;const block=element("section",`library-content-block ${section}`);block.append(element("h3","",textSectionLabels[section]));rows.forEach(row=>block.append(element("p","library-text-line",row.text)));view.append(block);}
   else{const block=element("section","library-content-block");block.append(element("h3","","標籤內容"));for(const key of textFields){const value=data.template?.fields?.[key];if(value)block.append(element("p","library-text-line",`${fieldLabels[key]}：${value}`));}view.append(block);}
-  const dates=element("section","library-content-block"),source=data.source || {},template=data.template || {};dates.append(element("h3","","日期規則"));const days=data.kind==="manual" ? source.keep_days : template.rules?.keep_days;dates.append(element("p","",days===null || days===undefined ? "保存天數未設定" : `保存天數：${days} 天`));
-  if(data.kind==="manual"){for(const rule of source.date_settings || [])dates.append(element("p","",`${rule.content || "日期"}：本批基準日 ${Number(rule.shift_days || 0)>=0 ? "+" : ""}${rule.shift_days || 0} 天`));if(!source.date_settings?.length)dates.append(element("p","help","未設定日期位移；不推定每日日期。"));}
+  const dates=element("section","library-content-block"),source=data.source || {},template=data.template || {};dates.append(element("h3","","日期規則"));const days=libraryTextMode(data) ? source.keep_days : template.rules?.keep_days;dates.append(element("p","",days===null || days===undefined ? "保存天數未設定" : `保存天數：${days} 天`));
+  if(libraryTextMode(data)){for(const rule of source.date_settings || [])dates.append(element("p","",source.source_kind==="desktop" ? `${rule.content || "日期"}：沿用標籤系統日期規則，位移 ${rule.shift_days || 0} 天` : `${rule.content || "日期"}：本批基準日 ${Number(rule.shift_days || 0)>=0 ? "+" : ""}${rule.shift_days || 0} 天`));if(!source.date_settings?.length)dates.append(element("p","help","未設定日期位移；不推定每日日期。"));}
   else dates.append(element("p","",`製造／有效日期：${template.rules?.dates ? "檢查" : "未啟用"}；到店日：${template.rules?.arrival ? "檢查" : "未啟用"}`));view.append(dates);
   const history=$("#library-detail-history");history.replaceChildren(element("h3","","版本紀錄"));for(const entry of data.history || []){const row=element("div","review-record");row.append(element("strong","",`第 ${entry.revision} 版 · ${{update:"修改",create:"建立",restore:"還原",reset:"恢復來源",remove:"刪除"}[entry.operation] || "標準紀錄"}`),element("p","help",`${entry.reviewer || ""}${entry.created_at ? ` · ${when(entry.created_at)}` : ""}`));if(entry.note)row.append(element("p","",entry.note));history.append(row);}if(!data.history?.length)history.append(element("p","help","尚無額外修改紀錄。"));libraryDetailControls();
 }
 async function openLibraryDetail(kind,key){
-  if(!requireAdmin() || state.busy || !["manual","photo"].includes(kind) || !key)return;const context={kind,key,data:null,editing:false,preview:null};state.libraryDetail=context;$("#library-detail-body").hidden=true;$("#library-detail-title").textContent="讀取標準內容…";$("#library-detail-meta").textContent="";$("#library-detail-notice").textContent="";$("#library-detail-reload").hidden=true;setDialogError("#library-detail-error");if(!$("#library-detail-dialog").open)$("#library-detail-dialog").showModal();
+  if(!requireAdmin() || state.busy || !["manual","photo","source"].includes(kind) || !key)return;const context={kind,key,data:null,editing:false,preview:null};state.libraryDetail=context;$("#library-detail-body").hidden=true;$("#library-detail-title").textContent="讀取標準內容…";$("#library-detail-meta").textContent="";$("#library-detail-notice").textContent="";$("#library-detail-reload").hidden=true;setDialogError("#library-detail-error");if(!$("#library-detail-dialog").open)$("#library-detail-dialog").showModal();
   try{await loadLibraryCategories();const data=await api(libraryPath(context));if(state.libraryDetail!==context || !allowed())return;renderLibraryDetail(data);}catch(error){if(state.libraryDetail===context)setDialogError("#library-detail-error",error.message);}
 }
 function libraryDetailControls(){const context=state.libraryDetail,busy=state.busy;for(const node of $$("#library-detail-dialog button, #library-detail-dialog input, #library-detail-dialog textarea, #library-detail-dialog select"))node.disabled=busy;for(const id of ["library-detail-category","library-detail-category-save","library-detail-add-category"])$("#"+id).disabled=busy || !!context?.editing;$("#library-edit-preview-button").disabled=busy || !!context?.conflict;$("#library-edit-save").disabled=busy || !!context?.conflict;}
@@ -646,15 +666,15 @@ function changeLibraryFullText(){if(!state.libraryDetail?.editing || state.busy)
 function toggleLibraryPhotoDates(){const hasSource=!!state.libraryDetail?.data?.template?.rules?.source,dates=$("#library-photo-dates").checked && !hasSource,arrival=$("#library-photo-arrival-check").checked && !hasSource;$("#library-photo-date-fields").hidden=!dates;$("#library-photo-arrival-field").hidden=!arrival;$("#library-photo-manufacture").required=dates;$("#library-photo-expiry").required=dates;$("#library-photo-arrival").required=arrival;}
 function beginLibraryEdit(){
   const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed || data.editable===false)return;context.editing=true;context.conflict=false;context.rows=librarySections((data.source?.lines || []).map(row=>({text:row.text || "",row_type:row.row_type})));context.dateControls=[];context.fieldControls=[];invalidateLibraryPreview();setDialogError("#library-detail-error");$("#library-detail-view").hidden=true;$("#library-detail-form").hidden=false;$("#library-detail-actions").hidden=true;$("#library-state-preview").hidden=true;$("#library-detail-reload").hidden=true;
-  $("#library-edit-date-fields").replaceChildren();$("#library-edit-photo-fields").replaceChildren();for(const key of ["manufacture","expiry","arrival"])$("#library-photo-"+key).required=false;$("#library-edit-name").value=data.name || data.source?.name || data.template?.name || "";$("#library-edit-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";$("#library-edit-note").value="依標籤照片核對並更新標準";$("#library-edit-manual").hidden=data.kind!=="manual";$("#library-edit-photo").hidden=data.kind!=="photo";
-  if(data.kind==="manual"){renderLibraryEditSections();$("#library-edit-days").value=data.source?.keep_days ?? "";const area=$("#library-edit-date-fields");area.replaceChildren();(data.source?.date_settings || []).forEach((setting,index)=>{const label=element("label","",`${setting.content || "日期"}位移天數`),input=element("input");input.type="number";input.min="-3650";input.max="3650";input.step="1";input.value=setting.shift_days ?? 0;input.required=true;label.append(input);area.append(label);context.dateControls.push({setting,index,input});});if(!context.dateControls.length)area.append(element("p","help","目前未設定固定日期位移，保留動態日期檢查。"));}
+  $("#library-edit-date-fields").replaceChildren();$("#library-edit-photo-fields").replaceChildren();for(const key of ["manufacture","expiry","arrival"])$("#library-photo-"+key).required=false;$("#library-edit-name").value=data.name || data.source?.name || data.template?.name || "";$("#library-edit-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";$("#library-edit-note").value="依標籤照片核對並更新標準";$("#library-edit-manual").hidden=!libraryTextMode(data);$("#library-edit-photo").hidden=libraryTextMode(data);
+  if(libraryTextMode(data)){renderLibraryEditSections();$("#library-edit-days").value=data.source?.keep_days ?? "";const area=$("#library-edit-date-fields");area.replaceChildren();(data.source?.date_settings || []).forEach((setting,index)=>{const label=element("label","",`${setting.content || "日期"}位移天數`),input=element("input");input.type="number";input.min="-3650";input.max="3650";input.step="1";input.value=setting.shift_days ?? 0;input.required=true;label.append(input);area.append(label);context.dateControls.push({setting,index,input});});if(!context.dateControls.length)area.append(element("p","help","目前未設定固定日期位移，保留動態日期檢查。"));}
   else{const template=data.template || {},area=$("#library-edit-photo-fields");area.replaceChildren();for(const key of textFields){const label=element("label","",fieldLabels[key]),input=element(key==="address" ? "textarea" : "input");input.value=template.fields?.[key] || "";input.maxLength=500;input.required=["product","origin","address"].includes(key);input.setAttribute("aria-label",fieldLabels[key]);label.append(input);area.append(label);context.fieldControls.push({key,input});}$("#library-photo-dates").checked=!!template.rules?.dates;$("#library-photo-arrival-check").checked=!!template.rules?.arrival;$("#library-photo-days").value=template.rules?.keep_days ?? "";for(const key of ["manufacture","expiry","arrival"])$("#library-photo-"+key).value=template.reference_dates?.[key] || "";toggleLibraryPhotoDates();}
   libraryDetailControls();$("#library-edit-name").focus();
 }
 function collectLibraryChanges(){
   const context=state.libraryDetail,data=context?.data;if(!context?.editing || !data || context.conflict)return null;const changes={},preview=[],name=$("#library-edit-name").value.trim();if(!name)throw new Error("請填寫標準名稱。");if(name!==data.name){changes.name=name;preview.push({label:"標準名稱",before:data.name,after:name});}
   const changed=(key,before,after,label)=>{if(JSON.stringify(before)!==JSON.stringify(after)){changes[key]=after;preview.push({label,before:typeof before==="object" ? JSON.stringify(before) : before,after:typeof after==="object" ? JSON.stringify(after) : after});}};
-  if(data.kind==="manual"){const source=data.source || {},rows=context.rows.map(row=>({text:row.text.trim()})).filter(row=>row.text);if(!rows.length || rows.length>150)throw new Error("請保留 1 至 150 行正確標準文字。");const before=(source.lines || []).map(row=>row.text).join("\n"),after=rows.map(row=>row.text).join("\n");if(before!==after){changes.replace_lines=rows;preview.push({label:`標準全文（${rows.length} 行）`,before,after});}const daysInput=$("#library-edit-days");if(!daysInput.checkValidity())throw new Error("保存天數需為 0 至 3650 的整數。");const days=daysInput.value==="" ? null : Number(daysInput.value);changed("keep_days",source.keep_days ?? null,days,"保存天數");const dates=[];for(const {index,setting,input} of context.dateControls){if(!input.checkValidity() || input.value==="")throw new Error("請填寫有效的日期位移整數。");const value=Number(input.value);if(value!==Number(setting.shift_days ?? 0)){dates.push({index,shift_days:value});preview.push({label:`${setting.content}位移天數`,before:setting.shift_days ?? 0,after:value});}}if(dates.length)changes.date_settings=dates;}
+  if(libraryTextMode(data)){const source=data.source || {},rows=context.rows.map(row=>({text:row.text.trim()})).filter(row=>row.text);if(!rows.length || rows.length>150)throw new Error("請保留 1 至 150 行正確標準文字。");const before=(source.lines || []).map(row=>row.text).join("\n"),after=rows.map(row=>row.text).join("\n");if(before!==after){changes.replace_lines=rows;preview.push({label:`標準全文（${rows.length} 行）`,before,after});}const daysInput=$("#library-edit-days");if(!daysInput.checkValidity())throw new Error("保存天數需為 0 至 3650 的整數。");const days=daysInput.value==="" ? null : Number(daysInput.value);changed("keep_days",source.keep_days ?? null,days,"保存天數");const dates=[];for(const {index,setting,input} of context.dateControls){if(!input.checkValidity() || input.value==="")throw new Error("請填寫有效的日期位移整數。");const value=Number(input.value);if(value!==Number(setting.shift_days ?? 0)){dates.push({index,shift_days:value});preview.push({label:`${setting.content}位移天數`,before:setting.shift_days ?? 0,after:value});}}if(dates.length)changes.date_settings=dates;}
   else{const template=data.template || {},fields={...template.fields};for(const {key,input} of context.fieldControls){if(!input.checkValidity())throw new Error(`請確認${fieldLabels[key]}。`);fields[key]=input.value.trim();if(fields[key]!==template.fields?.[key])preview.push({label:fieldLabels[key],before:template.fields?.[key] || "",after:fields[key]});}if(JSON.stringify(fields)!==JSON.stringify(template.fields))changes.fields=fields;const daysInput=$("#library-photo-days");if(!daysInput.checkValidity())throw new Error("保存天數需為 0 至 3650 的整數。");const rules={dates:$("#library-photo-dates").checked,arrival:$("#library-photo-arrival-check").checked,keep_days:daysInput.value==="" ? null : Number(daysInput.value)},ruleChanges={};for(const [key,label] of [["dates","檢查製造／有效日期"],["arrival","檢查到店日"],["keep_days","保存天數"]]){const before=template.rules?.[key] ?? (key==="keep_days" ? null : false);if(rules[key]!==before){ruleChanges[key]=rules[key];preview.push({label,before:typeof before==="boolean" ? before ? "啟用" : "未啟用" : before,after:typeof rules[key]==="boolean" ? rules[key] ? "啟用" : "未啟用" : rules[key]});}}if(Object.keys(ruleChanges).length)changes.rules=ruleChanges;const dates={};for(const [key,label] of [["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"]]){const input=$("#library-photo-"+key);if(!input.checkValidity())throw new Error("請填寫已啟用檢查的參考照片日期。");const value=input.value.trim();if(value!==(template.reference_dates?.[key] || "")){dates[key]=value;preview.push({label:`參考照片的${label}`,before:template.reference_dates?.[key] || "未設定",after:value || "未設定"});}}if(Object.keys(dates).length)changes.reference_dates=dates;}
   return {changes,preview};
 }
@@ -676,7 +696,7 @@ async function saveLibraryCategory(){const context=state.libraryDetail;if(!requi
 function openLibraryCategory(target="filter"){if(!requireAdmin() || state.busy || (target==="detail" && state.libraryDetail?.editing))return;state.libraryCategoryContext={target,detail:state.libraryDetail};$("#library-category-form").reset();$("#library-category-name").value="";setDialogError("#library-category-error");$("#library-category-dialog").showModal();$("#library-category-name").focus();}
 function closeLibraryCategory(force=false){if(state.busy && !force)return;state.libraryCategoryContext=null;if($("#library-category-dialog").open)$("#library-category-dialog").close();$("#library-category-name").value="";setDialogError("#library-category-error");}
 async function saveLibraryNewCategory(event){event.preventDefault();const context=state.libraryCategoryContext;if(!requireAdmin() || state.busy || !context)return;const name=$("#library-category-name").value.trim();if(!name){setDialogError("#library-category-error","請填寫分類名稱。");return;}setBusy(true);$("#library-category-save").disabled=true;setDialogError("#library-category-error");try{const data=await api("/api/standard-library/categories",{method:"POST",body:{name}});if(state.libraryCategoryContext!==context || !allowed())return;await loadLibraryCategories();if(context.target==="detail" && state.libraryDetail===context.detail){$("#library-detail-category").value=data.id;$("#library-detail-notice").textContent="分類已建立；按「儲存分類」將此標準加入。";}else{await loadManualLibrary(manualLibraryPage);if(state.libraryCategoryContext!==context || !allowed())return;const message="分類已建立，開啟標準內容可指定分類。";$("#standard-library-status").textContent=message;toast(message);}closeLibraryCategory(true);}catch(error){if(state.libraryCategoryContext===context)setDialogError("#library-category-error",error.message);}finally{setBusy(false);$("#library-category-save").disabled=false;}}
-async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind==="manual")selectInspectSource({code:data.key,name:data.name,source_kind:"manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();markResultChanged();}closeLibraryDetail();showView("inspect");}
+async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind!=="photo")selectInspectSource({code:data.key,name:data.name,source_kind:data.source_kind || data.source?.source_kind || "manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();markResultChanged();}closeLibraryDetail();showView("inspect");}
 async function loadInspection(id, restoreSettings = true) {
   const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
   state.manualView = true;
@@ -688,10 +708,12 @@ function restoreInspectionSettings(inspection) {
   if (inputs.base_date) $("#base-date").value = inputs.base_date;
   $("#batch-date").value = inputs.batch_date || ""; $("#arrival-date").value = inputs.arrival_date || "";
   const template = state.templates.find(item => item.id === inspection.template_id);
-  $("#template-select").value = template ? template.id : "";
+  state.inspectSource=null;
+  if(inspection.template_id && !template)retainUnavailableTemplate(inspection.template_id,inspection.template_snapshot);
+  else $("#template-select").value = template ? template.id : "";
   selectedStandard();
   const match = result.source_match;
-  state.inspectSource = !template && (inputs.source_code || match?.status === "matched") ? {...match, code: inputs.source_code || match.code, name: match?.name || inspection.name || inputs.source_code} : null;
+  state.inspectSource = !inspection.template_id && (inputs.source_code || match?.status === "matched") ? {...match, code: inputs.source_code || match.code, name: match?.name || inspection.name || inputs.source_code} : null;
   renderInspectSource();
 }
 const correctionLabels = {ocr_misread:"OCR 辨識讀錯",label_misprint:"標籤實際印錯",uncertain:"看不清楚，待確認"};
@@ -932,7 +954,7 @@ async function openManualStandard(inspectionId=state.inspection?.id) {
   try {
     const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/manual-standard`);
     if(manualStandard!==context)return;
-    $("#manual-standard-notice").textContent=(data.notice || "請依正確資料逐字核對，辨識原文尚未核准。")+(data.draft_basis==="manual_correction" ? " 已帶入本筆確認為 OCR 讀錯的訂正文字；仍需逐字核准為正確標準。" : "")+(data.excluded_unconfirmed_lines?.length ? ` ${data.excluded_unconfirmed_lines.length} 行印錯或不確定內容未帶入，請依正確資料補齊。` : "");
+    $("#manual-standard-notice").textContent=(data.notice || "請依正確資料逐字核對，辨識原文尚未核准。")+(data.draft_basis==="manual_correction" ? " 已帶入本筆確認為 OCR 讀錯的訂正文字；仍需逐字核准為正確標準。" : "")+(data.excluded_unconfirmed_lines?.length ? ` ${data.excluded_unconfirmed_lines.length} 行未確認內容未帶入，請對照照片確認；圖案或裝飾不需補入，實際印字才需補齊。` : "");
     if(data.manual_standard_eligibility?.eligible===false && data.manual_standard_eligibility.reason)$("#manual-standard-notice").textContent+=` ${data.manual_standard_eligibility.reason}`;
     if(!data.can_create){
       if(data.existing_code){const source=await api(`/api/source-labels/${encodeURIComponent(data.existing_code)}`);if(manualStandard!==context)return;if(state.inspection?.id!==inspectionId){const inspection=await api(`/api/inspections/${encodeURIComponent(inspectionId)}`);if(manualStandard!==context)return;state.inspection=inspection;state.manualView=true;state.resultDirty=false;restoreInspectionSettings(inspection);renderInspection(inspection);showView("inspect");}$("#manual-standard-dialog").close();manualStandard=null;selectInspectSource(source);loadPendingStandards(1);toast("這張照片已建立過文字標準，請重新核對套用。");}
@@ -1037,7 +1059,7 @@ function standardEditorRows(source,inspection,allowMapped=true){
   });
 }
 function standardDraftOptions(context=state.standardEdit){
-  if(context?.data?.kind!=="manual" || context.operation!=="update")return {};
+  if(!context?.textMode || context.operation!=="update")return {};
   return {...(context.draftMode==="latest" ? {draft_manual_revision:context.data.regrouped_manual_revision} : {}),use_inspection_photo:!!$("#standard-use-photo").checked};
 }
 function updateStandardDraftControls(){
@@ -1045,7 +1067,7 @@ function updateStandardDraftControls(){
   $("#standard-draft-latest").setAttribute("aria-pressed",String(latest));$("#standard-draft-current").setAttribute("aria-pressed",String(!latest));$("#standard-draft-latest").disabled=locked || !context.canUseLatest;$("#standard-draft-current").disabled=locked;$("#standard-use-photo").disabled=locked || !context.inspection?.image?.url;
   $("#standard-photo-option").hidden=context.operation!=="update";
   const dates=context.data.regrouped_excluded_date_lines?.length || 0,unconfirmed=context.data.regrouped_excluded_unconfirmed_lines?.length || 0,barcodes=context.data.regrouped_excluded_barcode_lines?.length || 0;
-  $("#standard-draft-status").textContent=latest ? `目前編輯本次辨識草稿${context.data.regrouped_manual_revision ? "（含已確認的辨識訂正）" : ""}，尚未核准。${dates ? `已略過 ${dates} 行本批日期。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行印錯或不確定文字未帶入，請依照片補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字；仍照常檢查條碼格式。" : ""}保存天數與日期規則沿用現行標準；未讀到的舊文字不會自動補回，請確認完整內容。` : `目前編輯已核准的現行標準。${context.canUseLatest ? "可切回本次辨識草稿，兩邊的未存文字各自保留。" : `${context.data.regrouped_eligibility?.reason || "本次沒有可安全帶入的辨識草稿"}；請對照照片手動修正，或重新辨識。`}`;
+  $("#standard-draft-status").textContent=latest ? `目前編輯本次辨識草稿${context.data.regrouped_manual_revision ? "（含已確認的辨識訂正）" : ""}，尚未核准。${dates ? `已略過 ${dates} 行本批日期。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行未確認內容未帶入，請對照照片確認；圖案或裝飾不需補入，實際印字才需補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字；仍照常檢查條碼格式。" : ""}保存天數與日期規則沿用現行標準；未讀到的舊文字不會自動補回，請確認完整內容。` : `目前編輯已核准的現行標準。${context.canUseLatest ? "可切回本次辨識草稿，兩邊的未存文字各自保留。" : `${context.data.regrouped_eligibility?.reason || "本次沒有可安全帶入的辨識草稿"}；請對照照片手動修正，或重新辨識。`}`;
   $("#standard-editor-intro").textContent=latest ? "本次辨識文字已自動分區帶入。只需對照照片修正錯處，預覽後確認存成同一份標準的新版。" : "現行核准文字已分區帶入。修改後先預覽差異，再確認更新同一份標準。";
 }
 function selectStandardDraft(mode,replacement=null,initial=false){
@@ -1061,7 +1083,7 @@ function previewRegroupedStandard(){
   const context=state.standardEdit;if(state.busy || !requireAdmin() || !context?.textMode || !context.canUseLatest || context.operation!=="update" || context.conflict)return;
   const rows=(context.data.regrouped_draft_lines || []).map(draftTextRow);if(!rows.length)return;
   const dates=context.data.regrouped_excluded_date_lines?.length || 0,unconfirmed=context.data.regrouped_excluded_unconfirmed_lines?.length || 0,barcodes=context.data.regrouped_excluded_barcode_lines?.length || 0;
-  $("#standard-regroup-notice").textContent=`共 ${rows.length} 行。${dates ? `已略過 ${dates} 行本批日期，日期請另外設定規則。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行印錯或不確定文字未帶入，請依正確資料補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字。" : ""}`;
+  $("#standard-regroup-notice").textContent=`共 ${rows.length} 行。${dates ? `已略過 ${dates} 行本批日期，日期請另外設定規則。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行未確認內容未帶入，請對照照片確認；圖案或裝飾不需補入，實際印字才需補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字。" : ""}`;
   context.regroupPreview=rows;$("#standard-regroup-text").textContent=rows.map(row=>row.text).join("\n");$("#standard-regroup-preview").hidden=false;
   $("#standard-regroup-preview").scrollIntoView({block:"nearest",behavior:"instant"});
 }
@@ -1074,6 +1096,7 @@ function applyRegroupedStandard(){
 async function openStandardEditor(inspectionId = state.inspection?.id, focusLineIds = []) {
   if(!requireAdmin())return;
   if (state.busy || !inspectionId) return;
+  $("#standard-edit-title").textContent="更新比對標準";
   state.standardEdit={inspectionId,loading:true,operation:"update",focusLineIds:Array.isArray(focusLineIds) ? focusLineIds.map(String) : []};
   $$("#standard-edit-dialog button").forEach(button=>{button.disabled=false;});
   $("#standard-edit-form").reset();$("#standard-edit-form").hidden=true;$("#standard-edit-photo-template").hidden=true;$("#standard-edit-reload").hidden=true;$("#standard-edit-reset").hidden=true;$("#standard-edit-operation").hidden=true;$("#standard-text-workspace").hidden=true;$("#standard-regroup-preview").hidden=true;$("#standard-text-selection").textContent="";
@@ -1085,12 +1108,13 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
     const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/standard`);
     if (state.standardEdit !== context) return;
     Object.assign(context,{data,loading:false,lineControls:[],dateControls:[],conflict:false});
+    $("#standard-edit-title").textContent=data.kind==="catalog" && !(data.source?.web_text_approved || data.source?.comparison_scope==="approved_text") ? "建立完整標準" : "更新比對標準";
     $("#standard-edit-source").textContent=`${data.kind === "manual" ? "人工文字標準" : data.kind === "catalog" ? "清單" : data.kind === "photo_template" ? "照片標準" : "系統標籤"} ${sourceCodeLabel(data)} · ${data.name || data.source?.name || "未指定"} · ${data.base_revision ? `比對標準第 ${data.base_revision} 版` : "原始來源"}`;
     $("#standard-edit-notice").textContent=`${data.stale ? "來源資料已更新，請重新核對目前內容。 " : ""}${data.notice || ""}`;
     const history=$("#standard-edit-history-list");
     for(const item of data.history || []){
       const row=element("div","review-record");row.append(element("strong","",`第 ${item.revision} 版 · ${item.operation === "reset" ? "恢復原始來源" : item.operation === "restore" ? "還原歷史版本" : "修改比對標準"}`),element("p","help",item.note || ""),element("small","",`${item.reviewer || ""} · ${when(item.created_at)}`));
-      if(data.editable){const restore=element("button","button secondary","還原此版");restore.type="button";restore.dataset.standardRestore=String(item.revision);restore.setAttribute("aria-label",`還原比對標準第 ${item.revision} 版`);restore.disabled=!!data.stale || item.source_revision!==data.source_revision || item.revision===data.base_revision;restore.onclick=()=>selectStandardOperation("restore",item.revision);row.append(restore);if(restore.disabled)row.append(element("small","",item.revision===data.base_revision ? "目前版本" : "原始來源已變更，這版無法直接還原。"));}
+      if(data.editable && data.supports_history_restore!==false){const restore=element("button","button secondary","還原此版");restore.type="button";restore.dataset.standardRestore=String(item.revision);restore.setAttribute("aria-label",`還原比對標準第 ${item.revision} 版`);restore.disabled=!!data.stale || item.source_revision!==data.source_revision || item.revision===data.base_revision;restore.onclick=()=>selectStandardOperation("restore",item.revision);row.append(restore);if(restore.disabled)row.append(element("small","",item.revision===data.base_revision ? "目前版本" : "原始來源已變更，這版無法直接還原。"));}
       history.append(row);
     }
     $("#standard-edit-history").hidden=!(data.history || []).length;
@@ -1102,7 +1126,7 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
       }
       return;
     }
-    const source=data.source || {};$("#standard-edit-form").hidden=false;$("#standard-edit-reset").hidden=false;$("#standard-edit-reset").disabled=!data.base_revision;
+    const source=data.source || {};$("#standard-edit-form").hidden=false;$("#standard-edit-reset").hidden=data.supports_history_restore===false;$("#standard-edit-reset").disabled=!data.base_revision;
     $("#standard-edit-name").value=source.name || "";$("#standard-edit-days").value=source.keep_days ?? "";$("#standard-edit-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";
     if(!$("#standard-edit-note").value.trim())$("#standard-edit-note").value="核對正確資料，更新比對標準";
     context.textMode=data.supports_line_replacement===true;
@@ -1121,7 +1145,7 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
     });
     $("#standard-edit-lines").hidden=!context.lineControls.length;$("#standard-edit-lines").open=false;
     const dates=$("#standard-edit-date-fields");dates.replaceChildren();
-    (source.date_settings || []).forEach((setting,index)=>{const label=element("label","",`${setting.content || `日期欄 ${index+1}`}：相對基準日位移天數`),input=element("input");input.type="number";input.step="1";input.min="-3650";input.max="3650";input.required=true;input.value=setting.shift_days ?? 0;label.append(input);dates.append(label);context.dateControls.push({index,setting,input});});
+    (source.date_settings || []).forEach((setting,index)=>{const label=element("label","",`${setting.content || `日期欄 ${index+1}`}：${source.source_kind==="desktop" ? "既有日期規則位移天數" : "相對基準日位移天數"}`),input=element("input");input.type="number";input.step="1";input.min="-3650";input.max="3650";input.required=true;input.value=setting.shift_days ?? 0;label.append(input);dates.append(label);context.dateControls.push({index,setting,input});});
     $("#standard-edit-dates").hidden=!context.dateControls.length;$("#standard-edit-dates").open=false;
     lockStandardContent(false);
     if(context.focusLineIds.length && data.focus_ids_stale){
@@ -1281,11 +1305,12 @@ async function saveStandardEdit(event) {
   try {
     const body={base_revision:context.data.base_revision,source_revision:context.data.source_revision,changes:collected.changes,reviewer,note,confirmed:true,operation:context.operation || "update",...standardDraftOptions(context)};
     if(body.operation==="restore")body.target_revision=context.targetRevision;
-    await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard`,{method:"POST",body});
+    const saved=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard`,{method:"POST",body});
+    if(context.data.kind==="photo_template" || context.data.kind==="photo"){const templateId=saved.photo_template_id || saved.template?.id;if(templateId){state.inspectSource=null;renderInspectSource();try{await loadTemplates(templateId);}catch(error){toast("新版照片標準已儲存，請重新整理頁面後選用新版。",true);}}}
     sessionStorage.setItem("labelcheck-operator",reviewer);$("#standard-edit-dialog").close();
     if(state.inspection?.id===context.inspectionId)standardSavedNotice();
     toast(body.use_inspection_photo ? "新版文字與目前標準照片已一併更新，舊照片保留；可重新核對本張。" : "新版比對標準已儲存，之後同款會套用；這張照片可再按「重新核對」。");
-    if(context.data.kind==="manual")loadManualLibrary(1);
+    if(context.textMode)loadManualLibrary(1);
   } catch(error){
     if(error.status===409){context.conflict=true;$("#standard-edit-reload").hidden=false;setDialogError("#standard-edit-error",`${error.message} 你的輸入仍保留；請先複製需要的文字，再重新載入最新資料核對，這次尚未儲存。`);}
     else setDialogError("#standard-edit-error",error.message);
@@ -1426,13 +1451,40 @@ function resultLine(item) {
   }
   return row;
 }
+function renderUnmatchedDates(inspection,result,area){
+  if(inspection.template_id || result.source_match?.status==="matched" || (!result.source_match && inspection.template_snapshot?.source?.code))return;
+  const checks=(result.checks || []).filter(check=>check.source==="date" || /^(manufacture|expiry|arrival)(_|$)|^date_|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check.key || ""));
+  const keyGroups={manufacture:["manufacture","date_order","arrival_manufacture","keep_days","batch","future_manufacture"],expiry:["expiry","date_order","arrival_expiry","keep_days","expired"],arrival:["arrival","arrival_manufacture","arrival_expiry"]},weights={fail:3,review:2,pass:1,read:0};
+  const panel=element("section","result-date-first");panel.id="result-date-first";panel.setAttribute("aria-label","日期先看");panel.append(element("h3","","日期先看"));
+  const list=element("dl","date-first-list"),related=new Set();
+  for(const [key,label] of [["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"]]){
+    const field=result.fields?.[key],direct=checks.find(check=>check.key===key),value=field?.display_value || field?.value || direct?.display_actual || direct?.actual;
+    if(typeof value!=="string" || !value.trim())continue;
+    const identifiers=field?.line_ids || direct?.line_ids || [],rowChecks=checks.filter(check=>{
+      if(keyGroups[key].some(prefix=>check.key===prefix || check.key?.startsWith(prefix+"_")))return true;
+      // Several dates can share one OCR row. Known field checks must not leak across dates.
+      if(/^(manufacture|expiry|arrival)(_|$)|^date_order$|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check.key || ""))return false;
+      return (check.line_ids || []).some(id=>identifiers.includes(id) && Object.keys(keyGroups).every(other=>other===key || !(result.fields?.[other]?.line_ids || checks.find(item=>item.key===other)?.line_ids || []).includes(id)));
+    });
+    rowChecks.forEach(check=>related.add(check));const status=rowChecks.reduce((worst,check)=>(weights[check.status] ?? 0)>(weights[worst] ?? 0) ? check.status : worst,"read"),row=element("div",`date-first-row ${status}`);row.dataset.dateField=key;
+    row.append(element("dt","",label),element("dd","date-first-value",value),element("dd","date-first-status",{pass:"✓ 已做基本檢查",fail:"✕ 有異常",review:"? 需確認",read:"· 尚未核對"}[status] || "· 尚未核對"));list.append(row);
+  }
+  if(list.children.length)panel.append(list);else panel.append(element("p","date-first-empty","未辨識到可列出的製造、有效或到店日期，請對照照片確認；不代表日期已通過。"));
+  const problems=[...related].filter(check=>["fail","review"].includes(check.status)).sort((a,b)=>(weights[b.status] || 0)-(weights[a.status] || 0)),reasons=new Set();
+  for(const check of problems){const reason=check.reason || check.label;if(!reason || reasons.has(reason))continue;reasons.add(reason);panel.append(element("p",`date-first-reason ${check.status}`,`${check.status==="fail" ? "✕" : "?"} ${reason}`));}
+  panel.append(element("p","date-first-scope","尚無確定比對標準。這裡只顯示已執行的日期格式、先後與基準日檢查；不代表已確認保存期限或完整排程。"));
+  if(result.inputs?.base_date)panel.append(element("p","help",`本批基準日：${result.inputs.base_date}`));
+  if(related.size){const detail=element("details","date-first-details");detail.append(element("summary","","查看日期檢查依據"));for(const check of related){const row=element("p","");row.append(element("strong","",`${check.label || "日期檢查"}：`),element("span","",`${check.reason || "未提供判定說明"}${check.display_expected || check.expected ? ` 依據：${check.display_expected || check.expected}` : ""}`));detail.append(row);}panel.append(detail);}
+  area.append(panel);
+}
 function renderSourceMatch(match, area, baseDate) {
   if (!match && !baseDate) return;
   const node = element("div", `source-match ${match?.status || "dated"}`); node.id = "result-source-match";
   if (!match) { node.append(element("p", "source-base-date", `基準日：${baseDate}`)); area.append(node); return; }
   if (match.status === "matched") {
     node.append(element("p", "", `${sourceKindLabel(match)}：${sourceCodeLabel(match)} ${match.name}`));
-    if (isCatalogSource(match)) {
+    if(match.comparison_scope==="approved_text")node.append(element("p","source-scope","依人工核准的完整文字與既有日期規則核對；未列入的內容仍需人工確認。"));
+    else if (isCatalogSource(match)) {
       const labels = {product:"品名",barcode:"條碼",keep_days:"保存天數",spec:"規格"};
       const known = (match.known_fields || []).map(key => labels[key]).filter(Boolean);
       const scope = element("p", "source-scope", `${known.length ? `核對範圍：${known.join("、")}。` : "依清單已有資料核對。"}清單沒有標籤版面，其他內容不視為已核對。`);
@@ -1455,9 +1507,10 @@ function renderSourceMatch(match, area, baseDate) {
   area.append(node);
 }
 async function recheckInspection() {
-  if (!state.inspection || state.busy || !validBaseDate()) return;
+  if (!state.inspection || state.busy || !validBaseDate() || !validPhotoTemplateChoice()) return;
   const identifier = state.inspection.id, button = $("#recheck-button");
   const body = {source_code:state.inspectSource?.code || "",base_date:$("#base-date").value,batch_date:$("#batch-date").value,arrival_date:$("#arrival-date").value};
+  if(!body.source_code && $("#template-select").value)body.template_id=$("#template-select").value;
   setBusy(true); button.textContent = "核對中…";
   try {
     const result = await api(`/api/inspections/${encodeURIComponent(identifier)}/recheck`, {method:"POST",body});
@@ -1466,13 +1519,13 @@ async function recheckInspection() {
   finally { button.textContent = "重新核對"; setBusy(false); }
 }
 function renderRecheckControls(area) {
-  const disclosure=element("details","result-maintenance");disclosure.id="result-maintenance";disclosure.open=!!state.resultDirty;disclosure.append(element("summary","",allowed() ? "比對設定與更新標準" : "比對設定與重新核對"));
+  const disclosure=element("details","result-maintenance");disclosure.id="result-maintenance";disclosure.open=!!state.resultDirty;disclosure.append(element("summary","","比對設定與重新核對"));
   const block = element("div", "recheck-controls"); block.id = "recheck-controls";
   const dirty = element("p", "recheck-dirty", state.standardSaved ? "標準已儲存，之後同款會使用新版。以下仍是上次結果，請重新核對本張照片。" : "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
   const button = element("button", `button ${state.standardSaved ? "primary" : "secondary"}`, state.standardSaved ? "用新標準重新核對本張" : "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
   const result=state.inspection?.manual_revision?.result || state.inspection?.result;
   const hasSource=!!state.inspection?.template_id || !!state.inspection?.template_snapshot?.source?.code;
-  const edit = element("button","button secondary",hasSource ? "更新比對標準" : "建立文字比對標準");edit.type="button";edit.dataset.editStandard="true";edit.disabled=state.busy;edit.hidden=!allowed() || !!result?.label_scope?.blocked || (!hasSource && state.inspection?.manual_standard_eligibility?.eligible!==true);edit.onclick=()=>hasSource ? openStandardEditor() : openManualStandard();
+  const edit = element("button","button secondary",hasSource ? "更新比對標準" : "建立文字比對標準");edit.type="button";edit.dataset.editStandard="true";edit.disabled=state.busy;edit.hidden=true;edit.onclick=()=>hasSource ? openStandardEditor() : openManualStandard();
   const hasPatches = !!state.inspection?.manual_revision?.patches?.length;
   block.append(dirty,button,edit,element("p","recheck-help",hasPatches ? "沿用目前人工訂正，依最新標準與上方本批日期重新核對；原紀錄保留。" : "使用原辨識文字，依最新系統標籤、清單與上方本批日期核對。"));
   const referenceCode=state.inspectSource?.code || state.inspection?.template_snapshot?.source?.code || (result?.source_match?.status==="matched" ? result.source_match.code : "");
@@ -1480,14 +1533,47 @@ function renderRecheckControls(area) {
   block.append(element("p","workflow-help",allowed() ? "訂正辨識文字：按各行「訂正」，只影響本筆。更新比對標準：按「改標準」，影響之後同款掃描。" : "辨識讀錯時，按該行「訂正」，只影響本筆；變更後續比對標準需管理員處理。"));
   disclosure.append(block);area.append(disclosure);
 }
+function resultStandardAction(inspection,result){
+  if(!allowed())return null;
+  const match=result.source_match || {},source=inspection.template_snapshot?.source || {},eligibility=inspection.manual_standard_eligibility,photo=!!inspection.template_id;
+  if(result.label_scope?.blocked || inspection.ocr?.label_scope?.status==="multiple")return {blocked:"請先框選一張完整標籤，再確認要建立或更新的標準。",action:"crop",label:"調整標籤範圍"};
+  if(eligibility?.eligible===false)return {blocked:`${eligibility.reason || "本次沒有足夠可用文字"}，請先重新拍攝或辨識。`,action:"retake",label:"重新拍攝",invalid:true};
+  if(state.inspection?.id===inspection.id && state.resultDirty)return {blocked:state.standardSaved ? "標準已儲存；重新核對本張照片即可看到最新結果。" : "比對設定已變更，請先重新核對，確認這次要更新的來源。",action:"recheck",label:state.standardSaved ? "用新標準重新核對" : "先重新核對來源"};
+  if(photo && state.inspection?.id===inspection.id && $("#template-select").value===inspection.template_id && !state.templates.some(item=>item.id===inspection.template_id))return {blocked:"這筆使用的照片標準已非可選用版本。請先選擇有效版本；不會自動改用其他來源。",action:"photo",label:"選擇有效照片標準"};
+  if(!photo && ["ambiguous","unavailable"].includes(match.status))return {blocked:match.status==="ambiguous" ? "有多份可能來源，請先選定正確標籤並重新核對，避免更新錯份標準。" : "目前無法確認比對來源，請先選擇來源或稍後重新核對。",action:"source",label:"選擇正確來源"};
+  const code=source.code || (match.status==="matched" ? match.code : ""),kind=source.source_kind || match.source_kind || (String(code).startsWith("list:") ? "catalog" : String(code).startsWith("manual:") ? "manual" : "desktop");
+  if(photo || code){const complete=kind==="catalog" && !(source.web_text_approved || source.comparison_scope==="approved_text" || match.comparison_scope==="approved_text");return {action:"update",label:complete ? "建立完整標準" : "更新標準",title:complete ? "這份清單還缺完整標籤文字" : "用本次照片更新這份標準",description:complete ? "目前只知道清單的部分資料。可自動帶入這次文字與照片，對照後核准成完整比對依據。" : "自動帶入本次可用文字與照片，分區確認後存成原標準新版，舊版與舊照片保留。",identity:photo ? inspection.template_snapshot?.name || "本次選用的照片標準" : `${sourceCodeLabel({code})} · ${source.name || match.name || "本次比對來源"}`};}
+  if(match.status!=="unmatched" || eligibility?.eligible!==true || state.inspectSource?.code || !(inspection.ocr?.lines || []).length)return null;
+  return {action:"create",label:"新建標準",title:"這張標籤尚無比對依據",description:eligibility.needs_review ? "已存檢查紀錄，仍有文字需要確認。可開啟自動分區草稿，只修正讀錯處；核准前不會成為正式依據。" : "文字與照片已備妥，可直接開啟分區草稿；核准前不會成為正式依據。"};
+}
+function performResultStandardAction(action,inspection){
+  if(!requireAdmin() || state.busy || state.inspection?.id!==inspection.id)return;
+  const current=state.inspection,currentResult=state.manualView && current.manual_revision ? current.manual_revision.result : current.result,choice=resultStandardAction(current,currentResult);
+  if(!choice)return;
+  action=choice.action;inspection=current;
+  if(action==="create")return openManualStandard(inspection.id);
+  if(action==="update")return openStandardEditor(inspection.id);
+  if(action==="recheck")return recheckInspection();
+  if(action==="crop")return openCropDialog(inspection);
+  if(action==="retake")return openCamera();
+  if(action==="photo"){$("#template-options").open=true;$("#template-select").focus();$("#template-select").scrollIntoView({block:"center",behavior:"instant"});return;}
+  if(action==="source"){$("#template-options").open=true;$("#inspect-source-query").focus();$("#inspect-source-search").scrollIntoView({block:"center",behavior:"instant"});}
+}
 function renderPendingStandardOffer(inspection,result,area){
-  if(!allowed() || inspection.template_id || inspection.template_snapshot?.source?.code || result.source_match?.status!=="unmatched" || result.label_scope?.blocked || state.inspectSource?.code)return;
-  const eligibility=inspection.manual_standard_eligibility;if(eligibility?.eligible!==true){if(eligibility?.eligible===false){const note=element("p","help draft-ineligible-note",`${eligibility.reason || "本次沒有足夠的可用標籤文字，未列入待建立標準。"} 請重新拍攝或調整範圍後重新辨識。`);note.id="draft-ineligible-note";area.append(note);}return;}
-  if(!(inspection.ocr?.lines || []).length)return;
-  const offer=element("section","pending-standard-offer"),text=element("p","",eligibility.needs_review ? "已存檢查紀錄，仍有文字需要確認。可開啟自動分區草稿，只修正讀錯處；核准前不會成為正式依據。" : "已存檢查紀錄，可對照照片確認標準。文字會自動分區帶入，核准前不會成為正式依據。"),button=element("button","button primary","確認標準草稿");offer.id="pending-standard-offer";button.id="confirm-standard-draft";button.type="button";button.disabled=state.busy;button.dataset.editStandard="pending";button.onclick=()=>openManualStandard(inspection.id);offer.append(text,button);area.append(offer);
+  const action=resultStandardAction(inspection,result);if(!action)return;
+  const offer=element("section",`result-standard-offer${action.action==="create" ? " pending-standard-offer" : ""}${action.blocked ? " blocked" : ""}`);offer.id="result-standard-action";offer.setAttribute("aria-label","標準建立與更新");
+  const copy=element("div","result-standard-copy");if(action.title)copy.append(element("strong","",action.title));if(action.identity)copy.append(element("p","standard-action-identity",action.identity));const text=element("p",action.invalid ? "help draft-ineligible-note" : "help",action.description || action.blocked);if(action.invalid)text.id="draft-ineligible-note";copy.append(text);
+  const button=element("button","button primary",action.label);button.id=action.action==="create" ? "confirm-standard-draft" : "result-standard-primary";button.type="button";button.disabled=state.busy;button.dataset.editStandard=action.action;button.onclick=()=>performResultStandardAction(action.action,inspection);offer.append(copy,button);area.append(offer);
+}
+function refreshResultStandardOffer(){
+  if(!state.inspection)return;
+  const area=$("#result-area"),old=area.querySelector("#result-standard-action"),holder=element("div"),inspection=state.inspection,result=state.manualView && inspection.manual_revision ? inspection.manual_revision.result : inspection.result;
+  renderPendingStandardOffer(inspection,result,holder);const next=holder.children[0];
+  if(old){if(next)old.replaceWith(next);else old.remove();}
+  else if(next){const overview=area.querySelector(".result-overview");if(overview)area.insertBefore(next,overview);else area.append(next);}
 }
 function standardSavedNotice(){
-  state.standardSaved=true;markResultChanged();
+  state.standardSaved=true;markResultChanged(true);
   if(state.inspection)renderInspection(state.inspection);
   $("#recheck-controls")?.scrollIntoView({block:"center",behavior:"instant"});
 }
@@ -1559,6 +1645,7 @@ function renderInspection(inspection) {
     if (count) counts.append(element("span", `count-${status}`, `${label} ${count}`));
   }
   header.append(element("strong","result-verdict",coverage.title),counts,element("p","result-coverage",coverage.note)); area.append(header);
+  renderUnmatchedDates(inspection,result,area);
   if(inspection.manual_revision){
     const toolbar=element("div","manual-toolbar"),toggle=element("button","button secondary",manual ? "查看原始判定" : "查看人工訂正後判定");toggle.type="button";toggle.dataset.toggleOriginal="true";toggle.disabled=state.busy;toggle.onclick=()=>{state.manualView=!state.manualView;renderInspection(inspection);};
     toolbar.append(element("p","",manual ? "依人工填寫的照片實際文字重新判定；原始 OCR 與原判定仍保留。" : "正在查看第一次機器辨識結果；後續人工訂正另行保留。"),toggle);area.append(toolbar);
@@ -1567,8 +1654,8 @@ function renderInspection(inspection) {
   const recovery = recoveryMessage(inspection.ocr);
   if (recovery) { const notice = element("p", "result-notes", recovery); notice.setAttribute("role", "status"); area.append(notice); }
   renderSourceMatch(result.source_match, area, result.inputs?.base_date);
-  renderResultOverview(inspection,result,rows,area);
   renderPendingStandardOffer(inspection,result,area);
+  renderResultOverview(inspection,result,rows,area);
   renderRecheckControls(area);
   const passed=rows.filter(row=>row.status==="pass").length;
   const textDetails=element("details","result-text-details");textDetails.id="result-text-details";textDetails.append(element("summary","",`查看貼紙全文與訂正 · ${rows.length} 行${passed ? `（${passed} 行已核對相符）` : ""}`));renderResultLines(rows,textDetails,inspection,manual);area.append(textDetails);

@@ -56,6 +56,8 @@ def available(engine):
 
 
 def search(engine, query):
+    from standard_library import removed_source_codes
+    removed=removed_source_codes(engine)
     pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     items = []
     if _desktop_available(engine):
@@ -78,7 +80,7 @@ def search(engine, query):
             continue
         effective = standard_reference.apply_current(engine, base, version)
         current_values = [effective["name"], code, *effective.get("barcode_values", [])]
-        if effective.get("source_kind") == "manual":
+        if effective.get("source_kind") == "manual" or effective.get("web_text_approved"):
             current_values.extend(line["text"] for line in effective.get("lines", []))
         if not any(wanted in _identity_text(value) for value in current_values):
             # An old SKU/name may have matched the original snapshot. Search
@@ -90,10 +92,13 @@ def search(engine, query):
             existing["name"] = effective["name"]
         else:
             items.insert(0, {"code": code, "name": effective["name"], "source_kind": effective["source_kind"]})
-    return items[:80]
+    return [item for item in items if str(item["code"]) not in removed][:80]
 
 
 def draft(engine, code):
+    from standard_library import removed_source_codes
+    if str(code) in removed_source_codes(engine):
+        return None
     return standard_reference.apply_current(engine, raw_draft(engine, code))
 
 
@@ -240,7 +245,11 @@ def _manual_catalog_item(source):
 
 
 def _catalog(engine):
+    from standard_library import removed_source_codes
+    removed=removed_source_codes(engine)
     catalog = raw_catalog(engine)
+    for code in removed:
+        catalog.pop(code,None)
     for code, version in standard_reference.current_versions(engine).items():
         if code not in catalog:
             continue
@@ -251,8 +260,12 @@ def _catalog(engine):
         source = standard_reference.apply_current(engine, base, version)
         item = deepcopy(catalog[code])
         item["name"] = source["name"]
-        if source.get("source_kind") == "manual":
+        if source.get("source_kind") == "manual" or source.get("web_text_approved"):
             item = _manual_catalog_item(source)
+            item["source_kind"]=source.get("source_kind","manual")
+            item["_web_text_approved"]=bool(source.get("web_text_approved"))
+            if source.get("source_kind")=="catalog":
+                item["catalog_record"]=dict(catalog[code].get("catalog_record",{}),name=source["name"],keep_days=source.get("keep_days"))
         elif source.get("source_kind") == "catalog":
             barcode = next(iter(source.get("barcode_values", [])), "")
             item["barcode"] = set(source.get("barcode_values", []))
@@ -392,7 +405,7 @@ def resolve(engine, ocr_lines, source_code=""):
                     matches = {code for code in original_candidates if observed in catalog[code]["text"]}
                     if not matches:
                         continue
-                    supported = matches | {code for code in original_candidates if catalog[code].get("source_kind") == "catalog"}
+                    supported = matches | {code for code in original_candidates if catalog[code].get("source_kind") == "catalog" and not catalog[code].get("_web_text_approved")}
                     if any(catalog[code].get("source_kind") == "manual" for code in original_candidates):
                         # A partial manual reference cannot disprove an omitted field,
                         # nor can its subset of text overrule an unknown peer field.

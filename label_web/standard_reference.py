@@ -116,8 +116,8 @@ def changed_snapshot(base, current, changes):
     changed_ids = set()
     replacing = "replace_lines" in changes
     if replacing:
-        if result.get("source_kind") != "manual" or "lines" in changes:
-            abort(400, description="整份文字替換只適用人工文字標準，且不可同時傳送逐列修改。")
+        if result.get("source_kind") not in {"manual","catalog","desktop","photo"} or "lines" in changes:
+            abort(400, description="此來源不支援整份文字替換，或同時傳送了逐列修改。")
         supplied = changes["replace_lines"]
         if not isinstance(supplied, list) or not 1 <= len(supplied) <= 150:
             abort(400, description="請提供 1 至 150 行完整標準文字；空白行請直接刪除。")
@@ -138,6 +138,10 @@ def changed_snapshot(base, current, changes):
             used.add(str(identifier))
             replacements.append({"id":identifier,"text":value,"score":1.,"box":[]})
         result["lines"] = replacements
+        result.pop("catalog_barcode_line_ids",None)
+        if result.get("source_kind") != "manual":
+            result.update(web_text_approved=True,comparison_scope="approved_text",
+                limitations=["只核對已人工確認的網站文字與原有日期、條碼規則；未建立或改動列印版面。"])
         rows = {str(row["id"]):row for row in replacements}
         changed_ids = set(rows)
     if "lines" in changes:
@@ -214,7 +218,7 @@ def changed_snapshot(base, current, changes):
                 abort(400, description="日期項目不可重複。")
             seen.add(index)
             result["date_settings"][index]["shift_days"] = _integer(patch["shift_days"], "位移天數", -3660, 3660)
-    if result.get("source_kind") == "catalog":
+    if result.get("source_kind") == "catalog" and not result.get("web_text_approved"):
         result["fields"] = {"product": result["name"]}
         barcode_ids = result.get("catalog_barcode_line_ids", [])
         for identifier in barcode_ids:
@@ -228,7 +232,7 @@ def changed_snapshot(base, current, changes):
         if barcode_ids:
             result["barcode_values"] = [rows[str(identifier)]["text"] for identifier in barcode_ids]
         result["known_fields"] = list(dict.fromkeys([*result.get("known_fields", []), *(["keep_days"] if result.get("keep_days") is not None else [])]))
-    elif result.get("source_kind") == "manual":
+    elif result.get("source_kind") in {"manual","photo"} or result.get("web_text_approved"):
         from manual_reference import fields_from_lines
         result["fields"] = fields_from_lines(result.get("lines", []), result["name"])
         result["known_fields"] = [key for key, value in result["fields"].items() if value]
@@ -238,8 +242,13 @@ def changed_snapshot(base, current, changes):
         result["fields"]["product"] = result["name"]
     # Static barcode annotations may have been edited, but composed runtime
     # barcodes remain owned by their untouched original barcode configuration.
-    if result.get("source_kind") != "catalog":
+    if result.get("source_kind") == "manual":
         result["barcode_values"] = sorted({value for row in result.get("lines", []) for value in _fixed_barcodes(row["text"])})
+    elif result.get("source_kind") != "catalog" and not result.get("web_text_approved"):
+        result["barcode_values"] = sorted({value for row in result.get("lines", []) for value in _fixed_barcodes(row["text"])})
+    if any(key in changes for key in ("date_settings","keep_days")):
+        from manual_reference import validate_date_rules
+        validate_date_rules(result,include_external=True)
     return result
 
 
@@ -272,6 +281,13 @@ def _context(engine, inspection):
             "can_create_manual": can_create, "manual_reference_code": existing_code,
             "notice": "此紀錄使用照片標準，請從照片標準管理建立新版。" if inspection.get("template_id") else "請先選定唯一的比對來源，再修正標準。"}
     base = raw_draft(engine, str(source["code"]))
+    from standard_library import removed_source_codes
+    if str(source["code"]) in removed_source_codes(engine):
+        current=_current(engine,str(source["code"]))
+        return None,{"editable":False,"kind":source.get("source_kind","desktop"),"code":source["code"],"removed":True,
+            "base_revision":current["revision"] if current else 0,"history":[],"has_more":False,
+            "source":apply_current(engine,base,current or {}) if base else source,
+            "notice":"這份網站標準已移除；請先從標準庫還原後再編輯。"}
     if base is None:
         if str(source["code"]).startswith("manual:"):
             with engine.connect() as conn:
@@ -315,7 +331,9 @@ def _inspection_draft_barcodes(rows, source, ocr):
     kept, excluded = [], []
     for row in rows:
         found = value(row.get("text", ""))
-        if found and (source.get("barcode_config") or found not in approved):
+        config=source.get("barcode_config") or {}
+        composed=bool(config.get("barcode") or config.get("solar") or config.get("front") or config.get("back"))
+        if found and (composed or found not in approved):
             excluded.append(dict(row, value=found,
                 reason="條碼可能含批次資料，未自動寫入固定文字；原始辨識與條碼檢查仍保留。"))
         else:
@@ -323,9 +341,29 @@ def _inspection_draft_barcodes(rows, source, ocr):
     return kept, excluded
 
 
+def inspection_draft_fields(engine,inspection,effective):
+    from manual_reference import payload as authoring_payload
+    draft=authoring_payload(engine,inspection)
+    draft_rows,excluded_barcodes=_inspection_draft_barcodes(draft["draft_lines"],effective,inspection.get("ocr") or {})
+    return dict(regrouped_draft_lines=draft_rows,regrouped_excluded_barcode_lines=excluded_barcodes,
+        regrouped_excluded_date_lines=draft["excluded_date_lines"],
+        regrouped_excluded_unconfirmed_lines=draft["excluded_unconfirmed_lines"],
+        regrouped_manual_revision=draft["manual_revision"],regrouped_inspection_id=inspection["id"],
+        regrouped_draft_basis=draft["draft_basis"],regrouped_suggested_name=draft["suggested_name"],
+        regrouped_eligibility=draft["manual_standard_eligibility"],
+        regrouped_can_apply=bool(draft_rows) and draft["manual_standard_eligibility"]["eligible"],
+        regrouped_notice="這是依本張照片及已確認辨識訂正整理的草稿；不會自動取代目前已核准的文字。")
+
+
 def payload(engine, inspection):
     base, unsupported = _context(engine, inspection)
     if unsupported:
+        if inspection.get("template_id"):
+            with engine.connect() as conn:
+                if conn.execute(select(db.templates.c.id).where(db.templates.c.id==inspection["template_id"])).first() is None:
+                    return unsupported
+            import photo_standard_authoring
+            return photo_standard_authoring.payload(engine,inspection)
         return unsupported
     current = _current(engine, str(base["code"]))
     effective = apply_current(engine, base, current or {})
@@ -340,25 +378,11 @@ def payload(engine, inspection):
             versions.c.note, versions.c.created_at, versions.c.source_revision,
             versions.c.snapshot["name"].as_string().label("name")).where(versions.c.code == base["code"])
             .order_by(versions.c.revision.desc()).limit(11)).mappings().all()
-    extra={"supports_line_replacement":base.get("source_kind")=="manual",
+    extra={"supports_line_replacement":base.get("source_kind") in {"manual","catalog","desktop"},
            "focus_ids_stale":str(((inspection.get("template_snapshot") or {}).get("source") or {}).get("revision", "")) != str(effective["revision"])}
     if extra["supports_line_replacement"]:
-        from manual_reference import payload as authoring_payload
         from reference_photos import current_image
-        draft=authoring_payload(engine,inspection)
-        draft_rows,excluded_barcodes=_inspection_draft_barcodes(draft["draft_lines"],effective,inspection.get("ocr") or {})
-        extra.update(regrouped_draft_lines=draft_rows,
-            regrouped_excluded_barcode_lines=excluded_barcodes,
-            regrouped_excluded_date_lines=draft["excluded_date_lines"],
-            regrouped_excluded_unconfirmed_lines=draft["excluded_unconfirmed_lines"],
-            regrouped_manual_revision=draft["manual_revision"],
-            regrouped_inspection_id=inspection["id"],
-            regrouped_draft_basis=draft["draft_basis"],
-            regrouped_suggested_name=draft["suggested_name"],
-            regrouped_eligibility=draft["manual_standard_eligibility"],
-            regrouped_can_apply=bool(draft_rows) and draft["manual_standard_eligibility"]["eligible"],
-            current_reference_image=current_image(engine,effective),
-            regrouped_notice="這是依本張照片及已確認辨識訂正整理的草稿；不會自動取代目前已核准的文字。")
+        extra.update(inspection_draft_fields(engine,inspection,effective),current_reference_image=current_image(engine,effective))
     return {"editable": True, "kind": base["source_kind"], "code": base["code"], "name": effective["name"],
             "base_revision": current["revision"] if current else 0, "source_revision": str(base["revision"]),
             "stale": effective.get("standard_reference", {}).get("state") == "stale",
@@ -375,8 +399,8 @@ def _check_draft_revision(conn, inspection, body, source):
     """
     if "draft_manual_revision" not in body:
         return
-    if source.get("source_kind") != "manual":
-        abort(400, description="帶入本次辨識只適用人工文字標準。")
+    if source.get("source_kind") not in {"manual","catalog","desktop","photo"}:
+        abort(400, description="此來源不支援帶入本次辨識。")
     wanted = _integer(body["draft_manual_revision"], "辨識訂正版本", 0, 2**31-2)
     import corrections
     from standard_draft_quality import eligibility
@@ -392,8 +416,8 @@ def _use_inspection_photo(body, source):
     value = body.get("use_inspection_photo", False)
     if not isinstance(value, bool):
         abort(400, description="更新標準照片須為明確的勾選設定。")
-    if value and source.get("source_kind") != "manual":
-        abort(400, description="本次照片只能設為既有人工文字標準的目前照片。")
+    if value and source.get("source_kind") not in {"manual","catalog","desktop","photo"}:
+        abort(400, description="此來源不支援設定目前標準照片。")
     return value
 
 
@@ -404,6 +428,9 @@ def preview_changes(engine, inspection, body):
         abort(400,description="請提供目前版本與待預覽的修改內容。")
     base,unsupported=_context(engine,inspection)
     if unsupported:
+        if inspection.get("template_id"):
+            import photo_standard_authoring
+            return photo_standard_authoring.preview_changes(engine,inspection,body)
         abort(409,description=unsupported["notice"])
     current=_current(engine,str(base["code"]))
     revision=current["revision"] if current else 0
@@ -474,6 +501,9 @@ def save(engine, inspection, body):
         abort(400, description="還原版本時不可同時更新標準照片。")
     base, unsupported = _context(engine, inspection)
     if unsupported:
+        if inspection.get("template_id"):
+            import photo_standard_authoring
+            return photo_standard_authoring.save(engine,inspection,body)
         abort(409, description=unsupported["notice"])
     if body.get("source_revision") != str(base["revision"]):
         abort(409, description="原始來源已變更，請重新載入後確認；未套用舊文字列修改。")
@@ -483,6 +513,15 @@ def save(engine, inspection, body):
             _lock_active_inspection(conn, inspection["id"])
             from standard_library import ensure_selectable
             ensure_selectable(conn,code=code)
+            fresh,unavailable=_context(engine,inspection)
+            if unavailable or fresh is None or str(fresh["revision"])!=body.get("source_revision"):
+                abort(409,description="原始來源已變更，請重新載入後確認。")
+            base=fresh
+            if conn.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert as upsert
+            else:
+                from sqlalchemy.dialects.sqlite import insert as upsert
+            conn.execute(upsert(heads).values(code=code,revision=0).on_conflict_do_nothing(index_elements=["code"]))
             head = conn.execute(select(heads).where(heads.c.code == code).with_for_update()).mappings().first()
             current_revision = head["revision"] if head else 0
             if current_revision != base_revision:

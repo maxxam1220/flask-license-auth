@@ -10,7 +10,7 @@ from label_geometry import (analyze_label_scope, scope_review_result, date_obser
 from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.12"
+RULE_VERSION = "1.13"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -497,7 +497,8 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         bad_reason = {"date_order": "有效日期早於製造日期。", "arrival_manufacture": "到店日早於製造日期。", "arrival_expiry": "到店日晚於有效日期。"}[key]
         add(key, label, "review" if low else "fail" if bad else "pass", bad_reason if bad else "日期先後順序合理。",
             expectation, f"{a['date']} → {b['date']}", fields[first]["line_ids"] + fields[second]["line_ids"])
-    if (source or {}).get("source_kind") in {"manual", "catalog"} and source.get("keep_days") is not None and all(key in parsed for key in ("manufacture","expiry")):
+    photo_schedule=(source or {}).get("source_kind")=="photo" and all(key in settings for key in ("manufacture","expiry"))
+    if (source or {}).get("source_kind") in {"manual", "catalog", "photo"} and not photo_schedule and source.get("keep_days") is not None and all(key in parsed for key in ("manufacture","expiry")):
         days = (parsed["expiry"]["date"]-parsed["manufacture"]["date"]).days
         low = any(_field_uncertain(fields[key]) for key in ("manufacture","expiry"))
         same = days == source["keep_days"]
@@ -596,6 +597,13 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
     date_ids = {identifier for field in identified_dates.values() for identifier in field["line_ids"]}
     text_lines = [line for line in lines if line["id"] not in date_ids]
     checks, fields, literal_ids = _text_checks(text_lines, source) if source else ([], {}, set())
+    if (source or {}).get("source_kind")=="catalog":
+        expected_length={"1":13,"2":12,"3":8}.get(str((source.get("barcode_config") or {}).get("kind","")))
+        incomplete={re.sub(r"\s+","",str(value)) for value in source.get("barcode_values",[]) if expected_length
+                    and re.fullmatch(r"[0-9]+",str(value)) and len(str(value))!=expected_length}
+        for check in checks:
+            if check.get("label")=="條碼" and re.sub(r"\s+","",check.get("expected","")) in incomplete:
+                check.update(status="review",reason="清單只提供部分條碼資料，未提供完整碼的組成規則；無法據此確認完整條碼，不會推算或補碼。")
     date_checks, date_fields, notes = _date_checks(date_lines, source, batch_date, arrival_date, base_date, literal_ids)
     fields.update(date_fields)
     checks.extend(date_checks)
@@ -642,10 +650,12 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
                        "expected":"", "line_ids":[], "score":None, "source":"standard",
                        "reason":"原始來源資料已變更，先前人工比對標準已停用；請重新確認標準後再核對。"})
     manual_source = (source or {}).get("source_kind") == "manual"
-    notes.insert(0, ("依人工提供並確認的文字與日期規則核對；沒有完整印標版面，未提供的內容仍需確認。" if manual_source else
+    approved_text = bool((source or {}).get("web_text_approved"))
+    notes.insert(0, ("依已核准的網站完整文字與原有日期、條碼規則核對；未建立或修改列印版面，未列入的內容仍需確認。" if approved_text else
+                    "依人工提供並確認的文字與日期規則核對；沒有完整印標版面，未提供的內容仍需確認。" if manual_source else
                     "依清單核對已知品名、條碼與保存天數；完整製造及有效日期可核對天數間隔，但清單沒有其他印字與日期位移，不能據此確認整張標籤。" if catalog_source else
                     f"依資料庫標籤 {source.get('code', '')} 的完整文字及日期設定核對；不使用其他產品的文字補足。" if source
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))
     result = {"checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
-              "verified_scope": "manual_text" if manual_source else "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
+              "verified_scope": "approved_text" if approved_text else "manual_text" if manual_source else "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
     return _decorate(result, lines)

@@ -480,7 +480,8 @@ def create_app(config=None, ocr=None):
                     if job["kind"] == "inspection":
                         standard = (job.get("result") or {}).get("recognition_standard") or dict(conn.execute(
                             select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
-                        evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
+                        evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"],
+                                              base_date=inputs["base_date"])
                         augment(evaluation,ocr_result)
                     else:
                         standard, evaluation = source_evaluation
@@ -907,6 +908,12 @@ def create_app(config=None, ocr=None):
         if not isinstance(body, dict):
             abort(400, description="請確認核對設定。")
         inputs = scan_inputs(body)
+        template_id = body.get("template_id", "")
+        if not isinstance(template_id, str) or len(template_id) > 80 or any(ord(char) < 32 for char in template_id):
+            abort(400, description="照片標準代碼不正確。")
+        template_id = template_id.strip()
+        if template_id and inputs["source_code"]:
+            abort(400, description="請選擇一份標準後再重新核對。")
         new_id = db.uid()
         copied_from = None
         with correction_lock, engine.begin() as conn:
@@ -921,13 +928,23 @@ def create_app(config=None, ocr=None):
             original = dict(original)
             current = corrections.latest(conn, identifier)
             active = current if current and current["patches"] else None
-            standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"],
-                match_lines=active["ocr"]["lines"] if active else None)
-            ensure_result_standard(conn, standard)
+            if template_id:
+                standard_library.ensure_selectable(conn, template_id=template_id)
+                standard = dict(conn.execute(select(db.templates).where(db.templates.c.id == template_id)
+                    .with_for_update()).mappings().one())
+                inputs["template_id"] = template_id
+                result = evaluate(original["ocr"]["lines"], standard, inputs["batch_date"], inputs["arrival_date"],
+                                  base_date=inputs["base_date"])
+                augment(result, original["ocr"])
+                result["inputs"] = inputs
+            else:
+                standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"],
+                    match_lines=active["ocr"]["lines"] if active else None)
+                ensure_result_standard(conn, standard)
             result["recheck_of"] = identifier
             result["recognition_reused"] = True
             fresh = dict(id=new_id, image_id=original["image_id"],
-                template_id="", template_snapshot=standard, status=result["status"],
+                template_id=template_id, template_snapshot=standard, status=result["status"],
                 result=result, ocr=original["ocr"], created_at=db.now())
             conn.execute(insert(db.inspections).values(**fresh))
             if active:
