@@ -473,7 +473,10 @@
         leaseHeld = await lease(owner);
         if (!leaseHeld) throw fault('busy', '另一個分頁正在補傳，請稍候。');
         const row = await ownedEntry(client_id, owner); checkActive();
-        if (!row || row.stage !== 'inspect' || !row.photos?.length || !['retry', 'blocked'].includes(row.status)) {
+        // A cancelled/interrupted upload can leave a retained row as pending.
+        // Its temporary display status is not evidence of server acceptance;
+        // receipt lookup below remains authoritative before replacing photos.
+        if (!row || row.stage !== 'inspect' || !row.photos?.length) {
           throw fault('stale', '這筆目前不需要重選照片，請重新確認待傳清單。');
         }
         syncState.current = row.code; await refresh();
@@ -994,7 +997,7 @@
             item.append(checklist);
           }
           const actions = document.createElement('div'); actions.className = 'offline-queue-actions';
-          if (!row.stale_owner && row.stage === 'inspect' && row.photo_count > 0 && ['retry', 'blocked'].includes(row.status)) {
+          if (!row.stale_owner && row.stage === 'inspect' && row.photo_count > 0) {
             const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'button button-small offline-photo-repair';
             repair.textContent = t('重新選照片'); repair.disabled = Boolean(state.sync?.running);
             const choose = document.createElement('input'); choose.type = 'file'; choose.multiple = true; choose.hidden = true;

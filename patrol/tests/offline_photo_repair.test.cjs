@@ -260,12 +260,46 @@ test('same account with new phone binding cannot repair an old owner grant', asy
   assert.deepEqual(await snapshot(h), before); assert.equal(h.server.receipts.length, 0);
 });
 
+for (const status of ['pending', undefined]) test('owned photo draft can be repaired with ' + (status || 'legacy missing status'), async t => {
+  const h = await harness(t), draft = await failed(h);
+  await store(h, 'queue', row => { if (status) row.status = status; else delete row.status; });
+  const [before] = await snapshot(h);
+  await h.core.repairPhotos(draft.client_id, [photo('replacement')], true);
+  const [after] = await snapshot(h);
+  const { photos: oldPhotos, status: oldStatus, error, retryable, ...identity } = before;
+  const { photos, photo_revision, status: newStatus, error: newError, retryable: newRetryable, ...remaining } = after;
+  assert.deepEqual(remaining, identity);
+  assert.equal(photo_revision, 1); assert.equal(newStatus, 'pending'); assert.equal(newError, ''); assert.equal(newRetryable, true);
+  assert.equal(photos[0].blob, 'replacement'); assert.equal(h.server.receipts.length, 1); assert.equal(h.server.uploads.length, 0);
+});
+
+test('cancelled synchronization leaves a pending draft repairable without changing its confirmation identity', async t => {
+  const h = await harness(t), draft = await failed(h), begun = deferred(), reading = deferred();
+  let intercepted = false;
+  Blob.prototype.arrayBuffer = function () {
+    if (intercepted) return nativeRead.call(this);
+    intercepted = true; const source = this; begun.resolve();
+    return reading.promise.then(() => nativeRead.call(source));
+  };
+  try {
+    const syncing = h.core.sync(); await begun.promise; h.core.cancelSync(); reading.resolve(); await syncing;
+  } finally { reading.resolve(); Blob.prototype.arrayBuffer = nativeRead; }
+  const [interrupted] = await snapshot(h);
+  assert.equal(interrupted.status, 'pending'); assert.equal(interrupted.attempts, 1); assert.equal(h.server.uploads.length, 0);
+  await h.core.repairPhotos(draft.client_id, [photo('replacement after cancellation')], true);
+  const [repaired] = await snapshot(h);
+  for (const key of ['client_id', 'owner', 'grant', 'observed_at', 'note', 'is_abnormal', 'slot', 'checklist', 'checklist_snapshot']) {
+    assert.deepEqual(repaired[key], interrupted[key], key);
+  }
+  assert.equal(repaired.photos[0].blob, 'replacement after cancellation'); assert.equal(repaired.photo_revision, 1);
+});
+
 async function waitFor(read, description) {
   const until = Date.now() + 2000;
   do { if (await read()) return; await new Promise(resolve => setTimeout(resolve, 5)); } while (Date.now() < until);
   assert.fail('Timed out: ' + description);
 }
-async function repairUI(t) {
+async function repairUI(t, options = {}) {
   const errors = [], console = new VirtualConsole(); console.on('jsdomError', error => errors.push(error));
   const dom = new JSDOM('<body data-offline-shell><div data-offline-status></div><ul data-offline-queue></ul></body>',
     { url: 'https://local.invalid/offline', runScripts: 'outside-only', virtualConsole: console });
@@ -275,6 +309,7 @@ async function repairUI(t) {
     points: [{ token: 'photo-point', code: '1F-G011', name: '人行道', frequency: 'daily', workflow_mode: 'spot', stage: 'inspect',
       period_key: '2026-11-16', slots: ['any'], used_slots: [], executed_slots: [], grant: 'grant', revision: 'r1', checklist: null }]
   };
+  if (options.twoRows) manifest.points.push({ ...manifest.points[0], token: 'escape-point', code: '1F-G014', name: '防火巷' });
   const receiptStarted = deferred(), receiptReady = deferred();
   win.indexedDB = new IDBFactory(); win.isSecureContext = true; win.Date.now = () => stamp;
   win.Blob = Blob; win.File = File; win.FileReader = undefined; win.Response = undefined;
@@ -299,7 +334,13 @@ async function repairUI(t) {
   await core.prepare();
   const h = { core, databaseName: 'patrol-offline-v1', indexedDB: win.indexedDB };
   await core.enqueue({ token: 'photo-point', note: '有煙蒂和廚餘', is_abnormal: true, photos: [photo('old')] });
-  await store(h, 'queue', row => { row.status = 'retry'; row.error = '照片讀取失敗'; }); await core.getState();
+  if (options.twoRows) await core.enqueue({ token: 'escape-point', note: '有蟑螂屍體', is_abnormal: true, photos: [photo('old escape')] });
+  await store(h, 'queue', row => {
+    if (options.twoRows && row.token === 'escape-point') {
+      if (options.secondStatus) row.status = options.secondStatus; else delete row.status;
+      row.error = '第 1 張照片請使用 JPG、PNG、WebP 或 HEIC 格式。';
+    } else { row.status = options.twoRows ? 'blocked' : 'retry'; row.error = '照片讀取失敗'; }
+  }); await core.getState();
   await waitFor(() => win.document.querySelector('.offline-photo-repair'), 'repair action');
   return { ...h, win, receiptStarted, receiptReady };
 }
@@ -336,4 +377,26 @@ for (const result of ['success', 'read-failure', 'logout']) test('photo picker s
     assert.equal((await snapshot(ui))[0].photos[0].blob, 'replacement');
   } else assert.deepEqual(await snapshot(ui), before);
   assert.equal((await ui.core.getState()).sync.running, false);
+});
+
+for (const secondStatus of ['pending', undefined]) test('both G011 blocked and G014 ' + (secondStatus || 'legacy status') + ' show independent repair actions', async t => {
+  const ui = await repairUI(t, { twoRows: true, secondStatus }), before = await snapshot(ui);
+  const cards = [...ui.win.document.querySelectorAll('.offline-queue-item')];
+  assert.equal(cards.length, 2);
+  for (const card of cards) assert(card.querySelector('.offline-photo-repair'), card.querySelector('strong').textContent + ' must offer photo reselection');
+  const second = cards.find(card => card.querySelector('strong').textContent.includes('1F-G014'));
+  const picker = second.querySelector('input[type=file]');
+  Object.defineProperty(picker, 'files', { configurable: true, value: [photo('G014 replacement')] });
+  picker.dispatchEvent(new ui.win.Event('change', { bubbles: true })); await ui.receiptStarted.promise;
+  assert.equal(picker.isConnected, true);
+  assert([...ui.win.document.querySelectorAll('.offline-queue-actions button')].every(button => button.disabled));
+  ui.receiptReady.resolve();
+  await waitFor(async () => (await snapshot(ui)).find(row => row.token === 'escape-point').photo_revision === 1, 'G014 replacement saved');
+  await waitFor(() => [...ui.win.document.querySelectorAll('.offline-queue-actions button')].every(button => !button.disabled), 'both row actions enabled again');
+  const after = await snapshot(ui), untouched = before.find(row => row.token === 'photo-point');
+  assert.deepEqual(after.find(row => row.token === 'photo-point'), untouched);
+  const original = before.find(row => row.token === 'escape-point'), repaired = after.find(row => row.token === 'escape-point');
+  for (const key of ['client_id', 'owner', 'grant', 'observed_at', 'note', 'is_abnormal', 'token']) assert.deepEqual(repaired[key], original[key], key);
+  assert.equal(repaired.photos[0].blob, 'G014 replacement');
+  assert.equal(ui.win.document.querySelectorAll('.offline-photo-repair').length, 2);
 });
