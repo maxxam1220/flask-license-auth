@@ -202,6 +202,15 @@ def payload(engine, inspection):
             for value in _identifiers(line.get("text", ""), _SKU_LABEL, normalize=lambda v:v)}
     product = fields.get("product", {})
     suggested_name = "" if excluded_ids.intersection(product.get("line_ids", [])) else product.get("value", "")
+    equivalents = []
+    if suggested_name and draft_lines and not excluded_unconfirmed:
+        try:
+            proposed, digest = definition({"name": suggested_name,
+                "sku": next(iter(skus)) if len(skus) == 1 else "",
+                "lines": [{"text": row["text"]} for row in draft_lines]})
+            equivalents = equivalent_references(engine, proposed, digest)
+        except HTTPException:
+            pass  # Incomplete OCR remains an editable draft, never approval.
     return {"can_create": can_create, "existing_code": existing, "notice": notice,
             "suggested_name": suggested_name,
             "suggested_sku": next(iter(skus)) if len(skus) == 1 else "",
@@ -209,6 +218,8 @@ def payload(engine, inspection):
             "manual_revision": correction["revision"] if correction else 0,
             "draft_basis": "manual_correction" if applied else "original_ocr",
             "excluded_unconfirmed_lines": excluded_unconfirmed,
+            "equivalent_references": equivalents,
+            "suggested_source": equivalents[0] if len(equivalents) == 1 else None,
             "warning": (f"草稿已套用第 {correction['revision']} 版中確認的辨識訂正，仍未核准為標準；請逐字確認後再儲存。" if applied
                         else "這是辨識原文，尚未核准；請逐字修正後，確認要作為之後同款標籤的比對標準。")}
 
@@ -272,6 +283,45 @@ def definition(body):
     return source, digest
 
 
+def equivalent_references(engine, proposed, digest):
+    """Exact current definitions only; similar photos/names are not evidence."""
+    import standard_reference as standards
+    from reference_photos import source_info
+    from werkzeug.exceptions import HTTPException
+    sources, heads, versions = db.manual_sources, standards.heads, standards.versions
+    joined = sources.outerjoin(heads, heads.c.code == sources.c.code).outerjoin(versions,
+        (versions.c.code == heads.c.code) & (versions.c.revision == heads.c.revision))
+    current_name = func.coalesce(versions.c.snapshot["name"].as_string(), sources.c.name)
+    with engine.connect() as conn:
+        candidates = conn.execute(select(sources.c.snapshot,
+            versions.c.revision.label("standard_revision"), versions.c.source_revision.label("approved_source_revision"),
+            versions.c.operation, versions.c.snapshot.label("approved_snapshot"), versions.c.reviewer, versions.c.created_at)
+            .select_from(joined).where(sources.c.active.is_(True),
+            current_name == proposed["name"]).order_by(sources.c.code).limit(81)).mappings().all()
+    # Keep bounded previews. Never suggest an arbitrary subset as a unique match.
+    if len(candidates) > 80:
+        return []
+    result = []
+    for candidate in candidates:
+        version = {"revision": candidate["standard_revision"], "source_revision": candidate["approved_source_revision"],
+            "operation": candidate["operation"], "snapshot": candidate["approved_snapshot"],
+            "reviewer": candidate["reviewer"], "created_at": candidate["created_at"]} if candidate["standard_revision"] is not None else {}
+        effective = standards.apply_current(engine, candidate["snapshot"], version)
+        if effective.get("standard_reference", {}).get("state") == "stale":
+            continue
+        try:
+            _, current_digest = definition({"name": effective["name"],
+                "lines": [{"text": row["text"]} for row in effective.get("lines", [])],
+                "keep_days": effective.get("keep_days"),
+                "date_settings": [{"kind": _kind(row["content"]), "shift_days": row["shift_days"]}
+                                  for row in effective.get("date_settings", [])]})
+        except (HTTPException, KeyError, TypeError):
+            continue
+        if current_digest == digest:
+            result.append(dict(source_info(effective), match_basis="exact_definition"))
+    return result
+
+
 def preview(engine, inspection, body):
     allowed = DEFINITION_KEYS
     if not isinstance(body, dict) or set(body) - allowed:
@@ -280,7 +330,10 @@ def preview(engine, inspection, body):
     if not can_create:
         abort(409, description=notice)
     source, digest = definition(body)
-    return {"source": source, "preview_hash": digest, "warnings": LIMITATIONS + ["日期位移直接相對本批基準日；不會自動加上保存天數。"]}
+    equivalents = equivalent_references(engine, source, digest)
+    return {"source": source, "preview_hash": digest, "equivalent_references": equivalents,
+            "suggested_source": equivalents[0] if len(equivalents) == 1 else None,
+            "warnings": LIMITATIONS + ["日期位移直接相對本批基準日；不會自動加上保存天數。"]}
 
 
 def save(engine, inspection, body):

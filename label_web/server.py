@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import hashlib
 import io
+import json
 import os
 import re
 import secrets
@@ -32,6 +33,10 @@ import standard_reference
 import history_cleanup
 import photo_regions
 import recognition_samples
+import reference_photos
+import cloud_budget
+from sticker_scope import recognize_scoped
+from inspection_evidence import augment
 from access_control import AccessControl
 
 register_heif_opener()
@@ -45,6 +50,7 @@ def create_app(config=None, ocr=None):
     app.config.update(DATA_DIR=data_dir, DATABASE_URL=os.environ.get("LABELCHECK_DATABASE_URL", ""),
         APP_PASSWORD=os.environ.get("LABELCHECK_PASSWORD", ""),
         ADMIN_PASSWORD=os.environ.get("LABELCHECK_ADMIN_PASSWORD", ""),
+        CLOUD_TRIAL_LIMIT=max(0,min(1000,int(os.environ.get("LABELCHECK_CLOUD_TRIAL_LIMIT","20")))),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=128 * 1024,
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
         SESSION_COOKIE_SECURE=os.environ.get("LABELCHECK_HTTPS", "") == "1",
@@ -64,6 +70,7 @@ def create_app(config=None, ocr=None):
     access = AccessControl(app)
     app.extensions["label_access"] = access
     engine = db.open_database(app.config["DATABASE_URL"], data_dir)
+    cloud_budget.initialize(engine)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="label-ocr")
     slots = threading.BoundedSemaphore(12)
     image_lock = threading.Lock()
@@ -132,7 +139,21 @@ def create_app(config=None, ocr=None):
                                  ocr_capabilities=(ocr_info or {}).get("capabilities"))
         result["source_match"] = {key: value for key, value in match.items() if key != "source"}
         result["inputs"] = inputs
+        augment(result, {**(ocr_info or {}),"lines":lines})
         return standard, result
+
+    def recognition_options(body, fallback=None, check_available=True):
+        prior=fallback or {}
+        selected=body.get("recognition_engine",prior.get("recognition_engine","local"))
+        scope=body.get("label_scope",prior.get("label_scope","sticker"))
+        if selected not in ("local","cloud") or scope not in ("sticker","full"):
+            abort(400,description="辨識方式或照片範圍不正確。")
+        if selected=="cloud" and check_available:
+            if not os.environ.get("OPENAI_API_KEY") and not app.config.get("CLOUD_OCR"):
+                abort(409,description="尚未設定雲端辨識金鑰，請使用本機辨識。")
+            if cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])<=0:
+                abort(429,description="雲端試用次數已用完，請改用本機辨識。")
+        return {"recognition_engine":selected,"label_scope":scope}
 
     @app.before_request
     def protect():
@@ -221,7 +242,11 @@ def create_app(config=None, ocr=None):
 
     @app.get("/api/scan-config")
     def scan_config():
-        return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today())
+        remaining=cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])
+        return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today(),recognition={
+            "cloud_available":bool(os.environ.get("OPENAI_API_KEY") or app.config.get("CLOUD_OCR")) and remaining>0,
+            "default_engine":"local", "cloud_model":os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),
+            "cloud_limit":app.config["CLOUD_TRIAL_LIMIT"],"cloud_remaining":remaining})
 
     def active_jobs():
         with engine.connect() as conn:
@@ -386,17 +411,31 @@ def create_app(config=None, ocr=None):
         return row
 
     def process_job(job):
+        cloud_reserved=False
+        cloud_usage=None
         try:
             with engine.begin() as conn:
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="running"))
-            with image_lock:
-                ocr_result = recognizer.recognize(data_dir / "images" / job["image_id"] / "image.jpg")
             saved_request = (job.get("result") or {}).get("request", {})
+            selected=saved_request.get("recognition_engine","local")
+            with image_lock:
+                active_recognizer=recognizer
+                if selected=="cloud":
+                    from cloud_vision import CloudVisionEngine
+                    active_recognizer=app.config.get("CLOUD_OCR") or CloudVisionEngine()
+                    cloud_budget.reserve(engine,job["id"],os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),app.config["CLOUD_TRIAL_LIMIT"])
+                    cloud_reserved=True
+                ocr_result=recognize_scoped(data_dir / "images" / job["image_id"] / "image.jpg",active_recognizer,saved_request.get("label_scope","sticker"))
+                ocr_result["recognition_engine"]=selected
+                if cloud_reserved:
+                    cloud_usage=ocr_result.get("usage")
+                    cloud_budget.finish(engine,job["id"],"done",cloud_usage)
             inputs = {"batch_date": job["batch_date"], "arrival_date": saved_request.get("arrival_date", ""),
                       "source_code": saved_request.get("source_code", ""),
-                      "base_date": saved_request.get("base_date") or taiwan_today()}
+                      "base_date": saved_request.get("base_date") or taiwan_today(),
+                      "recognition_engine":selected,"label_scope":saved_request.get("label_scope","sticker")}
             result = {"ocr": ocr_result, "fields": extract_fields(ocr_result["lines"]), "request": inputs}
-            for key in ("retry_of", "retry_root", "recognition_of", "recognition_request_id", "recognition_spec"):
+            for key in ("retry_of", "retry_root", "recognition_of", "recognition_request_id", "recognition_spec", "upload_request_id", "upload_spec"):
                 if (job.get("result") or {}).get(key):
                     result[key] = job["result"][key]
             source_evaluation = None
@@ -408,6 +447,7 @@ def create_app(config=None, ocr=None):
                         standard = (job.get("result") or {}).get("recognition_standard") or dict(conn.execute(
                             select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
                         evaluation = evaluate(ocr_result["lines"], standard, inputs["batch_date"], inputs["arrival_date"])
+                        augment(evaluation,ocr_result)
                     else:
                         standard, evaluation = source_evaluation
                     evaluation["inputs"] = inputs
@@ -428,6 +468,12 @@ def create_app(config=None, ocr=None):
                        else "照片辨識失敗。請稍後重新上傳，或改用更清楚的照片。")
             if isinstance(error, OCRMemoryLimitError) and error.kind == "monitor_unavailable":
                 message = "目前暫時無法安全啟動辨識，請稍後再試。照片已保留。"
+            if cloud_reserved:
+                # Validation or persistence can fail after a paid response. Keep
+                # its known token usage instead of replacing it with an empty error.
+                failed_usage=cloud_usage if cloud_usage is not None else getattr(error,"usage",None)
+                cloud_budget.finish(engine,job["id"],"failed",failed_usage,getattr(error,"code","processing_failed"))
+                message=getattr(error,"safe_message","雲端辨識未完成，照片已保留。重試會再使用一次雲端額度。")
             failed_result = dict(job.get("result") or {})
             if isinstance(error, OCRMemoryLimitError):
                 failed_result["memory_guard"] = error.memory_guard
@@ -443,6 +489,10 @@ def create_app(config=None, ocr=None):
 
     @app.post("/api/jobs")
     def create_job():
+        with retry_lock:
+            return create_job_locked()
+
+    def create_job_locked():
         kind = request.form.get("kind")
         if kind == "reference":
             access.require_admin()
@@ -450,9 +500,34 @@ def create_app(config=None, ocr=None):
             abort(400, description="請選擇照片。")
         template_id = request.form.get("template_id", "")
         inputs = scan_inputs(request.form)
+        inputs.update(recognition_options(request.form,check_available=False))
         source_code = inputs["source_code"]
         if source_code and (kind != "recognition" or template_id):
             abort(400, description="請選擇系統標籤或照片標準其中一種。")
+        request_id=request.form.get("request_id","")
+        upload_spec=None
+        if request_id:
+            if not re.fullmatch(r"[0-9a-f]{32}",request_id):
+                abort(400,description="上傳請求編號不正確，請重新選擇照片。")
+            upload=request.files["photo"]
+            raw=upload.read(15*1024*1024+1)
+            if len(raw)>15*1024*1024:
+                abort(413)
+            photo_hash=hashlib.sha256(raw).hexdigest()
+            upload.stream.seek(0)
+            del raw
+            upload_spec=hashlib.sha256(json.dumps({"photo":photo_hash,"kind":kind,"template_id":template_id,"inputs":inputs},
+                sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+            with engine.connect() as conn:
+                existing=conn.execute(select(db.jobs).where(db.jobs.c.result["upload_request_id"].as_string()==request_id).limit(1)).mappings().first()
+            if existing:
+                if existing["result"].get("upload_spec")!=upload_spec:
+                    abort(409,description="這個請求已用於不同照片或設定，請重新確認後送出。")
+                original_inspection=existing["result"].get("inspection_id")
+                if original_inspection:
+                    get_one(db.inspections,original_inspection)
+                return jsonify(id=existing["id"],image=image_payload(existing["image_id"])),202
+        recognition_options(request.form)
         if kind == "inspection":
             standard = get_one(db.templates, template_id)
             if not standard["active"]:
@@ -470,6 +545,8 @@ def create_app(config=None, ocr=None):
             row = dict(id=db.uid(), image_id=image["id"], kind=kind, template_id=template_id or None,
                        batch_date=batch, state="pending", created_at=db.now(),
                        result={"request": inputs})
+            if request_id:
+                row["result"].update(upload_request_id=request_id,upload_spec=upload_spec)
             with engine.begin() as conn:
                 conn.execute(insert(db.jobs).values(**row))
             worker.submit(process_job, row)
@@ -492,7 +569,8 @@ def create_app(config=None, ocr=None):
                 region = photo_regions.validate_region(body.get("crop"), image["width"], image["height"])
             except ValueError as error:
                 abort(400, description=str(error))
-            spec = {"inspection_id":identifier, "image_id":image["id"], "crop":region}
+            options=recognition_options(body,check_available=False)
+            spec = {"inspection_id":identifier, "image_id":image["id"], "crop":region, **options}
             with engine.connect() as conn:
                 existing = conn.execute(select(db.jobs).where(
                     db.jobs.c.result["recognition_request_id"].as_string() == body["request_id"])
@@ -501,12 +579,17 @@ def create_app(config=None, ocr=None):
                 if existing["result"].get("recognition_spec") != spec:
                     abort(409, description="這個請求已用於不同裁切範圍，請重新確認後送出。")
                 return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
+            recognition_options(body)
             if not (data_dir / "images" / image["id"] / "image.jpg").is_file():
                 abort(404, description="原照片已不存在，請重新上傳。")
             old_inputs = original["result"].get("inputs") or {}
             inputs = scan_inputs({**old_inputs, "base_date":old_inputs.get("base_date") or
                 datetime.fromisoformat(original["created_at"]).astimezone(timezone(timedelta(hours=8))).date().isoformat(),
                 "source_code":""})
+            inputs.update(options)
+            # Explicit manual crop is the user's selected scope; don't crop it again.
+            if region:
+                inputs["label_scope"]="full"
             snapshot = original["template_snapshot"]
             kind = "recognition" if snapshot.get("mode") == "system_label" or "source" in snapshot else "inspection"
             if not slots.acquire(blocking=False):
@@ -584,13 +667,34 @@ def create_app(config=None, ocr=None):
                 access.require_admin()
             if original["state"] != "failed":
                 abort(409, description="這張照片並非失敗狀態，請查看原本辨識結果。")
+            body = request.get_json(silent=True) if request.get_data() else {}
+            if not isinstance(body, dict) or set(body) - {"recognition_engine"}:
+                abort(400, description="重試只可指定辨識方式，其他設定沿用原工作。")
+            inputs = dict((original.get("result") or {}).get("request") or {})
+            original_engine = inputs.get("recognition_engine", "local")
+            selected_engine = body.get("recognition_engine", original_engine)
+            if selected_engine not in ("local", original_engine):
+                abort(400, description="重試只可沿用原辨識方式或明確改用一般辨識。")
+            # Validate before replay, but only check cloud credentials/budget
+            # when a new job is needed. A local retry must not need either.
+            inputs.update(recognition_options(body, inputs, check_available=False))
             root = (original.get("result") or {}).get("retry_root") or original["id"]
             with engine.connect() as conn:
+                # One parent permits one retry child, even if that child failed
+                # before the browser received the response. A deliberate next
+                # attempt targets the newest failed child, not the old parent.
                 existing = conn.execute(select(db.jobs).where(
-                    db.jobs.c.result["retry_root"].as_string() == root,
-                    db.jobs.c.state.in_(["pending", "running", "done"])
-                ).order_by(db.jobs.c.created_at.desc()).limit(1)).mappings().first()
+                    db.jobs.c.result["retry_of"].as_string() == identifier
+                ).order_by(db.jobs.c.created_at).limit(1)).mappings().first()
+                if existing is None:
+                    existing = conn.execute(select(db.jobs).where(
+                        db.jobs.c.result["retry_root"].as_string() == root,
+                        db.jobs.c.state.in_(["pending", "running", "done"])
+                    ).order_by(db.jobs.c.created_at.desc()).limit(1)).mappings().first()
             if existing:
+                existing_engine = ((existing.get("result") or {}).get("request") or {}).get("recognition_engine", "local")
+                if existing_engine != selected_engine:
+                    abort(409, description="這張照片已有不同辨識方式的重試工作，請開啟最新工作後再改選辨識方式。")
                 return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
             if not (data_dir / "images" / original["image_id"] / "image.jpg").is_file():
                 abort(404, description="原照片已不存在，請重新上傳。")
@@ -598,7 +702,7 @@ def create_app(config=None, ocr=None):
                 standard = get_one(db.templates, original["template_id"])
                 if not standard["active"]:
                     abort(409, description="原標準已更新，請選擇新版標準後重新上傳。")
-            inputs = dict((original.get("result") or {}).get("request") or {})
+            inputs.update(recognition_options({},inputs))
             if not inputs.get("base_date"):
                 inputs["base_date"] = datetime.fromisoformat(original["created_at"]).astimezone(
                     timezone(timedelta(hours=8))).date().isoformat()
@@ -648,7 +752,7 @@ def create_app(config=None, ocr=None):
         except ValueError:
             abort(400, description="頁碼不正確。")
         query = select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status,
-                       db.inspections.c.template_snapshot, db.inspections.c.created_at).where(history_cleanup.active_filter())
+                       db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result).where(history_cleanup.active_filter())
         if request.args.get("status") in {"pass", "fail", "review"}:
             query = query.where(db.inspections.c.status == request.args["status"])
         with engine.connect() as conn:
@@ -656,6 +760,8 @@ def create_app(config=None, ocr=None):
             manual = corrections.latest_summaries(conn, [x["id"] for x in rows[:24]])
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
             version=x["template_snapshot"]["version"], created_at=x["created_at"], image=image_payload(x["image_id"]),
+            counts=x["result"].get("counts",{}), base_date=x["result"].get("inputs",{}).get("base_date",""),
+            product=x["result"].get("fields",{}).get("product",{}).get("value", ""),
             manual_revision=manual.get(x["id"], {}).get("revision", 0),
             manual_status=manual.get(x["id"], {}).get("status")) for x in rows[:24]],
             has_more=len(rows) > 24, page=page)
@@ -764,4 +870,7 @@ def create_app(config=None, ocr=None):
     standard_reference.register_routes(app, engine)
     history_cleanup.register_routes(app, engine, access.require_admin)
     recognition_samples.register_routes(app, engine, access.require_admin, data_dir)
+    reference_photos.register_routes(app,engine,access.require_admin,
+        lambda identifier:get_one(db.inspections,identifier),image_payload,
+        lambda identifier:recognition_samples._image_available(data_dir,identifier))
     return app

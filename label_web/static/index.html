@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261113-ocr">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261116-workflow">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261113-ocr" defer></script>
+  <script src="/static/app.js?v=20261116-workflow" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -35,15 +35,16 @@
   <main>
     <header class="topbar"><span id="breadcrumb">工作區 / 檢查標籤</span><div class="header-tools"><button id="admin-access" class="button secondary admin-access" type="button">管理功能</button><div class="reading-size" role="group" aria-label="閱讀字級"><button type="button" data-text-size-choice="large" aria-pressed="true">大字</button><button type="button" data-text-size-choice="xl" aria-pressed="false">特大字</button></div></div></header>
     <section id="view-inspect" class="view">
-      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">拍照後自動尋找系統標籤與商品清單，查看每一列的檢查結果。</p></div></div>
+      <div class="heading"><div><p class="eyebrow">LABEL CHECK</p><h1>直接掃描標籤</h1><p class="lead">先看貼紙照片與主要問題，再展開文字核對；原圖與紀錄都會保留。</p></div></div>
       <div class="steps" aria-label="檢查流程"><span><b>1</b>拍照或選照片</span><i></i><span><b>2</b>自動辨識核對</span><i></i><span><b>3</b>查看相符與差異</span></div>
       <div class="inspect-grid">
         <div class="panel inspect-input">
           <label for="base-date" class="base-date-label">本批基準日<input id="base-date" type="date" required></label>
           <p class="help base-date-help">依此日期與標籤系統設定核對日期；查歷史標籤時可調整。</p>
+          <div class="recognition-choices"><label>辨識方式<select id="recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="label-scope"><option value="sticker">只看貼紙（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="recognition-choice-note" class="help">使用本站一般辨識，不呼叫付費雲端服務。</p>
           <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
-            <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>每次拍一張完整標籤</h3><p>靠近拍清細字，保留四邊與公司資訊；避開反光與遮擋</p>
+            <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>每次拍一張完整標籤</h3><p>靠近拍清細字，保留此標籤完整文字；避開反光與遮擋</p>
             <div class="upload-actions"><button id="scan-button" class="button primary capture-button"><svg><use href="#i-camera"/></svg>掃描標籤</button><button class="button secondary" data-file="inspect-file"><svg><use href="#i-upload"/></svg>選擇照片</button></div>
             <p class="photo-guidance">優先使用原始照片，避免通訊軟體縮圖。多張標籤可在結果中框選單張，再重新辨識。</p><small>JPG、PNG、WebP、HEIC · 每張最多 15 MB</small>
           </div>
@@ -51,7 +52,8 @@
           <input id="inspect-file" class="file-input" type="file" accept="image/*,.heic,.heif">
           <div id="inspect-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>照片辨識中，請稍候…</span></div>
           <p id="inspect-upload-error" class="upload-error" role="alert" hidden></p>
-          <div id="inspect-retry" hidden><div class="upload-actions"><button id="inspect-retry-button" class="button secondary" type="button">重新辨識這張照片</button></div><p class="help">照片已保留，將沿用原本比對設定。</p></div>
+          <button id="inspect-upload-resend" class="button secondary" type="button" hidden>重送同張照片</button>
+          <div id="inspect-retry" hidden><div class="upload-actions retry-actions"><button id="inspect-retry-button" class="button secondary" type="button">重新辨識這張照片</button><button id="inspect-retry-local" class="button secondary" type="button" hidden>改用一般辨識這張照片</button></div><p id="inspect-retry-help" class="help">照片已保留，將沿用原本比對設定。</p></div>
           <details id="failed-jobs-panel" class="scan-options" hidden><summary>未完成的辨識</summary><p id="failed-jobs-note" class="muted small">照片已保留，可沿用原本設定重新辨識。</p><div id="failed-jobs-list" class="history-list"></div></details>
           <details id="memory-panel" class="scan-options"><summary>服務記憶體 <span class="optional">狀態與清理</span></summary><p id="memory-status" class="help" role="status">展開後讀取目前用量。</p><div class="upload-actions"><button id="memory-refresh" class="button secondary" type="button">更新用量</button><button id="memory-cleanup" class="button secondary" type="button">清理閒置記憶體</button></div><p class="help">每次辨識後已自動釋放；手動清理只處理閒置記憶體，不刪除照片、標準或紀錄。辨識中需等完成再操作。</p><p id="memory-feedback" class="help" role="status"></p></details>
           <details id="batch-options" class="scan-options"><summary>指定本批日期 <span class="optional">選填覆蓋</span></summary><label for="batch-date">本批製造日期<input id="batch-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對製造日。</p><label for="arrival-date">本批到店日<input id="arrival-date" type="date"></label><p class="help">填入後，這個日期會優先用於核對到店日；未填時依基準日與系統設定檢查。</p></details>
@@ -72,11 +74,13 @@
         <div class="panel">
           <details id="source-import"><summary>從既有標籤系統帶入參考</summary><p class="help">搜尋標籤代碼或品名，帶入後仍需逐欄確認。</p><form id="source-search"><label>標籤代碼或品名<input id="source-query" maxlength="100" required placeholder="例如：雙拼"></label><button class="button secondary" type="submit">搜尋系統標籤</button></form><div id="source-results"></div><p id="source-note" class="help"></p></details>
           <div class="section-title"><span class="step-number">01</span><h2>正確標籤照片</h2></div>
-          <div id="reference-drop" class="upload-zone"><div class="upload-symbol"><svg><use href="#i-upload"/></svg></div><h3>上傳已確認正確的標籤</h3><p>拍下完整標籤，包含右下角的公司名稱、地址及電話</p><div class="upload-actions"><button class="button primary" data-file="reference-file">選擇正確照片</button><button class="button secondary" data-file="reference-camera">拍照</button></div><small>JPG、PNG、WebP、HEIC · 最多 15 MB</small></div>
+          <div class="recognition-choices"><label>辨識方式<select id="reference-recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="reference-label-scope"><option value="sticker">只看貼紙（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="reference-recognition-choice-note" class="help"></p>
+          <div id="reference-drop" class="upload-zone"><div class="upload-symbol"><svg><use href="#i-upload"/></svg></div><h3>上傳已確認正確的標籤</h3><p>拍下這張標籤，保留此標籤完整文字</p><div class="upload-actions"><button class="button primary" data-file="reference-file">選擇正確照片</button><button class="button secondary" data-file="reference-camera">拍照</button></div><small>JPG、PNG、WebP、HEIC · 最多 15 MB</small></div>
           <input id="reference-file" class="file-input" type="file" accept="image/*,.heic,.heif"><input id="reference-camera" class="file-input" type="file" accept="image/*,.heic,.heif" capture="environment">
           <div id="reference-progress" class="progress-message" role="status" hidden><span class="spinner"></span><span>讀取標準照片文字中…</span></div>
           <p id="reference-upload-error" class="upload-error" role="alert" hidden></p>
-          <div id="reference-retry" hidden><div class="upload-actions"><button id="reference-retry-button" class="button secondary" type="button">重新辨識這張照片</button></div><p class="help">照片已保留，將沿用原本設定。</p></div>
+          <button id="reference-upload-resend" class="button secondary" type="button" hidden>重送同張照片</button>
+          <div id="reference-retry" hidden><div class="upload-actions retry-actions"><button id="reference-retry-button" class="button secondary" type="button">重新辨識這張照片</button><button id="reference-retry-local" class="button secondary" type="button" hidden>改用一般辨識這張照片</button></div><p id="reference-retry-help" class="help">照片已保留，將沿用原本設定。</p></div>
           <p id="reference-recovery" class="muted small" role="status" hidden></p>
           <img id="reference-preview" class="reference-preview" alt="上傳的標準標籤照片" hidden>
           <details id="reference-ocr" hidden><summary>查看照片辨識原文</summary><div class="ocr-lines" id="reference-lines"></div></details>
@@ -116,11 +120,12 @@
     <footer>以人工確認的標準逐字核對 · 辨識不確定時請對照原圖複核</footer>
   </main>
 </div>
-<dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">一次只拍一張標籤，正面靠近、填滿畫面並保留四邊與公司資訊。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
+<dialog id="camera-dialog" aria-labelledby="camera-title"><div class="camera-heading"><h2 id="camera-title">掃描標籤</h2><button id="camera-close" class="button secondary">關閉</button></div><p class="camera-guidance">一次只拍一張標籤，正面靠近並保留此標籤完整文字。等小字清楚、沒有反光再拍下。</p><video id="camera-video" autoplay muted playsinline></video><p id="camera-message" role="status"></p><div class="upload-actions"><button id="camera-capture" class="button primary" disabled>拍下並辨識</button><button id="camera-native" class="button secondary">使用手機拍照</button></div></dialog>
 <dialog id="crop-dialog" class="edit-dialog" aria-labelledby="crop-title">
   <div class="edit-heading"><h2 id="crop-title">選取單張標籤重新辨識</h2><button id="crop-close" class="button secondary" type="button">取消</button></div>
   <p class="help">用手指或滑鼠從一角拖到對角，框住一張完整標籤；也可用下方座標欄位調整。先預覽，再送出。</p>
   <p id="crop-source-note" class="help"></p>
+  <div class="recognition-choices"><label>重新辨識方式<select id="crop-recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="crop-label-scope"><option value="sticker">只看貼紙（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="crop-scope-note" class="help"></p><p id="crop-recognition-choice-note" class="help"></p>
   <div class="crop-surface"><canvas id="crop-canvas" aria-label="原始保存照片與選取範圍；可拖曳框選，或使用下方數字欄位"></canvas></div>
   <p id="crop-selection-note" class="help" role="status"></p>
   <fieldset id="crop-selection-fields" class="crop-fields" disabled><legend>選取範圍（像素）</legend><label>左邊 X<input id="crop-x" type="number" min="0" step="1" required></label><label>上邊 Y<input id="crop-y" type="number" min="0" step="1" required></label><label>寬度<input id="crop-width" type="number" min="100" step="1" required></label><label>高度<input id="crop-height" type="number" min="100" step="1" required></label></fieldset>
@@ -152,7 +157,9 @@
   <form id="manual-standard-form" hidden>
     <label>標準品名<input id="manual-standard-name" maxlength="200" required></label>
     <label>貨號 <span class="optional">選填</span><input id="manual-standard-sku" maxlength="100"></label>
-    <label>正確標籤文字 <span class="optional">每行一項</span><textarea id="manual-standard-lines" rows="9" maxlength="20000" required></textarea></label>
+    <div class="manual-visual-grid"><figure class="manual-photo-preview"><canvas id="manual-photo-canvas" role="img" aria-label="建立標準時的原照片；可點文字定位編輯行"></canvas><figcaption id="manual-photo-note" class="help"></figcaption><a id="manual-photo-link" target="_blank" rel="noopener">開啟完整原圖</a></figure><div><p class="help">已帶入可確認的文字。點一行即可在照片定位，再直接修正；不要把錯印內容核准為標準。</p><div id="manual-draft-fields"></div><button id="manual-add-line" class="button secondary" type="button">新增一行文字</button></div></div>
+    <details id="manual-bulk-text" class="scan-options"><summary>整段文字編輯或貼上</summary><label>正確標籤文字 <span class="optional">每行一項</span><textarea id="manual-standard-lines" rows="7" maxlength="20000" required></textarea></label></details>
+    <div id="manual-equivalent-references" class="equivalent-references"></div>
     <p class="help">1. 核對並補齊正確文字　2. 預覽　3. 確認儲存。帶入的辨識或訂正文字尚未核准為標準，請逐字確認；不要填入本批日期。</p>
     <label>保存天數 <span class="optional">未知請留空</span><input id="manual-standard-days" type="number" min="0" max="3650" step="1"></label>
     <details class="scan-options"><summary>日期排程 <span class="optional">知道規則再填</span></summary><p class="help">填相對本批基準日的天數，例如到店日 +1 填 1。留空只檢查可判讀的日期格式及順序，不推定排程。</p><label>製造日位移<input id="manual-standard-manufacture" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>有效日位移<input id="manual-standard-expiry" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label><label>到店日位移<input id="manual-standard-arrival" type="number" min="-3650" max="3650" step="1" placeholder="未設定"></label></details>
@@ -160,7 +167,7 @@
     <label>建立原因<textarea id="manual-standard-note" maxlength="2000" rows="2" required></textarea></label>
     <button id="manual-standard-preview-button" class="button secondary" type="button">預覽比對標準</button>
     <div id="manual-standard-preview" class="standard-preview" hidden></div>
-    <label id="manual-standard-confirm-label" class="check-label" hidden><input id="manual-standard-confirm" type="checkbox"><span>已逐字核對正確資料，同意作為日後此款標籤的比對依據。</span></label>
+    <label id="manual-standard-confirm-label" class="check-label" hidden><input id="manual-standard-confirm" type="checkbox"><span>已逐字核對正確資料，同意作為日後此款標籤的比對依據，並將這張照片附為參考照。</span></label>
     <button id="manual-standard-save" class="button primary" type="submit" hidden>儲存文字標準</button>
   </form>
   <p id="manual-standard-error" class="upload-error" role="alert" hidden></p>
@@ -188,6 +195,12 @@
   <button id="standard-edit-photo-template" class="button secondary" type="button" hidden>建立照片標準新版</button>
   <button id="standard-edit-reset" class="button secondary" type="button" hidden>恢復原始來源</button>
   <details id="standard-edit-history"><summary>標準修改紀錄</summary><div id="standard-edit-history-list"></div></details>
+</dialog>
+<dialog id="reference-photo-dialog" class="edit-dialog" aria-labelledby="reference-photo-title">
+  <div class="edit-heading"><h2 id="reference-photo-title">附加標準參考照片</h2><button id="reference-photo-close" class="button secondary" type="button">取消</button></div>
+  <p id="reference-photo-source" class="edit-source"></p><p class="help">相同標籤內容在不同亮度或角度下的照片可集中保存；附加照片不會更改已核准的文字與日期規則。</p>
+  <img id="reference-photo-image" class="reference-photo-preview" alt="準備附加的照片"><p id="reference-photo-count" class="help"></p><div id="reference-photo-list" class="reference-photo-list"></div>
+  <form id="reference-photo-form" hidden><label>確認人員<input id="reference-photo-reviewer" maxlength="100" required></label><label>附加原因<textarea id="reference-photo-note" maxlength="2000" rows="2" required placeholder="例如：同款標籤在較暗環境拍攝"></textarea></label><label class="check-label"><input id="reference-photo-confirm" type="checkbox" required><span>已對照照片，確認屬於上方同一份標準內容，僅附加參考照片。</span></label><button id="reference-photo-save" class="button primary" type="submit">確認附加照片</button></form><p id="reference-photo-error" class="upload-error" role="alert" hidden></p>
 </dialog>
 <dialog id="admin-dialog" class="edit-dialog" aria-labelledby="admin-title">
   <div class="edit-heading"><h2 id="admin-title">管理權限</h2><button id="admin-close" class="button secondary" type="button">關閉</button></div>

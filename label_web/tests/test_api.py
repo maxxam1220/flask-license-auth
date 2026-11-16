@@ -263,7 +263,8 @@ class APITests(unittest.TestCase):
 
     def test_retry_reuses_photo_preserves_inputs_and_keeps_failed_evidence(self):
         inputs = {"base_date":"2026-11-10", "batch_date":"2026-11-09",
-                  "arrival_date":"2026-11-11", "source_code":"list:1659"}
+                  "arrival_date":"2026-11-11", "source_code":"list:1659",
+                  "recognition_engine":"local", "label_scope":"sticker"}
         failed = self.failed_photo_job(**inputs)
         self.assertEqual(self.table_count(db.images), 1)
         listed = self.client.get("/api/jobs/failed?limit=5").json["items"]
@@ -289,7 +290,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(image_path.read_bytes(), original_bytes)
         self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
 
-    def test_retry_chain_shows_latest_failure_and_deduplicates_running_and_done(self):
+    def test_retry_chain_shows_latest_failure_and_replays_each_parents_direct_child(self):
         first = self.failed_photo_job()
         with patch.object(FakeOCR, "recognize", side_effect=RuntimeError("second attempt failed")), patch.object(self.app.logger, "exception"):
             second = self.completed_response_job(self.client.post("/api/jobs/" + first["id"] + "/retry", headers=self.headers))
@@ -308,10 +309,10 @@ class APITests(unittest.TestCase):
                 self.assertTrue(started.wait(2))
                 third_id = third_response.json["id"]
                 self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
-                for ancestor in (first, second):
+                for ancestor, expected_id in ((first, second["id"]), (second, third_id)):
                     duplicate = self.client.post("/api/jobs/" + ancestor["id"] + "/retry", headers=self.headers)
                     self.assertEqual(duplicate.status_code, 202, duplicate.json)
-                    self.assertEqual(duplicate.json["id"], third_id)
+                    self.assertEqual(duplicate.json["id"], expected_id)
                 self.assertEqual(self.table_count(db.jobs), 3)
             finally:
                 release.set()
@@ -320,10 +321,10 @@ class APITests(unittest.TestCase):
         self.assertEqual(third["result"]["retry_of"], second["id"])
         self.assertEqual(third["result"]["retry_root"], first["id"])
         self.assertEqual(self.client.get("/api/jobs/failed").json["items"], [])
-        for ancestor in (first, second):
+        for ancestor, expected_id in ((first, second["id"]), (second, third_id)):
             duplicate = self.client.post("/api/jobs/" + ancestor["id"] + "/retry", headers=self.headers)
             self.assertEqual(duplicate.status_code, 202, duplicate.json)
-            self.assertEqual(duplicate.json["id"], third_id)
+            self.assertEqual(duplicate.json["id"], expected_id)
             self.assertEqual(self.client.get("/api/jobs/" + ancestor["id"]).json, ancestor)
         self.assertEqual(self.client.post("/api/jobs/" + third_id + "/retry", headers=self.headers).status_code, 409)
         self.assertEqual(self.table_count(db.jobs), 3)

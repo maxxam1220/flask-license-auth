@@ -120,6 +120,8 @@ def build_revision(original, current, action, created_at):
             ocr_capabilities=original["ocr"].get("capabilities"))
     else:
         result = evaluate(ocr["lines"], standard, inputs.get("batch_date", ""), inputs.get("arrival_date", ""))
+    from inspection_evidence import augment
+    augment(result, ocr)
     affected = set(patches)
     for check in result["checks"]:
         corrected_ids = [value for value in check.get("line_ids", []) if value in affected]
