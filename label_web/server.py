@@ -35,6 +35,7 @@ import photo_regions
 import recognition_samples
 import reference_photos
 import pending_drafts
+import standard_library
 import cloud_budget
 from sticker_scope import recognize_scoped
 from inspection_evidence import augment
@@ -127,6 +128,26 @@ def create_app(config=None, ocr=None):
             abort(400, description="系統標籤代碼不正確。")
         values["source_code"] = source_code.strip()
         return values
+
+    def ensure_explicit_source(code, conn):
+        """A stale selection must stop before OCR instead of becoming a new match."""
+        if not code:
+            return
+        standard_library.ensure_selectable(conn, code=code)
+
+    def ensure_job_standard(conn, job):
+        saved = job.get("result") or {}
+        if job["kind"] == "inspection":
+            standard_library.ensure_selectable(conn, template_id=job["template_id"],
+                allow_superseded=bool(saved.get("recognition_standard")),
+                family_id=(saved.get("recognition_standard") or {}).get("family_id"))
+        elif job["kind"] == "recognition":
+            ensure_explicit_source((saved.get("request") or {}).get("source_code", ""), conn)
+
+    def ensure_result_standard(conn, standard):
+        source = standard.get("source") or {}
+        if source.get("code"):
+            standard_library.ensure_selectable(conn, code=source["code"])
 
     def check_source(lines, inputs, ocr_info=None, match_lines=None):
         scope = analyze_label_scope(lines)
@@ -309,6 +330,8 @@ def create_app(config=None, ocr=None):
             abort(400, description="請先逐欄確認標準文字。")
         source = None
         if body.get("source_code"):
+            with engine.begin() as conn:
+                ensure_explicit_source(str(body["source_code"]), conn)
             if not label_source.available(engine):
                 abort(400, description="目前尚未連接標籤系統資料庫。")
             source = label_source.draft(engine, str(body["source_code"]))
@@ -366,7 +389,10 @@ def create_app(config=None, ocr=None):
             row["rules"]["source"] = {k: source[k] for k in ("code", "name", "revision", "keep_days", "date_settings")}
         try:
             with engine.begin() as conn:
+                if source:
+                    standard_library.ensure_selectable(conn, code=source["code"])
                 if body.get("supersedes_id"):
+                    standard_library.ensure_selectable(conn, template_id=body["supersedes_id"])
                     old = conn.execute(select(db.templates).where(db.templates.c.id == body["supersedes_id"]).with_for_update()).mappings().first()
                     if not old or not old["active"]:
                         abort(409, description="標準已更新，請重新載入再建立新版。")
@@ -422,6 +448,10 @@ def create_app(config=None, ocr=None):
             saved_request = (job.get("result") or {}).get("request", {})
             selected=saved_request.get("recognition_engine","local")
             with image_lock:
+                # A queued selection may have been removed after upload. Check
+                # immediately before any paid call, then recheck at commit.
+                with engine.begin() as conn:
+                    ensure_job_standard(conn, job)
                 active_recognizer=recognizer
                 if selected=="cloud":
                     from cloud_vision import CloudVisionEngine
@@ -446,6 +476,7 @@ def create_app(config=None, ocr=None):
                 source_evaluation = check_source(ocr_result["lines"], inputs, ocr_result)
             with engine.begin() as conn:
                 if job["kind"] in {"inspection", "recognition"}:
+                    ensure_job_standard(conn, job)
                     if job["kind"] == "inspection":
                         standard = (job.get("result") or {}).get("recognition_standard") or dict(conn.execute(
                             select(db.templates).where(db.templates.c.id == job["template_id"])).mappings().one())
@@ -453,6 +484,9 @@ def create_app(config=None, ocr=None):
                         augment(evaluation,ocr_result)
                     else:
                         standard, evaluation = source_evaluation
+                        # Automatic matching can race with a library removal
+                        # during OCR. The shared source lock covers this write.
+                        ensure_result_standard(conn, standard)
                     evaluation["inputs"] = inputs
                     if result.get("recognition_of"):
                         evaluation["recognition_of"] = result["recognition_of"]
@@ -477,6 +511,8 @@ def create_app(config=None, ocr=None):
                 failed_usage=cloud_usage if cloud_usage is not None else getattr(error,"usage",None)
                 cloud_budget.finish(engine,job["id"],"failed",failed_usage,getattr(error,"code","processing_failed"))
                 message=getattr(error,"safe_message","雲端辨識未完成，照片已保留。重試會再使用一次雲端額度。")
+            if isinstance(error, HTTPException) and error.code in {404, 409}:
+                message = str(error.description)
             failed_result = dict(job.get("result") or {})
             if isinstance(error, OCRMemoryLimitError):
                 failed_result["memory_guard"] = error.memory_guard
@@ -531,10 +567,11 @@ def create_app(config=None, ocr=None):
                     get_one(db.inspections,original_inspection)
                 return jsonify(id=existing["id"],image=image_payload(existing["image_id"])),202
         recognition_options(request.form)
-        if kind == "inspection":
-            standard = get_one(db.templates, template_id)
-            if not standard["active"]:
-                abort(409, description="標準已更新，請重新選擇。")
+        with engine.begin() as conn:
+            if kind == "inspection":
+                standard_library.ensure_selectable(conn, template_id=template_id)
+            elif kind == "recognition":
+                ensure_explicit_source(source_code, conn)
         batch = inputs["batch_date"]
         if not slots.acquire(blocking=False):
             abort(429, description="目前等待辨識的照片較多，請稍後再試。")
@@ -595,6 +632,10 @@ def create_app(config=None, ocr=None):
                 inputs["label_scope"]="full"
             snapshot = original["template_snapshot"]
             kind = "recognition" if snapshot.get("mode") == "system_label" or "source" in snapshot else "inspection"
+            if kind == "inspection":
+                with engine.begin() as conn:
+                    standard_library.ensure_selectable(conn, template_id=original["template_id"], allow_superseded=True,
+                        family_id=snapshot.get("family_id"))
             if not slots.acquire(blocking=False):
                 abort(429, description="目前等待辨識的照片較多，請稍後再試。")
             derivative = None
@@ -617,6 +658,7 @@ def create_app(config=None, ocr=None):
                            template_id=original["template_id"] or None, batch_date=inputs["batch_date"],
                            state="pending", created_at=db.now(), result=saved)
                 with engine.begin() as conn:
+                    ensure_job_standard(conn, row)
                     conn.execute(select(db.inspections.c.id).where(db.inspections.c.id == identifier).with_for_update()).first()
                     history_cleanup.ensure_active(conn, identifier)
                     if derivative:
@@ -701,10 +743,8 @@ def create_app(config=None, ocr=None):
                 return jsonify(id=existing["id"], image=image_payload(existing["image_id"])), 202
             if not (data_dir / "images" / original["image_id"] / "image.jpg").is_file():
                 abort(404, description="原照片已不存在，請重新上傳。")
-            if original["kind"] == "inspection" and not (original.get("result") or {}).get("recognition_standard"):
-                standard = get_one(db.templates, original["template_id"])
-                if not standard["active"]:
-                    abort(409, description="原標準已更新，請選擇新版標準後重新上傳。")
+            with engine.begin() as conn:
+                ensure_job_standard(conn, original)
             inputs.update(recognition_options({},inputs))
             if not inputs.get("base_date"):
                 inputs["base_date"] = datetime.fromisoformat(original["created_at"]).astimezone(
@@ -722,6 +762,7 @@ def create_app(config=None, ocr=None):
                     if key in (original.get("result") or {}):
                         row["result"][key] = original["result"][key]
                 with engine.begin() as conn:
+                    ensure_job_standard(conn, row)
                     conn.execute(insert(db.jobs).values(**row))
                 worker.submit(process_job, row)
             except Exception:
@@ -874,11 +915,15 @@ def create_app(config=None, ocr=None):
             if original is None:
                 abort(404, description="找不到這筆資料。")
             history_cleanup.ensure_active(conn, identifier)
+            # Existing standard edits/reference attachments lock inspection
+            # before manual source; keep the same order for PostgreSQL.
+            ensure_explicit_source(inputs["source_code"], conn)
             original = dict(original)
             current = corrections.latest(conn, identifier)
             active = current if current and current["patches"] else None
             standard, result = check_source(original["ocr"]["lines"], inputs, original["ocr"],
                 match_lines=active["ocr"]["lines"] if active else None)
+            ensure_result_standard(conn, standard)
             result["recheck_of"] = identifier
             result["recognition_reused"] = True
             fresh = dict(id=new_id, image_id=original["image_id"],
@@ -896,6 +941,7 @@ def create_app(config=None, ocr=None):
     standard_reference.register_routes(app, engine)
     history_cleanup.register_routes(app, engine, access.require_admin)
     pending_drafts.register_routes(app, engine, access.require_admin)
+    standard_library.register_routes(app, engine, access.require_admin, image_payload)
     recognition_samples.register_routes(app, engine, access.require_admin, data_dir)
     reference_photos.register_routes(app,engine,access.require_admin,
         lambda identifier:get_one(db.inspections,identifier),image_payload,

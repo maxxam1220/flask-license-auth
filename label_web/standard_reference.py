@@ -273,6 +273,15 @@ def _context(engine, inspection):
             "notice": "此紀錄使用照片標準，請從照片標準管理建立新版。" if inspection.get("template_id") else "請先選定唯一的比對來源，再修正標準。"}
     base = raw_draft(engine, str(source["code"]))
     if base is None:
+        if str(source["code"]).startswith("manual:"):
+            with engine.connect() as conn:
+                removed=conn.execute(select(db.manual_sources).where(db.manual_sources.c.code==str(source["code"]))).mappings().first()
+            if removed and not removed["active"]:
+                current=_current(engine,str(source["code"]))
+                return None,{"editable":False,"kind":"manual","code":source["code"],"removed":True,
+                    "name":removed["name"],"base_revision":current["revision"] if current else 0,"history":[],"has_more":False,
+                    "source":apply_current(engine,removed["snapshot"],current or {}),
+                    "notice":"此標準已移除，內容與歷史仍保留；請先從標準庫還原後再編輯。"}
         abort(409, description="原始來源已移除，無法建立此款標準。")
     if base.get("source_kind") == "catalog" and base.get("barcode_values"):
         # Catalogs have known literal barcodes but no printer layout. Expose
@@ -391,6 +400,8 @@ def save(engine, inspection, body):
     try:
         with engine.begin() as conn:
             _lock_active_inspection(conn, inspection["id"])
+            from standard_library import ensure_selectable
+            ensure_selectable(conn,code=code)
             head = conn.execute(select(heads).where(heads.c.code == code).with_for_update()).mappings().first()
             current_revision = head["revision"] if head else 0
             if current_revision != base_revision:

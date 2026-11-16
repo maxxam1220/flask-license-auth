@@ -118,7 +118,9 @@ def save(engine, inspection, body, image_payload, image_available):
     created = False
     try:
         with engine.begin() as conn:
+            from standard_library import ensure_selectable
             standards._lock_active_inspection(conn, inspection["id"])
+            ensure_selectable(conn,code=code)
             image_id = conn.execute(select(db.inspections.c.image_id).where(
                 db.inspections.c.id == inspection["id"])).scalar_one()
             if not image_available(image_id) or conn.execute(select(db.images.c.id).where(db.images.c.id == image_id)).first() is None:

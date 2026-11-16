@@ -8,7 +8,7 @@ const textFields = ["product", "spec", "storage", "origin", "company", "address"
 const fieldLabels = {product: "品名", spec: "規格", storage: "保存條件", origin: "產地", company: "公司名稱", address: "地址", phone: "電話"};
 const maxPhotoBytes = 15 * 1024 * 1024;
 let toastTimer;
-Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false,crop:null,sampleRequest:0,recognition:{cloud_available:false,default_engine:"local"},referencePhoto:null,uploadRequests:{}});
+Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false,crop:null,sampleRequest:0,recognition:{cloud_available:false,default_engine:"local"},referencePhoto:null,uploadRequests:{},libraryDetail:null,libraryCategories:[],libraryCategoryRequest:0,libraryCategoryContext:null});
 let cleanupContext = null;
 
 function allowed(permission = "manage_standards") { return state.role === "admin" && state.permissions[permission] === true; }
@@ -17,11 +17,11 @@ function requireAdmin(permission = "manage_standards") {
   toast("此功能需管理員解鎖；掃描與本筆訂正仍可使用。", true); return false;
 }
 function isAdminPath(path) {
-  return /^\/api\/(?:templates(?:[/?]|$)|manual-standards(?:[/?]|$)|admin\/(?:history|recognition-samples)(?:[/?]|$)|source-labels\/)/.test(path)
+  return /^\/api\/(?:templates(?:[/?]|$)|standard-library(?:[/?]|$)|manual-standards(?:[/?]|$)|admin\/(?:history|recognition-samples)(?:[/?]|$)|source-labels\/)/.test(path)
     || /^\/api\/reference-photos(?:[/?]|$)/.test(path) || /^\/api\/inspections\/[^/]+\/(?:standard|manual-standard|reference-photo)(?:[/?]|$)/.test(path);
 }
 function purgeAdminData() {
-  closeDraftScopeDialog();
+  closeDraftScopeDialog();closeLibraryCategory(true);closeLibraryDetail(true);state.libraryCategoryRequest++;state.libraryCategories=[];populateLibraryCategories();
   state.standardEdit = null; manualStandard = null; cleanupContext = null;
   state.referencePhoto=null;if($("#reference-photo-dialog").open)$("#reference-photo-dialog").close();$("#reference-photo-form").reset();$("#reference-photo-list").replaceChildren();$("#reference-photo-source").textContent="";$("#reference-photo-image").removeAttribute("src");$("#reference-photo-error").textContent="";
   $("#manual-draft-fields").replaceChildren();$("#manual-equivalent-references").replaceChildren();$("#manual-photo-canvas").width=1;$("#manual-photo-link").removeAttribute("href");
@@ -36,10 +36,10 @@ function purgeAdminData() {
   for (const id of ["standard-edit-dialog","manual-standard-dialog","history-cleanup-dialog"]) { const node=$("#"+id); if(node.open)node.close(); }
   for (const id of ["standard-form","standard-edit-form","manual-standard-form","cleanup-filter-form","cleanup-confirm-form"]) $("#"+id).reset();
   $$("#standard-edit-dialog input, #standard-edit-dialog textarea, #manual-standard-dialog input, #manual-standard-dialog textarea, #history-cleanup-dialog input, #history-cleanup-dialog textarea").forEach(node=>{node.value="";node.checked=false;});
-  for(const id of ["library-list","manual-library-list","source-results","reference-lines","standard-edit-line-fields","standard-edit-date-fields","standard-edit-history-list","standard-edit-preview","manual-standard-preview","cleanup-items","cleanup-batches"]) $("#"+id).replaceChildren();
-  for(const id of ["standard-edit-source","standard-edit-notice","standard-edit-error","manual-standard-notice","manual-standard-error","source-note","manual-library-status","cleanup-error","cleanup-notice","cleanup-summary","cleanup-selection-note"]) $("#"+id).textContent="";
+  for(const id of ["standard-library-list","source-results","reference-lines","standard-edit-line-fields","standard-edit-date-fields","standard-edit-history-list","standard-edit-preview","manual-standard-preview","cleanup-items","cleanup-batches"]) $("#"+id).replaceChildren();
+  for(const id of ["standard-edit-source","standard-edit-notice","standard-edit-error","manual-standard-notice","manual-standard-error","source-note","standard-library-status","cleanup-error","cleanup-notice","cleanup-summary","cleanup-selection-note"]) $("#"+id).textContent="";
   $("#reference-preview").removeAttribute("src"); $("#reference-preview").hidden=true; $("#reference-ocr").hidden=true; $("#standard-fields").disabled=true;
-  $("#manual-library-query").value=""; $("#source-query").value=""; $("#nav-count").textContent="0";
+  $("#standard-library-query").value="";$("#standard-library-total").textContent="";$("#standard-library-page").textContent="";$("#standard-library-category").value="all";$("#standard-library-state").value="active"; $("#source-query").value=""; $("#nav-count").textContent="0";
   delete state.retryJobs.reference; $("#reference-retry").hidden=true; setUploadError("reference");
   sessionStorage.setItem("labelcheck-failed-jobs",JSON.stringify(state.retryJobs));
   state.failedJobs=state.failedJobs.filter(item=>item.kind!=="reference"); renderFailedJobs();
@@ -292,7 +292,7 @@ function showView(view) {
   $("#breadcrumb").textContent = `工作區 / ${{inspect:"檢查標籤",library:"標準標籤庫",standard:"建立標準標籤",history:"檢查紀錄"}[view]}`;
   history.replaceState(null, "", `#${view}`);
   if (view === "history") loadHistory().catch(e => toast(e.message, true));
-  if (view === "library") {loadManualLibrary(1);loadPendingStandards(1);}
+  if (view === "library") {loadLibraryCategories().catch(e=>toast(e.message,true));loadManualLibrary(1);loadPendingStandards(1);}
   window.scrollTo({top: 0, behavior: "instant"});
 }
 function setBusy(busy, kind = "") {
@@ -356,8 +356,8 @@ async function loadTemplates(selectedId) {
   select.append(new Option("自動對應系統標籤與清單", ""));
   state.templates.forEach(t => select.append(new Option(`${t.name} · 第 ${t.version} 版`, t.id)));
   if (state.templates.some(t => t.id === previous)) select.value = previous;
-  $("#nav-count").textContent = String(state.templates.length + manualLibraryTotal);
-  selectedStandard(); if(admin){renderLibrary();await loadManualLibrary(1);}
+  $("#nav-count").textContent = String(manualLibraryTotal);
+  selectedStandard(); if(admin)await loadManualLibrary(1);
 }
 async function loadScanConfig() {
   const config = await api("/api/scan-config");
@@ -583,48 +583,100 @@ async function loadPendingStandards(page=1){
   }catch(error){if(token===pendingStandardsRequest && epoch===state.authEpoch && allowed())$("#pending-standard-status").textContent=error.message;}
   finally{if(token===pendingStandardsRequest && epoch===state.authEpoch){pendingStandardsLoading=false;updatePendingControls();}}
 }
+function libraryPath(data){return `/api/standard-library/${encodeURIComponent(data.kind)}/${encodeURIComponent(data.key)}`;}
+function libraryKindLabel(kind){return kind==="photo" ? "照片標準" : "文字標準";}
+function libraryIdentity(item){const identity=item.identity || {},parts=[];if(identity.spec)parts.push(`規格：${identity.spec}`);if(identity.barcode)parts.push(`條碼：${identity.barcode}`);if(identity.sku)parts.push(`貨號：${identity.sku}`);parts.push(item.kind==="manual" ? sourceCodeLabel({code:item.key}) : `P-${String(item.key || "").slice(0,8)} · 第 ${item.base_revision ?? item.template?.version ?? 1} 版`);return parts;}
+function populateLibraryCategories(){
+  const categories=state.libraryCategories || [];
+  for(const [id,filter] of [["standard-library-category",true],["library-detail-category",false]]){const input=$("#"+id),previous=input.value;input.replaceChildren();if(filter)input.append(new Option("全部分類","all"));input.append(new Option("未分類",filter ? "uncategorized" : ""));categories.forEach(item=>input.append(new Option(item.name,item.id)));if([...categories.map(item=>String(item.id)),filter ? "all" : "",filter ? "uncategorized" : ""].includes(previous))input.value=previous;}
+}
+async function loadLibraryCategories(){
+  if(!allowed())return;const epoch=state.authEpoch,request=++state.libraryCategoryRequest;const data=await api("/api/standard-library/categories");if(epoch!==state.authEpoch || request!==state.libraryCategoryRequest || !allowed())return;
+  state.libraryCategories=(data.items || []).filter(item=>item?.id && typeof item.name==="string");populateLibraryCategories();
+}
 async function loadManualLibrary(page=1) {
-  if(!allowed())return;
-  const token=++manualLibraryRequest,query=$("#manual-library-query").value.trim();
-  $("#manual-library-status").textContent="讀取人工文字標準…";
-  $("#manual-library-prev").disabled=true;$("#manual-library-next").disabled=true;
-  try {
-    const data=await api(`/api/manual-standards?page=${page}&limit=24&q=${encodeURIComponent(query)}`);if(token!==manualLibraryRequest)return;
-    manualLibraryPage=page;
-    if(!query){manualLibraryTotal=data.total || 0;$("#nav-count").textContent=String(state.templates.length+manualLibraryTotal);}
-    const list=$("#manual-library-list");list.replaceChildren();
+  if(!allowed())return;const token=++manualLibraryRequest,epoch=state.authEpoch,query=$("#standard-library-query").value.trim(),category=$("#standard-library-category").value || "all",removed=$("#standard-library-state").value==="removed";
+  $("#standard-library-status").textContent="讀取已建立標準…";$("#standard-library-prev").disabled=true;$("#standard-library-next").disabled=true;
+  try{
+    const data=await api(`/api/standard-library?kind=all&state=${removed ? "removed" : "active"}&category_id=${encodeURIComponent(category)}&q=${encodeURIComponent(query)}&page=${page}&limit=24`);
+    if(token!==manualLibraryRequest || epoch!==state.authEpoch || !allowed())return;manualLibraryPage=page;
+    if(!query && category==="all" && !removed){manualLibraryTotal=data.total || 0;$("#nav-count").textContent=String(manualLibraryTotal);}
+    $("#standard-library-total").textContent=`${data.total || 0} 份${removed ? "已刪除" : "標準"}`;const list=$("#standard-library-list");list.replaceChildren();
     for(const item of data.items || []){
-      const card=element("article","panel library-card"),content=element("div","library-card-content");
-      content.append(badge("pass",`已確認 · 第 ${item.revision} 版`),element("h3","",item.name),element("p","help",`${sourceCodeLabel(item)} · ${item.reviewer || ""} · ${when(item.created_at)}`));
-      const use=element("button","button primary","選用此標準");use.type="button";use.onclick=()=>{if(state.busy)return;selectInspectSource(item);showView("inspect");};
-      const history=element("button","button secondary","查看建立紀錄");history.type="button";history.onclick=async()=>{if(state.busy)return;try{await loadInspection(item.inspection_id);}catch(error){toast(error.message,true);}};
-      const actions=element("div","library-actions");actions.append(use,history);content.append(actions);card.append(content);list.append(card);
+      if(!["manual","photo"].includes(item.kind) || !item.key)continue;const card=element("article","panel library-card unified-standard-card"),cover=element("div","standard-card-cover");
+      if(item.image?.thumbnail || item.image?.url){const img=element("img");img.src=item.image.thumbnail || item.image.url;img.alt=`${item.name} 參考照片`;img.loading="lazy";cover.append(img);}else cover.append(element("span","help","尚無參考照片"));
+      const content=element("div","library-card-content"),chips=element("div","standard-card-chips");chips.append(element("span","standard-chip",item.category_name || "未分類"),element("span","standard-chip subtle",libraryKindLabel(item.kind)));if(item.removed)chips.append(badge("review","已刪除"));
+      content.append(chips,element("h3","",item.name || "未命名標準"));libraryIdentity(item).forEach(value=>content.append(element("p","standard-card-identity",value)));if(item.photo_count>1)content.append(element("p","help",`${item.photo_count} 張參考照片`));
+      const button=element("button","button primary","查看內容");button.type="button";button.onclick=()=>openLibraryDetail(item.kind,item.key);content.append(button);card.append(cover,content);list.append(card);
     }
-    $("#manual-library-status").textContent=data.items?.length ? `共 ${data.total} 份 · 第 ${page} 頁` : query ? "找不到符合的人工標準。" : "尚未建立人工文字標準。無依據的檢查結果可按「建立文字比對標準」。";
-    $("#manual-library-prev").disabled=page<=1;$("#manual-library-next").disabled=!data.has_more;
-  } catch(error){if(token===manualLibraryRequest)$("#manual-library-status").textContent=error.message;}
+    $("#standard-library-status").textContent=data.items?.length ? "點「查看內容」可對照照片、編輯、分類或還原標準。" : removed ? "沒有符合條件的已刪除標準。" : query || category!=="all" ? "找不到符合條件的標準，可調整搜尋或分類。" : "尚無已建立標準，可展開下方待確認草稿，對照照片後核准。";
+    $("#standard-library-page").textContent=`第 ${page} 頁`;$("#standard-library-prev").disabled=page<=1;$("#standard-library-next").disabled=!data.has_more;
+  }catch(error){if(token===manualLibraryRequest && epoch===state.authEpoch && allowed())$("#standard-library-status").textContent=error.message;}
 }
-function renderLibrary() {
-  if(!allowed())return;
-  const list = $("#library-list"); list.replaceChildren();
-  if (!state.templates.length) {
-    const empty = element("div", "empty-state"); empty.append(element("h2", "", "尚未建立照片標準"), element("p", "", "也可以從人工確認過的正確照片建立標準。"));
-    const button = element("button", "button primary", "建立第一份標準"); button.onclick = () => newStandard(); empty.append(button); list.append(empty); return;
-  }
-  state.templates.forEach(standard => {
-    const card = element("article", "panel library-card");
-    if (standard.image) { const image = element("img"); image.src = standard.image.thumbnail; image.alt = `${standard.name} 標準照片`; image.loading = "lazy"; card.append(image); }
-    const content = element("div", "library-card-content"); content.append(badge("pass", `已確認 · 第 ${standard.version} 版`), element("h2", "", standard.name));
-    textFields.forEach(key => { if (standard.fields[key]) content.append(element("p", "", `${fieldLabels[key]}：${standard.fields[key]}`)); });
-    const dateRules = [];
-    if (standard.rules.dates) dateRules.push("製造／有效日期");
-    if (standard.rules.arrival) dateRules.push("到店日");
-    content.append(element("p", "help", dateRules.length ? `日期檢查：${dateRules.join("、")}` : "未啟用日期檢查"), element("p", "", `${standard.approved_by} · ${when(standard.created_at)}`));
-    const actions = element("div", "library-actions"), use = element("button", "button primary", "用此標準檢查"), edit = element("button", "button secondary", "建立新版");
-    use.onclick = () => { if(state.busy) return toast("請等待目前辨識完成。"); $("#template-select").value = standard.id; selectedStandard(); markResultChanged(); showView("inspect"); };
-    edit.onclick = () => newStandard(standard); actions.append(use, edit); content.append(actions); card.append(content); list.append(card);
-  });
+function closeLibraryDetail(force=false){if(state.busy && !force)return;state.libraryDetail=null;if($("#library-detail-dialog").open)$("#library-detail-dialog").close();$("#library-detail-image").removeAttribute("src");$("#library-detail-original").removeAttribute("href");for(const id of ["library-detail-view","library-detail-photos","library-detail-history","library-edit-preview","library-edit-photo-fields","library-edit-date-fields"])$("#"+id).replaceChildren();$("#library-detail-form").reset();$$("#library-detail-dialog input, #library-detail-dialog textarea").forEach(input=>{input.value="";input.checked=false;});$("#library-detail-body").hidden=true;for(const id of ["library-detail-title","library-detail-meta","library-detail-notice","library-detail-photo-note","library-detail-error","library-state-title","library-state-note","library-state-confirm-text"])$("#"+id).textContent="";for(const id of ["library-content-text","library-nutrition-text","library-uncertain-text","library-full-text","library-edit-name","library-edit-reviewer","library-edit-note"])$("#"+id).value="";}
+function librarySections(rows){const compact=rows.map(row=>row.text.replace(/\s+/g,"")),hasContext=compact.some(nutritionHeader) || compact.filter(fullNutrientRow).length>=2;return rows.map(row=>({...row,section:row.sectionPinned ? row.section : classifyTextSection(row,hasContext)}));}
+function showLibraryPhoto(index){const context=state.libraryDetail;if(!context)return;const photo=context.photos[index];if(!photo?.url)return;context.photoIndex=index;$("#library-detail-image").src=photo.url;$("#library-detail-image").hidden=false;$("#library-detail-original").href=photo.url;$("#library-detail-original").hidden=false;$("#library-detail-photo-note").textContent=`參考照片 ${index+1}／${context.photos.length}${photo.stale ? " · 較早版本，請依目前標準內容核對" : ""}`;[...$("#library-detail-photos").children].forEach((node,i)=>node.setAttribute("aria-pressed",String(i===index)));}
+function renderLibraryDetail(data){
+  const context=state.libraryDetail;if(!context)return;context.data=data;context.editing=false;context.preview=null;context.operation=null;context.conflict=false;context.rows=librarySections((data.source?.lines || []).map(row=>({text:row.text || "",row_type:row.row_type})));context.photos=[];
+  const candidates=[data.current_image,...(data.photos || []).map(item=>item.image || item),data.image],seen=new Set();for(const photo of candidates){if(!photo?.url || seen.has(photo.url))continue;seen.add(photo.url);context.photos.push(photo);}
+  $("#library-detail-title").textContent=data.name || data.source?.name || data.template?.name || "標準內容";$("#library-detail-meta").textContent=`${libraryKindLabel(data.kind)} · ${libraryIdentity(data).join(" · ")}${data.category_name ? ` · ${data.category_name}` : ""}`;
+  $("#library-detail-notice").textContent=data.removed ? "這份標準已刪除，不用於新掃描；照片、內容及歷史均保留，可還原。" : "此處顯示目前核准內容。修改會建立新版，既有檢查紀錄保留。";
+  $("#library-detail-body").hidden=false;$("#library-detail-form").hidden=true;$("#library-detail-view").hidden=false;$("#library-detail-actions").hidden=false;$("#library-state-preview").hidden=true;$("#library-state-confirm").checked=false;$("#library-detail-reload").hidden=true;$("#library-detail-category").value=data.category_id || "";
+  $("#library-detail-edit").hidden=data.removed || data.editable===false;$("#library-detail-remove").hidden=!!data.removed;$("#library-detail-restore").hidden=!data.removed;$("#library-detail-use").hidden=!!data.removed;$("#library-detail-advanced").open=false;
+  const photos=$("#library-detail-photos");photos.replaceChildren();$("#library-detail-image").hidden=!context.photos.length;$("#library-detail-original").hidden=!context.photos.length;$("#library-detail-photo-note").textContent=context.photos.length ? "" : "尚無可讀取的參考照片；標準文字仍保留。";
+  context.photos.forEach((photo,index)=>{const button=element("button","library-photo-choice");button.type="button";button.setAttribute("aria-label",`查看第 ${index+1} 張參考照片`);const img=element("img");img.src=photo.thumbnail || photo.url;img.alt="";button.append(img);button.onclick=()=>showLibraryPhoto(index);photos.append(button);});if(context.photos.length)showLibraryPhoto(0);
+  const view=$("#library-detail-view");view.replaceChildren();
+  if(data.kind==="manual")for(const section of ["content","nutrition","uncertain"]){const rows=context.rows.filter(row=>row.section===section);if(!rows.length)continue;const block=element("section",`library-content-block ${section}`);block.append(element("h3","",textSectionLabels[section]));rows.forEach(row=>block.append(element("p","library-text-line",row.text)));view.append(block);}
+  else{const block=element("section","library-content-block");block.append(element("h3","","標籤內容"));for(const key of textFields){const value=data.template?.fields?.[key];if(value)block.append(element("p","library-text-line",`${fieldLabels[key]}：${value}`));}view.append(block);}
+  const dates=element("section","library-content-block"),source=data.source || {},template=data.template || {};dates.append(element("h3","","日期規則"));const days=data.kind==="manual" ? source.keep_days : template.rules?.keep_days;dates.append(element("p","",days===null || days===undefined ? "保存天數未設定" : `保存天數：${days} 天`));
+  if(data.kind==="manual"){for(const rule of source.date_settings || [])dates.append(element("p","",`${rule.content || "日期"}：本批基準日 ${Number(rule.shift_days || 0)>=0 ? "+" : ""}${rule.shift_days || 0} 天`));if(!source.date_settings?.length)dates.append(element("p","help","未設定日期位移；不推定每日日期。"));}
+  else dates.append(element("p","",`製造／有效日期：${template.rules?.dates ? "檢查" : "未啟用"}；到店日：${template.rules?.arrival ? "檢查" : "未啟用"}`));view.append(dates);
+  const history=$("#library-detail-history");history.replaceChildren(element("h3","","版本紀錄"));for(const entry of data.history || []){const row=element("div","review-record");row.append(element("strong","",`第 ${entry.revision} 版 · ${{update:"修改",create:"建立",restore:"還原",reset:"恢復來源",remove:"刪除"}[entry.operation] || "標準紀錄"}`),element("p","help",`${entry.reviewer || ""}${entry.created_at ? ` · ${when(entry.created_at)}` : ""}`));if(entry.note)row.append(element("p","",entry.note));history.append(row);}if(!data.history?.length)history.append(element("p","help","尚無額外修改紀錄。"));libraryDetailControls();
 }
+async function openLibraryDetail(kind,key){
+  if(!requireAdmin() || state.busy || !["manual","photo"].includes(kind) || !key)return;const context={kind,key,data:null,editing:false,preview:null};state.libraryDetail=context;$("#library-detail-body").hidden=true;$("#library-detail-title").textContent="讀取標準內容…";$("#library-detail-meta").textContent="";$("#library-detail-notice").textContent="";$("#library-detail-reload").hidden=true;setDialogError("#library-detail-error");if(!$("#library-detail-dialog").open)$("#library-detail-dialog").showModal();
+  try{await loadLibraryCategories();const data=await api(libraryPath(context));if(state.libraryDetail!==context || !allowed())return;renderLibraryDetail(data);}catch(error){if(state.libraryDetail===context)setDialogError("#library-detail-error",error.message);}
+}
+function libraryDetailControls(){const context=state.libraryDetail,busy=state.busy;for(const node of $$("#library-detail-dialog button, #library-detail-dialog input, #library-detail-dialog textarea, #library-detail-dialog select"))node.disabled=busy;for(const id of ["library-detail-category","library-detail-category-save","library-detail-add-category"])$("#"+id).disabled=busy || !!context?.editing;$("#library-edit-preview-button").disabled=busy || !!context?.conflict;$("#library-edit-save").disabled=busy || !!context?.conflict;}
+function libraryBusy(value){setBusy(value);libraryDetailControls();}
+function renderLibraryEditSections(preserve=null){const context=state.libraryDetail;if(!context)return;context.rows=librarySections(context.rows);for(const section of ["content","nutrition","uncertain"]){const rows=context.rows.filter(row=>row.section===section);if(section!==preserve)$("#library-"+section+"-text").value=rows.map(row=>row.text).join("\n");if(section!=="content")$("#library-"+section+"-zone").hidden=!rows.length && preserve!==section;}$("#library-full-text").value=context.rows.map(row=>row.text).join("\n");}
+function invalidateLibraryPreview(){const context=state.libraryDetail;if(context){context.preview=null;context.previewNonce=(context.previewNonce || 0)+1;}$("#library-edit-preview").hidden=true;$("#library-edit-confirm-label").hidden=true;$("#library-edit-confirm").checked=false;$("#library-edit-save").hidden=true;}
+function changeLibrarySection(section){const context=state.libraryDetail;if(!context?.editing || state.busy)return;const prior=context.rows,next=plainTextRows($("#library-"+section+"-text").value).map(row=>({text:row.text,section,sectionPinned:true})),last=prior.map(row=>row.section).lastIndexOf(section),rows=[];let index=0;prior.forEach((row,i)=>{if(row.section!==section)rows.push(row);else{if(index<next.length)rows.push(next[index++]);if(i===last)rows.push(...next.slice(index));}});if(last<0)rows.push(...next);context.rows=rows;renderLibraryEditSections(section);invalidateLibraryPreview();}
+function changeLibraryFullText(){if(!state.libraryDetail?.editing || state.busy)return;state.libraryDetail.rows=plainTextRows($("#library-full-text").value).map(row=>({text:row.text}));renderLibraryEditSections();invalidateLibraryPreview();}
+function toggleLibraryPhotoDates(){const hasSource=!!state.libraryDetail?.data?.template?.rules?.source,dates=$("#library-photo-dates").checked && !hasSource,arrival=$("#library-photo-arrival-check").checked && !hasSource;$("#library-photo-date-fields").hidden=!dates;$("#library-photo-arrival-field").hidden=!arrival;$("#library-photo-manufacture").required=dates;$("#library-photo-expiry").required=dates;$("#library-photo-arrival").required=arrival;}
+function beginLibraryEdit(){
+  const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed || data.editable===false)return;context.editing=true;context.conflict=false;context.rows=librarySections((data.source?.lines || []).map(row=>({text:row.text || "",row_type:row.row_type})));context.dateControls=[];context.fieldControls=[];invalidateLibraryPreview();setDialogError("#library-detail-error");$("#library-detail-view").hidden=true;$("#library-detail-form").hidden=false;$("#library-detail-actions").hidden=true;$("#library-state-preview").hidden=true;$("#library-detail-reload").hidden=true;
+  $("#library-edit-date-fields").replaceChildren();$("#library-edit-photo-fields").replaceChildren();for(const key of ["manufacture","expiry","arrival"])$("#library-photo-"+key).required=false;$("#library-edit-name").value=data.name || data.source?.name || data.template?.name || "";$("#library-edit-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";$("#library-edit-note").value="依標籤照片核對並更新標準";$("#library-edit-manual").hidden=data.kind!=="manual";$("#library-edit-photo").hidden=data.kind!=="photo";
+  if(data.kind==="manual"){renderLibraryEditSections();$("#library-edit-days").value=data.source?.keep_days ?? "";const area=$("#library-edit-date-fields");area.replaceChildren();(data.source?.date_settings || []).forEach((setting,index)=>{const label=element("label","",`${setting.content || "日期"}位移天數`),input=element("input");input.type="number";input.min="-3650";input.max="3650";input.step="1";input.value=setting.shift_days ?? 0;input.required=true;label.append(input);area.append(label);context.dateControls.push({setting,index,input});});if(!context.dateControls.length)area.append(element("p","help","目前未設定固定日期位移，保留動態日期檢查。"));}
+  else{const template=data.template || {},area=$("#library-edit-photo-fields");area.replaceChildren();for(const key of textFields){const label=element("label","",fieldLabels[key]),input=element(key==="address" ? "textarea" : "input");input.value=template.fields?.[key] || "";input.maxLength=500;input.required=["product","origin","address"].includes(key);input.setAttribute("aria-label",fieldLabels[key]);label.append(input);area.append(label);context.fieldControls.push({key,input});}$("#library-photo-dates").checked=!!template.rules?.dates;$("#library-photo-arrival-check").checked=!!template.rules?.arrival;$("#library-photo-days").value=template.rules?.keep_days ?? "";for(const key of ["manufacture","expiry","arrival"])$("#library-photo-"+key).value=template.reference_dates?.[key] || "";toggleLibraryPhotoDates();}
+  libraryDetailControls();$("#library-edit-name").focus();
+}
+function collectLibraryChanges(){
+  const context=state.libraryDetail,data=context?.data;if(!context?.editing || !data || context.conflict)return null;const changes={},preview=[],name=$("#library-edit-name").value.trim();if(!name)throw new Error("請填寫標準名稱。");if(name!==data.name){changes.name=name;preview.push({label:"標準名稱",before:data.name,after:name});}
+  const changed=(key,before,after,label)=>{if(JSON.stringify(before)!==JSON.stringify(after)){changes[key]=after;preview.push({label,before:typeof before==="object" ? JSON.stringify(before) : before,after:typeof after==="object" ? JSON.stringify(after) : after});}};
+  if(data.kind==="manual"){const source=data.source || {},rows=context.rows.map(row=>({text:row.text.trim()})).filter(row=>row.text);if(!rows.length || rows.length>150)throw new Error("請保留 1 至 150 行正確標準文字。");const before=(source.lines || []).map(row=>row.text).join("\n"),after=rows.map(row=>row.text).join("\n");if(before!==after){changes.replace_lines=rows;preview.push({label:`標準全文（${rows.length} 行）`,before,after});}const daysInput=$("#library-edit-days");if(!daysInput.checkValidity())throw new Error("保存天數需為 0 至 3650 的整數。");const days=daysInput.value==="" ? null : Number(daysInput.value);changed("keep_days",source.keep_days ?? null,days,"保存天數");const dates=[];for(const {index,setting,input} of context.dateControls){if(!input.checkValidity() || input.value==="")throw new Error("請填寫有效的日期位移整數。");const value=Number(input.value);if(value!==Number(setting.shift_days ?? 0)){dates.push({index,shift_days:value});preview.push({label:`${setting.content}位移天數`,before:setting.shift_days ?? 0,after:value});}}if(dates.length)changes.date_settings=dates;}
+  else{const template=data.template || {},fields={...template.fields};for(const {key,input} of context.fieldControls){if(!input.checkValidity())throw new Error(`請確認${fieldLabels[key]}。`);fields[key]=input.value.trim();if(fields[key]!==template.fields?.[key])preview.push({label:fieldLabels[key],before:template.fields?.[key] || "",after:fields[key]});}if(JSON.stringify(fields)!==JSON.stringify(template.fields))changes.fields=fields;const daysInput=$("#library-photo-days");if(!daysInput.checkValidity())throw new Error("保存天數需為 0 至 3650 的整數。");const rules={dates:$("#library-photo-dates").checked,arrival:$("#library-photo-arrival-check").checked,keep_days:daysInput.value==="" ? null : Number(daysInput.value)},ruleChanges={};for(const [key,label] of [["dates","檢查製造／有效日期"],["arrival","檢查到店日"],["keep_days","保存天數"]]){const before=template.rules?.[key] ?? (key==="keep_days" ? null : false);if(rules[key]!==before){ruleChanges[key]=rules[key];preview.push({label,before:typeof before==="boolean" ? before ? "啟用" : "未啟用" : before,after:typeof rules[key]==="boolean" ? rules[key] ? "啟用" : "未啟用" : rules[key]});}}if(Object.keys(ruleChanges).length)changes.rules=ruleChanges;const dates={};for(const [key,label] of [["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"]]){const input=$("#library-photo-"+key);if(!input.checkValidity())throw new Error("請填寫已啟用檢查的參考照片日期。");const value=input.value.trim();if(value!==(template.reference_dates?.[key] || "")){dates[key]=value;preview.push({label:`參考照片的${label}`,before:template.reference_dates?.[key] || "未設定",after:value || "未設定"});}}if(Object.keys(dates).length)changes.reference_dates=dates;}
+  return {changes,preview};
+}
+function libraryVersionBody(context){const data=context.data;return {item_revision:data.item_revision,base_revision:data.base_revision,source_revision:data.source_revision};}
+function showLibraryError(error){const context=state.libraryDetail;if(error.status===409 && context){context.conflict=true;invalidateLibraryPreview();$("#library-detail-reload").hidden=false;}setDialogError("#library-detail-error",`${error.message}${error.status===409 ? " 你的編輯仍保留，請先複製需要的修改，再重新載入最新內容。" : ""}`);}
+async function previewLibraryChanges(){
+  const context=state.libraryDetail;if(!requireAdmin() || state.busy || !context?.editing || context.conflict)return;setDialogError("#library-detail-error");let collected;try{collected=collectLibraryChanges();if(!collected?.preview.length)throw new Error("目前沒有修改內容。");}catch(error){setDialogError("#library-detail-error",error.message);return;}invalidateLibraryPreview();const signature=JSON.stringify(collected.changes),nonce=context.previewNonce;libraryBusy(true);
+  try{const data=await api(libraryPath(context)+"/preview",{method:"POST",body:{...libraryVersionBody(context),changes:collected.changes}});if(state.libraryDetail!==context || context.previewNonce!==nonce || !allowed())return;if(!data.preview_hash)throw new Error("未取得預覽版本，請重新預覽。");context.preview={signature,hash:data.preview_hash};const area=$("#library-edit-preview");area.replaceChildren(element("h3","","確認修改前後差異"));for(const item of collected.preview){const row=element("div","standard-preview-row");row.append(element("strong","",item.label),element("p","before",`修改前：${item.before ?? "未設定"}`),element("p","after",`修改後：${item.after ?? "未設定"}`));area.append(row);}renderNutritionPreview(area,data.nutrition_checks);area.hidden=false;$("#library-edit-confirm-label").hidden=false;$("#library-edit-save").hidden=false;area.scrollIntoView({block:"start",behavior:"instant"});}
+  catch(error){if(state.libraryDetail===context)showLibraryError(error);}finally{libraryBusy(false);}
+}
+async function saveLibraryChanges(event){
+  event?.preventDefault();const context=state.libraryDetail;if(!requireAdmin() || state.busy || !context?.editing || context.conflict)return;let collected;try{collected=collectLibraryChanges();}catch(error){showLibraryError(error);return;}if(!context.preview || context.preview.signature!==JSON.stringify(collected?.changes)){invalidateLibraryPreview();setDialogError("#library-detail-error","內容有變更，請重新預覽後確認。");return;}const reviewer=$("#library-edit-reviewer").value.trim(),note=$("#library-edit-note").value.trim();if(!reviewer || !note || !$("#library-edit-confirm").checked){setDialogError("#library-detail-error","請填寫修改人員、原因，並勾選確認。");return;}libraryBusy(true);setDialogError("#library-detail-error");
+  try{const data=await api(libraryPath(context)+"/save",{method:"POST",body:{...libraryVersionBody(context),changes:collected.changes,preview_hash:context.preview.hash,reviewer,note,confirmed:true}});if(state.libraryDetail!==context || !allowed())return;sessionStorage.setItem("labelcheck-operator",reviewer);renderLibraryDetail(data);$("#library-detail-notice").textContent="已儲存新版標準，之後同款掃描會使用最新內容；既有檢查紀錄保留。";await loadTemplates();}
+  catch(error){if(state.libraryDetail===context)showLibraryError(error);}finally{libraryBusy(false);}
+}
+function previewLibraryState(operation){const context=state.libraryDetail;if(!requireAdmin() || state.busy || !context?.data || context.editing || !["remove","restore"].includes(operation))return;context.operation=operation;const removing=operation==="remove";$("#library-state-title").textContent=removing ? "刪除此標準（可還原）" : "還原此標準";$("#library-state-note").textContent=removing ? "刪除後不會用於新掃描；原照片、文字版本及檢查紀錄保留，可至「已刪除」還原。" : "還原後會重新出現在已建立標準，可選用於後續掃描。";$("#library-state-confirm-text").textContent=`確認${removing ? "刪除" : "還原"}「${context.data.name}」。`;$("#library-state-confirm").checked=false;$("#library-state-save").textContent=removing ? "確認刪除，可還原" : "確認還原";$("#library-state-preview").hidden=false;$("#library-state-preview").scrollIntoView({block:"start",behavior:"instant"});}
+async function saveLibraryState(){const context=state.libraryDetail;if(!requireAdmin() || state.busy || !context?.operation || !$("#library-state-confirm").checked)return;libraryBusy(true);setDialogError("#library-detail-error");try{const data=await api(libraryPath(context)+"/state",{method:"POST",body:{item_revision:context.data.item_revision,base_revision:context.data.base_revision,operation:context.operation,note:context.operation==="remove" ? "由標準庫移除，可還原" : "由標準庫還原"}});if(state.libraryDetail!==context || !allowed())return;if(data.removed && state.inspectSource?.code===data.key){state.inspectSource=null;renderInspectSource();markResultChanged();}renderLibraryDetail(data);await loadTemplates();}catch(error){if(state.libraryDetail===context)showLibraryError(error);}finally{libraryBusy(false);}}
+async function saveLibraryCategory(){const context=state.libraryDetail;if(!requireAdmin() || state.busy || context?.editing || !context?.data)return;const value=$("#library-detail-category").value || null,category=(state.libraryCategories || []).find(item=>String(item.id)===value);if(value && !category){setDialogError("#library-detail-error","分類已變更，請重新開啟標準。");return;}if(value===(context.data.category_id || null)){setDialogError("#library-detail-error","分類沒有變更。");return;}libraryBusy(true);setDialogError("#library-detail-error");try{const data=await api(libraryPath(context)+"/category",{method:"POST",body:{item_revision:context.data.item_revision,category_id:value,...(category ? {category_revision:category.revision} : {})}});if(state.libraryDetail!==context || !allowed())return;renderLibraryDetail(data);$("#library-detail-notice").textContent="分類已更新；標準文字與照片未變更。";await loadManualLibrary(manualLibraryPage);}catch(error){if(state.libraryDetail===context)showLibraryError(error);}finally{libraryBusy(false);}}
+function openLibraryCategory(target="filter"){if(!requireAdmin() || state.busy || (target==="detail" && state.libraryDetail?.editing))return;state.libraryCategoryContext={target,detail:state.libraryDetail};$("#library-category-form").reset();$("#library-category-name").value="";setDialogError("#library-category-error");$("#library-category-dialog").showModal();$("#library-category-name").focus();}
+function closeLibraryCategory(force=false){if(state.busy && !force)return;state.libraryCategoryContext=null;if($("#library-category-dialog").open)$("#library-category-dialog").close();$("#library-category-name").value="";setDialogError("#library-category-error");}
+async function saveLibraryNewCategory(event){event.preventDefault();const context=state.libraryCategoryContext;if(!requireAdmin() || state.busy || !context)return;const name=$("#library-category-name").value.trim();if(!name){setDialogError("#library-category-error","請填寫分類名稱。");return;}setBusy(true);$("#library-category-save").disabled=true;setDialogError("#library-category-error");try{const data=await api("/api/standard-library/categories",{method:"POST",body:{name}});if(state.libraryCategoryContext!==context || !allowed())return;await loadLibraryCategories();if(context.target==="detail" && state.libraryDetail===context.detail){$("#library-detail-category").value=data.id;$("#library-detail-notice").textContent="分類已建立；按「儲存分類」將此標準加入。";}else{await loadManualLibrary(manualLibraryPage);if(state.libraryCategoryContext!==context || !allowed())return;const message="分類已建立，開啟標準內容可指定分類。";$("#standard-library-status").textContent=message;toast(message);}closeLibraryCategory(true);}catch(error){if(state.libraryCategoryContext===context)setDialogError("#library-category-error",error.message);}finally{setBusy(false);$("#library-category-save").disabled=false;}}
+async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind==="manual")selectInspectSource({code:data.key,name:data.name,source_kind:"manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();markResultChanged();}closeLibraryDetail();showView("inspect");}
 async function loadInspection(id, restoreSettings = true) {
   const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
   state.manualView = true;
@@ -2059,9 +2111,32 @@ $("#manual-standard-form").onsubmit=saveManualStandard;
 $("#reference-photo-form").onsubmit=saveReferencePhoto;
 $("#reference-photo-close").onclick=()=>{if(!state.busy){state.referencePhoto=null;$("#reference-photo-dialog").close();}};
 $("#reference-photo-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();else state.referencePhoto=null;});
-$("#manual-library-search").onsubmit=event=>{event.preventDefault();loadManualLibrary(1);};
-$("#manual-library-prev").onclick=()=>loadManualLibrary(Math.max(1,manualLibraryPage-1));
-$("#manual-library-next").onclick=()=>loadManualLibrary(manualLibraryPage+1);
+$("#standard-library-search").onsubmit=event=>{event.preventDefault();loadManualLibrary(1);};
+$("#standard-library-prev").onclick=()=>loadManualLibrary(Math.max(1,manualLibraryPage-1));
+$("#standard-library-next").onclick=()=>loadManualLibrary(manualLibraryPage+1);
+for(const id of ["standard-library-category","standard-library-state"])$("#"+id).onchange=()=>loadManualLibrary(1);
+$("#standard-library-add-category").onclick=()=>openLibraryCategory("filter");
+$("#library-detail-add-category").onclick=()=>openLibraryCategory("detail");
+$("#library-category-close").onclick=()=>closeLibraryCategory();
+$("#library-category-dialog").addEventListener("cancel",event=>{event.preventDefault();closeLibraryCategory();});
+$("#library-category-form").onsubmit=saveLibraryNewCategory;
+$("#library-detail-close").onclick=()=>closeLibraryDetail();
+$("#library-detail-dialog").addEventListener("cancel",event=>{event.preventDefault();closeLibraryDetail();});
+$("#library-detail-edit").onclick=beginLibraryEdit;
+$("#library-edit-cancel").onclick=()=>{if(!state.busy && state.libraryDetail?.data){renderLibraryDetail(state.libraryDetail.data);setDialogError("#library-detail-error");}};
+for(const section of ["content","nutrition","uncertain"])$("#library-"+section+"-text").oninput=()=>changeLibrarySection(section);
+$("#library-full-text").oninput=changeLibraryFullText;
+for(const id of ["library-photo-dates","library-photo-arrival-check"])$("#"+id).onchange=toggleLibraryPhotoDates;
+$("#library-detail-form").addEventListener("input",event=>{if(!["library-edit-reviewer","library-edit-note","library-edit-confirm"].includes(event.target.id))invalidateLibraryPreview();});
+$("#library-edit-preview-button").onclick=previewLibraryChanges;
+$("#library-detail-form").onsubmit=saveLibraryChanges;
+$("#library-detail-remove").onclick=()=>previewLibraryState("remove");
+$("#library-detail-restore").onclick=()=>previewLibraryState("restore");
+$("#library-state-cancel").onclick=()=>{if(!state.busy){if(state.libraryDetail)state.libraryDetail.operation=null;$("#library-state-preview").hidden=true;}};
+$("#library-state-save").onclick=saveLibraryState;
+$("#library-detail-category-save").onclick=saveLibraryCategory;
+$("#library-detail-reload").onclick=()=>{const context=state.libraryDetail;if(context)openLibraryDetail(context.kind,context.key);};
+$("#library-detail-use").onclick=useLibraryStandard;
 for(const id of ["pending-standard-range","pending-standard-state"])$("#"+id).onchange=()=>{pendingNotice();loadPendingStandards(1);};
 $("#pending-standard-refresh").onclick=()=>{pendingNotice();loadPendingStandards(1);};
 $("#pending-standard-prev").onclick=()=>loadPendingStandards(Math.max(1,pendingStandardsPage-1));
