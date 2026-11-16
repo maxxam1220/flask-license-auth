@@ -26,6 +26,68 @@ def test_phone_formats_normalize_to_jpeg(kind):
         assert not decoded.getexif()
 
 
+def camera_jpeg():
+    """A JPEG with MPF auxiliary data, delivered by a camera as image/jpeg."""
+    raw = io.BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    exif[270] = "Private camera metadata"
+    primary = Image.new("RGB", (80, 40), "green")
+    primary.save(raw, format="MPO", save_all=True,
+                 append_images=[Image.new("RGB", (16, 16), "red")], exif=exif)
+    return raw.getvalue()
+
+
+def test_camera_mpf_jpeg_uses_primary_photo_and_strips_auxiliary_metadata():
+    raw = camera_jpeg()
+    with Image.open(io.BytesIO(raw)) as source:
+        assert source.format == "MPO" and source.n_frames == 2
+    result = process_uploads([FileStorage(stream=io.BytesIO(raw), filename="IMG_0001.JPG", content_type="image/jpeg")])[0]
+    assert result["mime_type"] == "image/jpeg" and result["size_bytes"] <= MAX_OUTPUT_BYTES
+    with Image.open(io.BytesIO(result["data"])) as photo:
+        assert photo.format == "JPEG" and photo.size == (40, 80)
+        assert getattr(photo, "n_frames", 1) == 1
+        assert not photo.getexif() and "mp" not in photo.info
+        r, g, b = photo.getpixel((20, 40))
+        assert g > r + 50 and g > b + 50  # The primary photo, never the red auxiliary.
+    assert b"Private camera metadata" not in result["data"] and b"MPF\0" not in result["data"]
+
+
+def test_camera_mpf_jpeg_does_not_bypass_pixel_limit(monkeypatch):
+    monkeypatch.setattr(images, "MAX_PIXELS", 1000)
+    with pytest.raises(PhotoValidationError, match="解析度過高"):
+        process_uploads([upload(camera_jpeg())])
+
+
+def test_camera_mpf_jpeg_never_decodes_auxiliary_frames(monkeypatch):
+    from PIL.MpoImagePlugin import MpoImageFile
+    original = MpoImageFile.seek
+    def primary_only(self, frame):
+        assert frame == 0, "Auxiliary camera frames must not be decoded"
+        return original(self, frame)
+    monkeypatch.setattr(MpoImageFile, "seek", primary_only)
+    assert len(process_uploads([upload(camera_jpeg())])) == 1
+
+
+@pytest.mark.parametrize("kind", ["PNG", "WEBP", "HEIF"])
+def test_camera_compatibility_does_not_enable_other_multiframe_uploads(kind):
+    raw = io.BytesIO()
+    Image.new("RGB", (30, 20), "blue").save(raw, format=kind, save_all=True,
+        append_images=[Image.new("RGB", (30, 20), "red")])
+    with pytest.raises(PhotoValidationError, match="單張靜態圖片"):
+        process_uploads([upload(raw.getvalue(), "renamed.jpg")])
+
+
+@pytest.mark.parametrize("kind", ["GIF", "BMP", "TIFF", "AVIF"])
+def test_renaming_other_formats_as_jpeg_does_not_bypass_validation(kind, caplog):
+    raw = io.BytesIO()
+    Image.new("RGB", (20, 20)).save(raw, format=kind)
+    with pytest.raises(PhotoValidationError, match="請使用 JPG"):
+        process_uploads([upload(raw.getvalue(), "private-name.jpg")])
+    assert f"photo_format_rejected format={kind} position=1" in caplog.text
+    assert "private-name" not in caplog.text
+
+
 def test_orientation_metadata_removed_and_dimensions_bounded():
     raw = io.BytesIO()
     exif = Image.Exif()

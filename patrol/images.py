@@ -1,5 +1,6 @@
 """Validate and normalize private inspection photos before database storage."""
 import io
+import logging
 import threading
 import warnings
 
@@ -13,8 +14,9 @@ MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_OUTPUT_BYTES = 400 * 1024
 MAX_PIXELS = 25_000_000
 MAX_DIMENSION = 1600
-ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "HEIF"}
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "HEIF", "MPO"}
 _PROCESSING_SLOT = threading.BoundedSemaphore(1)
+_LOGGER = logging.getLogger(__name__)
 
 
 class PhotoValidationError(ValueError):
@@ -60,10 +62,20 @@ def _process_uploads(files):
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
                 with Image.open(io.BytesIO(raw)) as source:
                     if source.format not in ALLOWED_FORMATS:
+                        # Decoder-owned format names only; never log private
+                        # filenames, notes, EXIF or the uploaded photo bytes.
+                        _LOGGER.warning("photo_format_rejected format=%s position=%s", source.format, position)
                         raise PhotoValidationError(f"{prefix}請使用 JPG、PNG、WebP 或 HEIC 格式。")
+                    # Phone JPEGs can carry MPF auxiliary images (for example
+                    # camera gain/depth data) and Pillow then identifies MPO.
+                    # Normalize only the primary photo, as for a normal JPEG;
+                    # never decode or retain its auxiliary frames/metadata.
+                    primary_jpeg = source.format == "MPO"
+                    if primary_jpeg:
+                        source.seek(0)
                     if source.width * source.height > MAX_PIXELS:
                         raise PhotoValidationError(f"{prefix}解析度過高，請縮小至 2,500 萬畫素以下再上傳。")
-                    if getattr(source, "n_frames", 1) > 1:
+                    if not primary_jpeg and getattr(source, "n_frames", 1) > 1:
                         raise PhotoValidationError(f"{prefix}請使用單張靜態圖片。")
                     source.load()
                     oriented = ImageOps.exif_transpose(source)
