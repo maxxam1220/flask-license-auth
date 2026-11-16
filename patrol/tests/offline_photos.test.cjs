@@ -69,7 +69,8 @@ test('new camera files become detached byte copies before storing and multipart 
 });
 
 for (const kind of ['rejects', 'incomplete', 'timeout']) test('unreadable camera ' + kind + ' cannot consume a round or create a queue item', async t => {
-  const h = await harness(t, { photoReadTimeout: 15 }), source = photo();
+  const env = Object.create(globalThis); env.FileReader = undefined; env.Response = undefined;
+  const h = await harness(t, { env, photoReadTimeout: 15 }), source = photo();
   source.arrayBuffer = () => kind === 'rejects' ? Promise.reject(new Error('Camera source gone')) :
     kind === 'incomplete' ? Promise.resolve(new ArrayBuffer(1)) : new Promise(() => {});
   await assert.rejects(h.core.enqueue({ ...input, photos: [source] }), error => error.code === 'photo_read' && /第 1 張照片.*尚未暫存/.test(error.message));

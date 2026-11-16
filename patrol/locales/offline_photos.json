@@ -34,5 +34,61 @@
   "暫存資料欄位不正確；資料仍保留，請聯絡管理員確認，勿刪除暫存。": {
     "id": "Kolom data tersimpan tidak valid. Data tetap tersimpan; hubungi admin dan jangan hapus catatan tersebut.",
     "vi": "Trường dữ liệu tạm không hợp lệ. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên và không xóa bản ghi tạm."
+  },
+  "重新選照片": {
+    "id": "Pilih ulang foto",
+    "vi": "Chọn lại ảnh"
+  },
+  "為 {code} 重新選照片": {
+    "id": "Pilih ulang foto untuk {code}",
+    "vi": "Chọn lại ảnh cho {code}"
+  },
+  "為 {code} 改用新選的 {count} 張照片？\n原巡檢時間、備註與異常內容保留。若伺服器已有紀錄，則確認收件，不覆蓋原照片。": {
+    "id": "Ganti foto {code} dengan {count} foto yang baru dipilih?\nWaktu pemeriksaan, catatan, dan laporan masalah tetap disimpan. Jika server sudah menerima catatan ini, foto aslinya tidak akan diganti.",
+    "vi": "Thay ảnh của {code} bằng {count} ảnh vừa chọn?\nGiữ nguyên thời gian kiểm tra, ghi chú và nội dung bất thường. Nếu máy chủ đã nhận bản ghi, ảnh gốc sẽ không bị thay thế."
+  },
+  "重新選照片需要確認；原照片與暫存仍保留。": {
+    "id": "Konfirmasi diperlukan untuk mengganti foto. Foto dan catatan asli tetap tersimpan.",
+    "vi": "Cần xác nhận để chọn lại ảnh. Ảnh và bản ghi tạm gốc vẫn được giữ."
+  },
+  "另一項補傳或照片處理尚未完成，請稍候。": {
+    "id": "Pengiriman atau pemrosesan foto lain belum selesai. Harap tunggu.",
+    "vi": "Đang gửi bản ghi hoặc xử lý ảnh khác. Vui lòng đợi."
+  },
+  "重新選照片前需連網確認收件狀態；原照片與暫存仍保留。": {
+    "id": "Hubungkan ke internet untuk memeriksa apakah catatan sudah diterima sebelum mengganti foto. Foto dan catatan asli tetap tersimpan.",
+    "vi": "Cần kết nối mạng để kiểm tra máy chủ đã nhận bản ghi chưa trước khi chọn lại ảnh. Ảnh và bản ghi tạm gốc vẫn được giữ."
+  },
+  "請至少選擇 1 張照片；原照片與暫存仍保留。": {
+    "id": "Pilih minimal 1 foto. Foto dan catatan asli tetap tersimpan.",
+    "vi": "Vui lòng chọn ít nhất 1 ảnh. Ảnh và bản ghi tạm gốc vẫn được giữ."
+  },
+  "這筆目前不需要重選照片，請重新確認待傳清單。": {
+    "id": "Catatan ini tidak memerlukan penggantian foto saat ini. Periksa kembali daftar yang belum terkirim.",
+    "vi": "Bản ghi này hiện không cần chọn lại ảnh. Hãy kiểm tra lại danh sách chờ gửi."
+  },
+  "無法確認伺服器收件狀態；原照片與暫存仍保留，請稍後重試。": {
+    "id": "Status penerimaan server belum dapat dipastikan. Foto dan catatan asli tetap tersimpan; coba lagi nanti.",
+    "vi": "Không thể xác nhận máy chủ đã nhận bản ghi chưa. Ảnh và bản ghi tạm gốc vẫn được giữ; hãy thử lại sau."
+  },
+  "照片已在其他分頁更新，請重新確認待傳清單。": {
+    "id": "Foto telah diperbarui di tab lain. Periksa kembali daftar yang belum terkirim.",
+    "vi": "Ảnh đã được cập nhật ở thẻ khác. Hãy kiểm tra lại danh sách chờ gửi."
+  },
+  "照片已重新保存，原巡檢時間、備註與異常內容保留；請按「同步待傳紀錄」。": {
+    "id": "Foto telah disimpan ulang. Waktu pemeriksaan, catatan, dan laporan masalah tetap sama. Tekan tombol sinkronisasi catatan tertunda.",
+    "vi": "Đã lưu lại ảnh, giữ nguyên thời gian kiểm tra, ghi chú và nội dung bất thường. Hãy nhấn nút đồng bộ bản ghi chờ gửi."
+  },
+  "伺服器已有這筆紀錄，已確認收件；新選的照片未覆蓋原紀錄。": {
+    "id": "Server sudah menerima catatan ini. Foto yang baru dipilih tidak mengganti catatan asli.",
+    "vi": "Máy chủ đã nhận bản ghi này. Ảnh vừa chọn không thay thế bản ghi gốc."
+  },
+  "帳號狀態已變更，請重新開啟點位。": {
+    "id": "Status akun telah berubah. Buka kembali titik pemeriksaan.",
+    "vi": "Trạng thái tài khoản đã thay đổi. Hãy mở lại điểm kiểm tra."
+  },
+  "暫存編號不正確；資料仍保留，請聯絡管理員。": {
+    "id": "ID catatan tersimpan tidak valid. Data tetap tersimpan; hubungi admin.",
+    "vi": "Mã bản ghi tạm không hợp lệ. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên."
   }
 }

@@ -145,6 +145,8 @@ html[data-offline-locale-pending] .offline-shell { visibility: hidden; }
 .offline-item-meta, .offline-item-message, .offline-queue time { font-size: 14px; line-height: 1.7; color: #657766; }
 .offline-item-message { margin: 8px 0 0; color: #80572e; }
 .offline-item-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.offline-queue-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+.offline-queue-actions > .button { min-height: 44px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .offline-state-pill { display: inline-flex; padding: 4px 9px; border-radius: 6px; font-size: 13px; font-weight: 650; color: #48634b; background: #eaf0e7; }
 .offline-state-pill[data-state="blocked"], .offline-state-pill[data-state="failed"] { background: #fff0d8; color: #805927; }
 .offline-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 25px; padding-top: 16px; border-top: 1px solid #dce5da; font-size: 12px; color: #7a887a; }

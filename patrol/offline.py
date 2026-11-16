@@ -264,16 +264,42 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                        server_time=iso(instant), day=day.isoformat(), capture_until=iso(capture_until),
                        sync_until=iso(sync_until), csrf_token=csrf_token(), points=rows)
 
-    def receipt(row, status):
+    def receipt(row, status, **extra):
         endpoint = "execution_success" if row.execution_id else "checkin_success"
         args = {"execution_id": row.execution_id} if row.execution_id else {"record_id": row.inspection_id}
         return jsonify(ok=True, status=status, client_id=row.client_id,
                        receipt_url=url_for(endpoint, **args), record_id=row.execution_id or row.inspection_id,
-                       received_at=iso(row.received_at), observed_at=iso(row.observed_at))
+                       received_at=iso(row.received_at), observed_at=iso(row.observed_at), **extra)
 
     def prior_submission(user, client_id):
         return db.session.scalar(select(OfflineSubmission).where(
             OfflineSubmission.user_id == user.id, OfflineSubmission.client_id == client_id))
+
+    @app.get("/api/offline/receipt/<client_uuid>")
+    def offline_receipt_status(client_uuid):
+        """Read only: settle lost ACKs before a user repairs local attachments.
+
+        A receipt confirms the already stored record, never the newly selected
+        photos. The original sync still compares the complete payload hash.
+        """
+        client_id = client_uuid
+        user, binding, error = actor()
+        if error:
+            return error
+        current_owner = owner(user, binding)
+        if request.args.get("owner") != current_owner:
+            return fail("owner_changed", "帳號權限或手機綁定已變更，這批暫存無法自動同步；請聯絡管理員。", 403)
+        try:
+            if str(UUID(client_id)) != client_id:
+                raise ValueError("invalid visit identifier")
+        except (ValueError, TypeError, AttributeError):
+            return fail("invalid_receipt_id", "暫存編號不正確；資料仍保留，請聯絡管理員。", 400)
+        previous = prior_submission(user, client_id)
+        if previous:
+            if previous.binding_id != binding.id:
+                return fail("owner_changed", "帳號權限或手機綁定已變更，這批暫存無法自動同步；請聯絡管理員。", 403)
+            return receipt(previous, "already_synced", owner=current_owner)
+        return jsonify(ok=True, status="not_received", client_id=client_id, owner=current_owner)
 
     @app.post("/api/offline/sync")
     def offline_sync():

@@ -98,19 +98,32 @@
         const item = photos[index], blob = saved ? item?.blob : item;
         const message = saved ? `第 ${index + 1} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。` :
           `第 ${index + 1} 張照片無法完整讀取，尚未暫存；請重新選擇照片後再按 OK。`;
-        let timeout, reader;
+        let timeout, reader, expired = false;
         try {
           if (!blob || !Number.isInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
               (saved && blob.size !== item.size)) throw new Error('Invalid stored photo size');
-          const read = typeof blob.arrayBuffer === 'function' ? () => blob.arrayBuffer() :
-            typeof env.FileReader === 'function' ? () => new Promise((resolve, reject) => {
+          const readers = [];
+          if (typeof blob.arrayBuffer === 'function') readers.push(() => blob.arrayBuffer());
+          if (typeof env.FileReader === 'function') readers.push(() => new Promise((resolve, reject) => {
               reader = new env.FileReader(); reader.onload = () => resolve(reader.result);
               reader.onerror = reader.onabort = () => reject(new Error('Photo read failed'));
               reader.readAsArrayBuffer(blob);
-            }) : typeof env.Response === 'function' ? () => new env.Response(blob).arrayBuffer() :
-              () => Promise.reject(new Error('Photo reading unavailable'));
-          const buffer = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
-            timeout = timers.setTimeout(() => { reject(new Error('Photo read timed out')); try { reader?.abort(); } catch (_) {} }, photoReadTimeout);
+            }));
+          if (typeof env.Response === 'function') readers.push(() => new env.Response(blob).arrayBuffer());
+          // Some phone browsers expose arrayBuffer but fail on a camera File.
+          // Try another reader without multiplying the per-photo deadline.
+          const read = async () => {
+            for (const attempt of readers) {
+              if (expired) break;
+              try {
+                const bytes = await attempt();
+                if (Object.prototype.toString.call(bytes) === '[object ArrayBuffer]' && bytes.byteLength === blob.size) return bytes;
+              } catch (_) { /* Try the next native reader with the same bytes. */ }
+            }
+            throw new Error('Photo reading unavailable');
+          };
+          const buffer = await Promise.race([read(), new Promise((_, reject) => {
+            timeout = timers.setTimeout(() => { expired = true; reject(new Error('Photo read timed out')); try { reader?.abort(); } catch (_) {} }, photoReadTimeout);
           })]);
           if (Object.prototype.toString.call(buffer) !== '[object ArrayBuffer]' || buffer.byteLength !== blob.size) throw new Error('Incomplete photo bytes');
           // Materialize phone camera Files before clearing the form. A File's
@@ -125,7 +138,7 @@
     }
     let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false,
       supported: !capabilityError, supportMessage: capabilityError?.message || '' };
-    let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', messageSource = null, privacyHold = false;
+    let epoch = 0, syncController, syncing = false, repairing = false, cancelled = false, syncState = {}, message = '', messageSource = null, privacyHold = false;
     const setMessage = (value, source = null) => { message = value; messageSource = source; };
     const requests = new Set();
     const abortRequests = () => { for (const controller of requests) controller.abort(); };
@@ -149,7 +162,7 @@
     function hidePrivateState(storageUnavailable = false) {
       state = { ...state, locked: true, prepared: false, identity: null, owner: null, queue: [], receipts: [], pending: 0, blocked: 0,
         day: '', captureUntil: '', syncUntil: '', storageUnavailable: Boolean(storageUnavailable && !privacyHold),
-        sync: { ...syncState, current: '', running: syncing }, message };
+        sync: { ...syncState, current: '', running: syncing || repairing }, message };
       announce();
     }
     function database() {
@@ -218,12 +231,16 @@
       // Only the pending notice created for this local UUID may advance when
       // another tab confirms it. Auth, preparation and error notices win.
       if (messageSource?.kind === 'local-save' && receipts.some(row => row.client_id === messageSource.client_id)) setMessage('已同步完成');
+      if (messageSource?.kind === 'photo-repair') {
+        const accepted = receipts.find(row => row.client_id === messageSource.client_id);
+        if (accepted) setMessage(photoRevision(accepted) === messageSource.photo_revision ? '已同步完成' : EXISTING_PHOTO_RECEIPT);
+      }
       state = { locked: !manifest || Boolean(active?.locked), prepared: fresh(manifest), supported: true, supportMessage: '', storageUnavailable: false, identity: manifest?.identity || null,
         owner: manifest?.owner || null, revision: active?.revision || 0, day: manifest?.day || '', captureUntil: manifest?.capture_until || '', syncUntil: manifest?.sync_until || '',
         needsChecklistUpdate: Boolean(manifest && !checklistCapable(manifest)),
         online: navigator.onLine !== false, pending: queue.length, blocked: queue.filter(row => row.status === 'blocked').length,
         queue, receipts,
-        sync: { ...syncState, current: manifest ? syncState.current : '', running: syncing }, message };
+        sync: { ...syncState, current: manifest ? syncState.current : '', running: syncing || repairing }, message };
       announce(); return state;
     }
     async function lock(reason = '', expected = null) {
@@ -378,7 +395,7 @@
     }
     async function remove(client_id, confirmation) {
       if (confirmation !== true) throw fault('confirm', '刪除本機紀錄需要明確確認。');
-      if (syncing) throw fault('busy', '請先停止補傳，再刪除本機紀錄。');
+      if (syncing || repairing) throw fault('busy', '請先停止補傳，再刪除本機紀錄。');
       await transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
         const { manifest } = current(data), row = data.queue.find(item => item.client_id === client_id);
         const lease = data.meta.find(item => item.key === 'sync');
@@ -409,9 +426,97 @@
         if (mutation) mutation(tx, row); done(row);
       }));
     }
+    const photoRevision = row => row?.photo_revision || 0;
+    const EXISTING_PHOTO_RECEIPT = '伺服器已有這筆紀錄，已確認收件；新選的照片未覆蓋原紀錄。';
+    async function inspectReceipt(client_id, owner, revision) {
+      const { response, json } = await network('/api/offline/receipt/' + encodeURIComponent(client_id) + '?owner=' + encodeURIComponent(owner));
+      if ([401, 403].includes(response.status) || (response.ok && json?.ok === true && json.owner !== owner)) {
+        await lock('登入或手機綁定已變更，請用原帳號重新登入後補傳。', { owner, revision });
+        throw fault('owner', '登入或手機綁定已變更，待補傳資料仍保留。');
+      }
+      if (!response.ok || json?.ok !== true || json.owner !== owner || json.client_id !== client_id ||
+          !['not_received', 'already_synced'].includes(json.status)) {
+        throw fault('response', json?.message_source || json?.message || '無法確認伺服器收件狀態；原照片與暫存仍保留，請稍後重試。');
+      }
+      return json;
+    }
+    async function settleKnownReceipt(row, owner, json, startEpoch, revision) {
+      return transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
+        const { active, manifest } = current(data), currentRow = data.queue.find(item => item.client_id === row.client_id);
+        if (epoch !== startEpoch || cancelled || !manifest || manifest.owner !== owner || active.revision !== revision || currentRow?.owner !== owner) {
+          if (!currentRow && manifest?.owner === owner && active.revision === revision && epoch === startEpoch && !cancelled) return done(false);
+          return fail(fault('owner', '帳號已變更，已停止補傳。'));
+        }
+        tx.objectStore('receipts').put({ client_id: row.client_id, owner, token: row.token, slot: row.slot, day: row.day,
+          code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, observed_at: row.observed_at,
+          ack: json, received_ms: now(), ...savedChecklist(row) });
+        tx.objectStore('queue').delete(row.client_id); done(true);
+      }));
+    }
+    async function repairPhotos(client_id, files, confirmation) {
+      requireSupport();
+      if (confirmation !== true) throw fault('confirm', '重新選照片需要確認；原照片與暫存仍保留。');
+      if (syncing || repairing) throw fault('busy', '另一項補傳或照片處理尚未完成，請稍候。');
+      if (navigator.onLine === false) throw fault('offline', '重新選照片前需連網確認收件狀態；原照片與暫存仍保留。');
+      const selected = Array.from(files || []); validatePhotos(selected);
+      if (!selected.length) throw fault('photos', '請至少選擇 1 張照片；原照片與暫存仍保留。');
+      repairing = true; cancelled = false;
+      const startEpoch = epoch; let owner, revision, leaseHeld = false;
+      const checkActive = () => {
+        if (epoch !== startEpoch) throw fault('owner', '帳號已變更，已停止補傳。');
+        if (cancelled) throw fault('cancelled', '已停止補傳，尚未確認的資料仍保留。');
+      };
+      syncState = { phase: 'checking', current: '', elapsed: 0, total: 1, processed: 0, saved: 0, failed: 0 };
+      try {
+        await refresh(); checkActive(); owner = state.owner; revision = state.revision;
+        if (!owner || state.locked) throw fault('locked', '請先連線登入原帳號，再補傳。');
+        leaseHeld = await lease(owner);
+        if (!leaseHeld) throw fault('busy', '另一個分頁正在補傳，請稍候。');
+        const row = await ownedEntry(client_id, owner); checkActive();
+        if (!row || row.stage !== 'inspect' || !row.photos?.length || !['retry', 'blocked'].includes(row.status)) {
+          throw fault('stale', '這筆目前不需要重選照片，請重新確認待傳清單。');
+        }
+        syncState.current = row.code; await refresh();
+        const receipt = await inspectReceipt(client_id, owner, revision); checkActive();
+        if (receipt.status === 'already_synced') {
+          await settleKnownReceipt(row, owner, receipt, startEpoch, revision);
+          setMessage(EXISTING_PHOTO_RECEIPT); syncState.saved = 1;
+          return { status: 'already_synced', client_id };
+        }
+        const copies = await copyPhotos(selected); checkActive();
+        if (!await lease(owner)) throw fault('busy', '另一個分頁正在補傳，請稍候。');
+        checkActive();
+        await transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
+          const { active, manifest } = current(data), item = data.queue.find(value => value.client_id === client_id);
+          const held = data.meta.find(value => value.key === 'sync');
+          if (epoch !== startEpoch || cancelled || !manifest || manifest.owner !== owner || active.revision !== revision || item?.owner !== owner) {
+            return fail(fault('owner', '帳號狀態已變更，請重新開啟點位。'));
+          }
+          if (held?.tab !== tabId || held.until <= now()) return fail(fault('busy', '另一個分頁正在補傳，請稍候。'));
+          if (photoRevision(item) !== photoRevision(row)) return fail(fault('stale', '照片已在其他分頁更新，請重新確認待傳清單。'));
+          const otherBytes = data.queue.filter(value => value.client_id !== client_id).reduce((sum, value) =>
+            sum + (value.photos || []).reduce((total, photo) => total + (photo.size || 0), 0), 0);
+          if (otherBytes + copies.reduce((sum, photo) => sum + photo.size, 0) > MAX_QUEUE_BYTES) {
+            return fail(fault('storage', '手機儲存空間不足，這筆尚未保存。請先補傳既有紀錄；原表單與照片仍保留。'));
+          }
+          // The immutable capture identity and all inspection evidence remain.
+          // Only an explicit, server-checked photo reselection changes bytes.
+          item.photos = copies; item.photo_revision = photoRevision(item) + 1;
+          item.status = 'pending'; item.error = ''; item.retryable = true;
+          tx.objectStore('queue').put(item); done(true);
+        }));
+        setMessage('照片已重新保存，原巡檢時間、備註與異常內容保留；請按「同步待傳紀錄」。',
+          { kind: 'photo-repair', client_id, photo_revision: photoRevision(row) + 1 });
+        return { status: 'repaired', client_id };
+      } finally {
+        repairing = false; syncState.phase = 'idle';
+        try { if (leaseHeld) await lease(owner, true); } catch (_) { /* A future lease expires; never erase a preserved draft. */ }
+        broadcast(); try { await refresh(); } catch (_) { hidePrivateState(true); }
+      }
+    }
     async function synchronize(selection = {}) {
       requireSupport();
-      if (syncing) return state;
+      if (syncing || repairing) return state;
       if (navigator.onLine === false) { setMessage('目前沒有網路，資料仍保留在此手機。'); return refresh(); }
       // Claim synchronously: two clicks can otherwise both pass the guard
       // while their first IndexedDB reads are still in flight.
@@ -444,12 +549,22 @@
           syncState.current = row.code; syncState.phase = 'uploading'; await refresh();
           if (cancelled || epoch !== startEpoch) break;
           try {
+            if (photoRevision(row)) {
+              const known = await inspectReceipt(id, owner, revision);
+              if (cancelled || epoch !== startEpoch) break;
+              if (known.status === 'already_synced') {
+                await settleKnownReceipt(row, owner, known, startEpoch, revision);
+                syncState.saved++; syncState.processed++; syncState.existingPhotoReceipt = true;
+                broadcast(); await refresh(); continue;
+              }
+            }
             const photos = await copyPhotos(row.photos, true);
             if (cancelled || epoch !== startEpoch) break;
             // Reading a large camera image may outlast a lease in a suspended
             // tab. Check ownership again before uploading the immutable bytes.
             if (!await lease(owner)) break;
-            if (!await ownedEntry(id, owner)) { syncState.processed++; continue; }
+            const latestRow = await ownedEntry(id, owner);
+            if (!latestRow || photoRevision(latestRow) !== photoRevision(row)) { syncState.processed++; continue; }
             if (cancelled || epoch !== startEpoch) break;
             const Form = options.FormData || env.FormData, body = new Form();
             const entry = { client_id: row.client_id, owner: row.owner, token: row.token, grant: row.grant, slot: row.slot,
@@ -465,17 +580,20 @@
             const acknowledged = response.ok && json?.ok === true && ['saved', 'already_synced'].includes(json.status) && json.client_id === id;
             if (acknowledged) {
               // ACK is durable together with removal. Losing this transaction safely retries the same UUID.
-              await transaction(['queue', 'receipts'], 'readwrite', (tx, done, fail) => {
+              const photoChanged = await transaction(['queue', 'receipts'], 'readwrite', (tx, done, fail) => {
                 const request = tx.objectStore('queue').get(id);
                 request.onsuccess = () => { try {
                   if (request.result?.owner === owner) {
                     tx.objectStore('receipts').put({ client_id: id, owner, token: row.token, slot: row.slot, day: row.day,
-                      code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, observed_at: row.observed_at, ack: json, received_ms: now(), ...savedChecklist(row) });
+                      code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, observed_at: row.observed_at,
+                      photo_revision: photoRevision(row), ack: json, received_ms: now(), ...savedChecklist(row) });
                     tx.objectStore('queue').delete(id);
+                    return done(photoRevision(request.result) !== photoRevision(row));
                   }
-                  done(true);
+                  done(false);
                 } catch (error) { fail(error); } };
               });
+              if (photoChanged) syncState.existingPhotoReceipt = true;
               syncState.saved++;
             } else {
               const reason = json?.message_source || json?.message || '伺服器未確認這筆紀錄，資料仍保留，請重試。';
@@ -486,18 +604,22 @@
                 await lock(reason, { owner, revision }); throw fault('owner', reason);
               }
               const retryable = response.status >= 500 || json?.retryable !== false || json?.ok === true;
-              await ownedEntry(id, owner, (tx, item) => { item.status = retryable ? 'retry' : 'blocked'; item.error = reason; item.retryable = retryable; tx.objectStore('queue').put(item); });
+              await ownedEntry(id, owner, (tx, item) => { if (photoRevision(item) !== photoRevision(row)) return;
+                item.status = retryable ? 'retry' : 'blocked'; item.error = reason; item.retryable = retryable; tx.objectStore('queue').put(item); });
               syncState.failed++;
             }
           } catch (error) {
             if (epoch !== startEpoch || error.code === 'owner') throw error;
-            await ownedEntry(id, owner, (tx, item) => { item.status = 'retry'; item.error = error.message || '連線失敗，資料仍保留。'; item.retryable = true; tx.objectStore('queue').put(item); });
+            await ownedEntry(id, owner, (tx, item) => { if (photoRevision(item) !== photoRevision(row)) return;
+              item.status = 'retry'; item.error = error.message || '連線失敗，資料仍保留。'; item.retryable = true; tx.objectStore('queue').put(item); });
             syncState.failed++;
             if (['timeout', 'cancelled', 'offline'].includes(error.code) || error instanceof TypeError) { syncState.processed++; break; }
           }
           syncState.processed++; broadcast(); await refresh();
         }
-        setMessage(cancelled ? '已停止補傳，尚未確認的資料仍保留。' : `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`);
+        setMessage(cancelled ? '已停止補傳，尚未確認的資料仍保留。' : syncState.existingPhotoReceipt ?
+          EXISTING_PHOTO_RECEIPT :
+          `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`);
       } catch (error) {
         setMessage(error.message || '無法連線，待補傳資料仍保留。');
         if (!cancelled && !['cancelled', 'busy'].includes(error.code)) syncState.errorCode = error.code || 'network';
@@ -518,7 +640,7 @@
       if (navigator.onLine === false) requireSupport();
       return navigator.onLine === false ? '/offline?point=' + encodeURIComponent(path.slice(3)) : path;
     }
-    return { prepare, getState: refresh, getPoint, enqueue, sync: synchronize, lock, remove, route, cancelSync,
+    return { prepare, getState: refresh, getPoint, enqueue, sync: synchronize, repairPhotos, lock, remove, route, cancelSync,
       subscribe(fn) { listeners.add(fn); fn(state); return () => listeners.delete(fn); },
       async close() { try { channel?.close(); } catch (_) {} const db = await dbPromise; db?.close(); },
       async matchIdentity(id, version) { await refresh(); if (state.identity && (String(state.identity.id) !== String(id) || String(state.identity.auth_version) !== String(version))) await lock('帳號已變更，請重新準備離線資料。'); return state; } };
@@ -590,7 +712,8 @@
       pointGeneration = 0, previewURLs = [], selectedOwner, viewOwner, selectedSnapshot, normalProgress,
       navigationAllowed = false, pageActive = true, pageEpoch = 0, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, uiSyncing = false, updatingLocale = false,
       checklistUIKey = '', checklistLocale = '';
-    let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null;
+    let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null,
+      photoReselection = null;
     const savedResultPanels = new Map();
     const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
     const uiPreferencesFromIdentity = identity => ({ ui_language: identity.ui_language,
@@ -842,7 +965,14 @@
       }
       const list = one('queue');
       const nextQueueSignature = JSON.stringify([state.queue, Boolean(state.sync?.running), root.PatrolI18n?.getLocale()]);
-      if (list && queueSignature !== nextQueueSignature) {
+      // Keep a camera File's owning input attached while its bytes are being
+      // verified and copied. Busy-state rendering must not replace that node.
+      // Account locking/change takes priority over preserving private UI.
+      const keepPhotoInput = list && photoReselection && list.contains(photoReselection.input) &&
+        !state.locked && state.owner === photoReselection.owner;
+      if (keepPhotoInput) {
+        for (const action of list.querySelectorAll('button')) action.disabled = Boolean(state.sync?.running);
+      } else if (list && queueSignature !== nextQueueSignature) {
         queueSignature = nextQueueSignature;
         list.replaceChildren();
         for (const row of state.queue) {
@@ -863,7 +993,33 @@
             checklist.textContent = checklistLabel(snapshot.title) + ' · ' + (snapshot.items || []).filter(choice => selected.has(choice.id)).map(choice => checklistLabel(choice.label)).join('、');
             item.append(checklist);
           }
-          item.append(remove); list.append(item);
+          const actions = document.createElement('div'); actions.className = 'offline-queue-actions';
+          if (!row.stale_owner && row.stage === 'inspect' && row.photo_count > 0 && ['retry', 'blocked'].includes(row.status)) {
+            const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'button button-small offline-photo-repair';
+            repair.textContent = t('重新選照片'); repair.disabled = Boolean(state.sync?.running);
+            const choose = document.createElement('input'); choose.type = 'file'; choose.multiple = true; choose.hidden = true;
+            choose.accept = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
+            choose.setAttribute('aria-label', t('為 {code} 重新選照片', { code: row.code }));
+            repair.addEventListener('click', () => choose.click());
+            choose.addEventListener('change', async () => {
+              if (photoReselection) return;
+              const files = Array.from(choose.files || []);
+              if (!files.length) return;
+              try {
+                validatePhotos(files);
+                if (!confirm(t('為 {code} 改用新選的 {count} 張照片？\n原巡檢時間、備註與異常內容保留。若伺服器已有紀錄，則確認收件，不覆蓋原照片。', { code: row.code, count: files.length }))) return;
+                photoReselection = { input: choose, owner: state.owner };
+                localNotice = null; await core.repairPhotos(row.client_id, files, true);
+              } catch (error) { reportError(error); }
+              finally {
+                choose.value = '';
+                if (photoReselection?.input === choose) photoReselection = null;
+                if (latestState) render(latestState);
+              }
+            });
+            actions.append(repair, choose);
+          }
+          actions.append(remove); item.append(actions); list.append(item);
         }
       }
       showPoint().catch(reportError);
