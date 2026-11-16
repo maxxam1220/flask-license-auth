@@ -1215,7 +1215,7 @@ function buildResultRows(checks, ocrLines) {
   }
   return [...rows.values()].sort((a,b) => rank[a.status] - rank[b.status]);
 }
-function isNutritionCheck(check){return (check?.source==="logic" || !check?.source) && /^nutrition_/.test(check?.key || "");}
+function isNutritionCheck(check){return check?.incomplete_standard===true || ((check?.source==="logic" || !check?.source) && /^nutrition_/.test(check?.key || ""));}
 function nutritionProblemRows(result){return (result.checks || []).filter(check=>isNutritionCheck(check) && ["fail","review"].includes(check.status)).map(check=>({id:`logic-${check.key}`,status:check.status,text:check.label || "營養數值檢查",checks:[check],line_ids:[],logicKey:check.key}));}
 function groupedResultRows(rows,displayRows){
   if(!Array.isArray(displayRows) || !displayRows.length)return rows;

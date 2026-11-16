@@ -7,10 +7,10 @@ import unicodedata
 from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
                             date_evidence_overlaps, without_date_evidence)
-from text_rows import group_observed_rows, nutrition_label
+from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.11"
+RULE_VERSION = "1.12"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -219,6 +219,37 @@ def _text_checks(lines, source):
     expected_groups = [group for group in expected_groups if group.get("assembled_nutrition") or
         not any(group["ids"] <= row["ids"] for row in assembled_expected)]
     actual_groups = _groups(lines)
+    legacy_rows, legacy_actual = [], []
+    # Older manual references saved individual OCR cells, sometimes after
+    # deduplication. A new complete observed row cannot be compared with a
+    # nutrient heading or one unassigned numeric cell as if both were rows.
+    if (source or {}).get("source_kind") == "manual" and any(_prepared(row["text"]) == "營養標示" for row in source_rows) and any(
+            re.search(r"每(?:100|一百)(?:公克|毫升|克|g|ml)", _prepared(row["text"]), re.I) for row in source_rows):
+        full_actual = [group for group in actual_groups if nutrition_label(group["text"]) and
+                       len(NUMBER_CELL.findall(_prepared(group["text"]))) >= 2 and
+                       (len(group["lines"]) == 1 or group.get("assembled_nutrition"))]
+        singleton_ids = {group["lines"][0]["id"] for group in expected_groups if len(group["lines"]) == 1}
+        inside, after_header = False, False
+        for row in source_rows:
+            if re.search(r"每(?:100|一百)(?:公克|毫升|克|g|ml)", _prepared(row["text"]), re.I):
+                inside, after_header = False, True
+                continue
+            if not after_header:
+                continue
+            label = nutrition_label(row["text"])
+            numeric = NUMBER_CELL.fullmatch(_prepared(row["text"]))
+            if label:
+                inside = True
+            elif inside and not numeric:
+                inside, after_header = False, False
+            if not inside or row["id"] not in singleton_ids or not full_actual:
+                continue
+            matches = [group for group in full_actual if nutrition_label(group["text"]) == label] if label else []
+            if numeric or (matches and len(NUMBER_CELL.findall(_prepared(row["text"]))) < 2):
+                legacy_rows.append(row)
+                legacy_actual.extend(matches)
+        legacy_ids = {row["id"] for row in legacy_rows}
+        expected_groups = [group for group in expected_groups if not group["ids"] & legacy_ids]
     used_source, used_actual, checks, fields, keys = set(), set(), [], {}, set()
 
     def usable(expected, actual):
@@ -293,6 +324,18 @@ def _text_checks(lines, source):
             record(expected, actual, ambiguous)
         else:
             record(expected)
+    if legacy_rows:
+        # No numeric fragment is assigned to a nutrient/column by value. Only
+        # matching observed nutrient names provide optional photo locations.
+        observed = {tuple(sorted(group["ids"], key=str)): group for group in legacy_actual}
+        identifiers = list(dict.fromkeys(item["id"] for group in observed.values() for item in group["lines"]))
+        checks.append({"key":"source_nutrition_legacy", "label":"舊營養標準待整理", "status":"review",
+            "reason":"舊標準未包含完整營養列，請管理員依照片重新整理並核准。",
+            "expected":"\n".join(row["text"] for row in legacy_rows),
+            "actual":"\n".join(group["text"] for group in observed.values()),
+            "line_ids":identifiers, "source_line_ids":[row["id"] for row in legacy_rows],
+            "score":None, "source":"database", "diff":[], "incomplete_standard":True})
+        used_actual.update(identifiers)
     return checks, fields, used_actual
 
 
