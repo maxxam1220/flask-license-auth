@@ -99,7 +99,9 @@ class ManualReferenceTests(unittest.TestCase):
         self.assertEqual(data["manual_revision"], final["revision"])
         self.assertEqual(data["draft_basis"], "manual_correction")
         self.assertEqual((data["suggested_name"], data["suggested_sku"]), ("確認蘋果", "NEW-002"))
-        self.assertEqual(data["draft_lines"], [{"id": 0, "text": "品名：確認蘋果"}, {"id": 1, "text": "貨號：NEW-002"}])
+        self.assertEqual([{key: row[key] for key in ("id","text")} for row in data["draft_lines"]],
+                         [{"id": 0, "text": "品名：確認蘋果"}, {"id": 1, "text": "貨號：NEW-002"}])
+        self.assertEqual([row["source_line_ids"] for row in data["draft_lines"]], [[0],[1]])
         self.assertEqual(data["excluded_date_lines"], [{"id": 3, "text": "有效日期：2026.11.16"}])
         self.assertEqual({row["id"]: row["kind"] for row in data["excluded_unconfirmed_lines"]}, {2: "label_misprint", 4: "uncertain"})
         self.assertEqual(data["ocr_lines"], self.original["ocr"]["lines"])

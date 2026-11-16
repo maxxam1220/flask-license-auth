@@ -1,12 +1,19 @@
 """Evidence-only additions shared by first scan and human-corrected rechecks."""
 from collections import Counter
 from barcode_checks import checks_for
+from nutrition_checks import checks_for as nutrition_checks
+from text_rows import group_observed_rows
 
 
 def augment(result, ocr):
     # Re-evaluation is idempotent; never re-use conclusions from another OCR pass.
-    checks=[x for x in result.get("checks",[]) if not x.get("key","").startswith(("barcode_", "cloud_word_", "photo_scope"))]
+    checks=[x for x in result.get("checks",[]) if x.get("source")=="database" or
+            not x.get("key","").startswith(("barcode_", "cloud_word_", "photo_scope", "nutrition_"))]
     checks.extend(checks_for(ocr))
+    checks.extend(nutrition_checks(ocr))
+    result["display_rows"] = [{key: row[key] for key in
+        ("id", "text", "source_line_ids", "box", "confidence_ok", "row_type")}
+        for row in group_observed_rows(ocr.get("lines", []))]
     if ocr.get("label_scope",{}).get("status")=="multiple":
         checks.append({"key":"photo_scope", "label":"標籤範圍", "status":"review", "actual":"偵測到多張可能的貼紙",
             "reason":"請裁切要檢查的那一張，避免混用不同貼紙的文字。", "line_ids":[]})

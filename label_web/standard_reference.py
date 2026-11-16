@@ -105,7 +105,7 @@ def _product_rows(source):
 
 def changed_snapshot(base, current, changes):
     from label_source import _fixed_barcodes
-    if not isinstance(changes, dict) or set(changes) - {"name", "lines", "keep_days", "date_settings"}:
+    if not isinstance(changes, dict) or set(changes) - {"name", "lines", "replace_lines", "keep_days", "date_settings"}:
         abort(400, description="標準只可修改品名、既有文字列、保存天數及日期位移。")
     result = deepcopy(current)
     result.pop("standard_reference", None)
@@ -114,6 +114,32 @@ def changed_snapshot(base, current, changes):
     original_product_rows = _product_rows(current)
     rows = {str(row["id"]): row for row in result.get("lines", [])}
     changed_ids = set()
+    replacing = "replace_lines" in changes
+    if replacing:
+        if result.get("source_kind") != "manual" or "lines" in changes:
+            abort(400, description="整份文字替換只適用人工文字標準，且不可同時傳送逐列修改。")
+        supplied = changes["replace_lines"]
+        if not isinstance(supplied, list) or not 1 <= len(supplied) <= 150:
+            abort(400, description="請提供 1 至 150 行完整標準文字；空白行請直接刪除。")
+        from manual_reference import fixed_line_text
+        replacements, used = [], set()
+        for index, item in enumerate(supplied):
+            if not isinstance(item, dict) or set(item) != {"text"}:
+                abort(400, description="整份文字的每行只能提供 text。")
+            value = fixed_line_text(item["text"])
+            prior = [row for row in current.get("lines", []) if row["text"] == value]
+            # Reuse only a unique unchanged row's ID. New/merged/split rows get
+            # IDs that cannot point a historical highlight at a different row.
+            if len(prior)==1 and str(prior[0]["id"]) not in used:
+                identifier = prior[0]["id"]
+            else:
+                seed=json.dumps([current.get("revision"),index,value],ensure_ascii=False)
+                identifier="web_"+hashlib.sha256(seed.encode()).hexdigest()[:24]
+            used.add(str(identifier))
+            replacements.append({"id":identifier,"text":value,"score":1.,"box":[]})
+        result["lines"] = replacements
+        rows = {str(row["id"]):row for row in replacements}
+        changed_ids = set(rows)
     if "lines" in changes:
         if not isinstance(changes["lines"], list) or len(changes["lines"]) > len(rows):
             abort(400, description="文字列修改格式不正確。")
@@ -124,11 +150,39 @@ def changed_snapshot(base, current, changes):
             if identifier not in rows or identifier in changed_ids:
                 abort(400, description="文字列不存在或重複，請重新載入標準。")
             barcode_row = identifier in {str(value) for value in result.get("catalog_barcode_line_ids", [])} or bool(_fixed_barcodes(rows[identifier]["text"]))
+            if isinstance(patch["text"], str) and not patch["text"].strip():
+                from source_validation import _kind, DATE_KEYS
+                if result.get("source_kind") != "manual" and (barcode_row or _kind(rows[identifier]["text"]) in DATE_KEYS
+                        or any(str(row["id"])==identifier for row in original_product_rows)):
+                    abort(400, description="系統或清單來源的品名、條碼及日期欄不可刪除；可修正其內容。")
+                del rows[identifier]
+                changed_ids.add(identifier)
+                continue
             rows[identifier]["text"] = _fixed_text(_text(patch["text"], "標準文字"), allow_numeric_barcode=barcode_row)
             changed_ids.add(identifier)
-    if "name" in changes:
+        result["lines"]=[row for row in result["lines"] if str(row["id"]) in rows]
+        if not result["lines"]:
+            abort(400, description="標準至少須保留一行文字。")
+    if replacing:
+        heading=r"^\s*(?:產品名稱|商品名稱|產品品名|品名)\s*[：:]?\s*"
+        named=[row for row in result["lines"] if re.match(heading,row["text"])]
+        names={re.sub(heading,"",row["text"],count=1).strip() for row in named}
+        if len(names)>1 or "" in names:
+            abort(400, description="標準中的品名不一致或空白，請確認後再儲存。")
+        name=_fixed_text(_text(changes["name"],"品名",200)) if "name" in changes else next(iter(names),result["name"])
+        if names and names != {name}:
+            abort(400, description="品名與完整標準文字不一致，請一併修正。")
+        prior_names={normalize_text(row["text"]) for row in original_product_rows}
+        if any(normalize_text(row["text"]) in prior_names and normalize_text(row["text"]) != normalize_text(name)
+               for row in result["lines"]):
+            # Full replacement is authoritative: never silently rewrite a
+            # retained bare product name or revive a deliberately deleted row.
+            abort(400, description="完整標準文字仍保留舊品名，請與品名欄一併修正。")
+        result["name"]=name
+    elif "name" in changes:
         name = _fixed_text(_text(changes["name"], "品名", 200))
-        if not original_product_rows:
+        original_product_rows=[row for row in original_product_rows if str(row["id"]) in rows]
+        if not original_product_rows and result.get("source_kind") != "manual":
             abort(400, description="找不到原標準的品名文字列，請先確認來源資料。")
         for original in original_product_rows:
             target = rows[str(original["id"])]
@@ -138,9 +192,9 @@ def changed_snapshot(base, current, changes):
                 abort(400, description="品名與品名文字列的修改內容不一致。")
             target["text"] = value
         result["name"] = name
-    elif original_product_rows and any(str(row["id"]) in changed_ids for row in original_product_rows):
+    elif original_product_rows and any(str(row["id"]) in changed_ids and str(row["id"]) in rows for row in original_product_rows):
         names = {re.sub(r"^\s*(?:產品名稱|商品名稱|產品品名|品名)\s*[：:]?\s*", "", rows[str(row["id"])]["text"])
-                 for row in original_product_rows}
+                 for row in original_product_rows if str(row["id"]) in rows}
         if len(names) != 1:
             abort(400, description="同款標準中的品名不一致，請一併修改。")
         result["name"] = next(iter(names))
@@ -251,11 +305,43 @@ def payload(engine, inspection):
             versions.c.note, versions.c.created_at, versions.c.source_revision,
             versions.c.snapshot["name"].as_string().label("name")).where(versions.c.code == base["code"])
             .order_by(versions.c.revision.desc()).limit(11)).mappings().all()
+    extra={"supports_line_replacement":base.get("source_kind")=="manual",
+           "focus_ids_stale":str(((inspection.get("template_snapshot") or {}).get("source") or {}).get("revision", "")) != str(effective["revision"])}
+    if extra["supports_line_replacement"]:
+        from manual_reference import payload as authoring_payload
+        draft=authoring_payload(engine,inspection)
+        extra.update(regrouped_draft_lines=draft["draft_lines"],
+            regrouped_excluded_date_lines=draft["excluded_date_lines"],
+            regrouped_excluded_unconfirmed_lines=draft["excluded_unconfirmed_lines"],
+            regrouped_manual_revision=draft["manual_revision"],
+            regrouped_notice="這是依本張照片及已確認辨識訂正整理的草稿；不會自動取代目前已核准的文字。")
     return {"editable": True, "kind": base["source_kind"], "code": base["code"], "name": effective["name"],
             "base_revision": current["revision"] if current else 0, "source_revision": str(base["revision"]),
             "stale": effective.get("standard_reference", {}).get("state") == "stale",
             "notice": notice, "source": effective,
-            "history": [dict(row) for row in history[:10]], "has_more": len(history) > 10}
+            "history": [dict(row) for row in history[:10]], "has_more": len(history) > 10, **extra}
+
+
+def preview_changes(engine, inspection, body):
+    """Validate the exact replacement/delta without writing a standard version."""
+    if not isinstance(body,dict) or set(body)!={"base_revision","source_revision","changes"}:
+        abort(400,description="請提供目前版本與待預覽的修改內容。")
+    base,unsupported=_context(engine,inspection)
+    if unsupported:
+        abort(409,description=unsupported["notice"])
+    current=_current(engine,str(base["code"]))
+    revision=current["revision"] if current else 0
+    if (_integer(body.get("base_revision"),"版本",0,2**31-2)!=revision
+            or body.get("source_revision")!=str(base["revision"])):
+        abort(409,description="標準或來源已更新，請重新載入後預覽。")
+    effective=apply_current(engine,base,current or {})
+    source=changed_snapshot(base,effective,body["changes"])
+    if source.get("source_kind")=="manual":
+        from manual_reference import validate_date_rules
+        validate_date_rules(source)
+    from nutrition_checks import checks_for
+    return {"base_revision":revision,"source_revision":str(base["revision"]),"source":source,
+            "nutrition_checks":checks_for({"lines":source["lines"],"context":"standard_draft"})}
 
 
 def preview(engine, inspection, operation, target_revision=None):
@@ -281,6 +367,8 @@ def preview(engine, inspection, operation, target_revision=None):
         result.update(target_revision=target, source=deepcopy(previous["snapshot"]))
     elif target_revision is not None:
         abort(400, description="還原原始來源不需指定歷史版本。")
+    from nutrition_checks import checks_for
+    result["nutrition_checks"]=checks_for({"lines":result["source"]["lines"],"context":"standard_draft"})
     return result
 
 
@@ -349,8 +437,10 @@ def register_routes(app, engine):
     def get_comparison_standard(identifier):
         return jsonify(payload(engine, _inspection(engine, identifier)))
 
-    @app.get("/api/inspections/<identifier>/standard/preview")
+    @app.route("/api/inspections/<identifier>/standard/preview",methods=["GET","POST"])
     def preview_comparison_standard(identifier):
+        if request.method=="POST":
+            return jsonify(preview_changes(engine,_inspection(engine,identifier),request.get_json(silent=True)))
         return jsonify(preview(engine, _inspection(engine, identifier), request.args.get("operation"),
                                request.args.get("target_revision")))
 

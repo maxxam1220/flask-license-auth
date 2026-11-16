@@ -1,9 +1,11 @@
 """Explicitly approved website text references, independent of printer layouts."""
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
 import unicodedata
+from urllib.parse import quote
 
 from flask import abort, jsonify, request
 from sqlalchemy import inspect, select, insert, func, or_, cast, Text
@@ -12,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 import database as db
 from validation import extract_fields, TEXT_FIELDS
 from source_validation import HEADINGS, _kind, normalize_text
+from standard_draft_quality import eligibility as draft_eligibility
 
 
 PREFIX = "manual:"
@@ -101,6 +104,95 @@ def listing(engine, query="", page=1, limit=24):
             "has_more": page*limit < total, "page": page}
 
 
+def _pending_today_bounds(now=None):
+    taiwan=timezone(timedelta(hours=8))
+    current=(now or datetime.now(timezone.utc)).astimezone(taiwan)
+    start=datetime.combine(current.date(),datetime.min.time(),tzinfo=taiwan)
+    return start.astimezone(timezone.utc).isoformat(),(start+timedelta(days=1)).astimezone(timezone.utc).isoformat()
+
+
+def _pending_name(stored, lines):
+    if isinstance(stored,str) and stored.strip():
+        return stored.strip()[:200]
+    from validation import ALIASES
+    try:
+        candidate=extract_fields(lines or []).get("product",{})
+        ids=set(candidate.get("line_ids",[])); value=candidate.get("value","")
+        headed=any(line.get("id") in ids and re.match(r"^\s*"+ALIASES["product"],line.get("text","")) for line in lines or [])
+        numeric=re.fullmatch(r"(?:民國)?[()（）\d\s:：./\-年月日時时分]+",value)
+        return value[:200] if headed and not candidate.get("ambiguous") and not numeric else ""
+    except (KeyError,TypeError,ValueError,IndexError,AttributeError):
+        return ""
+
+
+def pending_listing(engine, period="today", page=1, limit=24):
+    """A read-only queue of existing inspections, not unapproved database standards."""
+    import history_cleanup
+    import reference_photos
+    from standard_reference import _integer
+    if period not in {"today","all"}:
+        abort(400,description="請選擇今日或全部待建立紀錄。")
+    page=_integer(page,"頁碼",1,1_000_000)
+    limit=_integer(limit,"每頁筆數",1,24)
+    inspection=db.inspections
+    ranked=select(inspection.c.id,func.row_number().over(partition_by=inspection.c.image_id,
+        order_by=(inspection.c.created_at.desc(),inspection.c.id.desc())).label("position"))
+    ranked=ranked.where(history_cleanup.active_filter()).subquery("latest_active_image")
+    manual_origin=inspection.alias("manual_origin")
+    manual_exists=select(db.manual_sources.c.code).join(manual_origin,
+        db.manual_sources.c.inspection_id==manual_origin.c.id).where(
+        manual_origin.c.image_id==inspection.c.image_id).correlate(inspection).exists()
+    attached=select(reference_photos.photos.c.id).where(
+        reference_photos.photos.c.image_id==inspection.c.image_id).correlate(inspection).exists()
+    # An older successful match of this image must not reappear as a new
+    # standard merely because a later raw recheck omitted its source selection.
+    handled=inspection.alias("handled_image")
+    known_source=select(handled.c.id).where(handled.c.image_id==inspection.c.image_id,
+        history_cleanup.active_filter(handled),or_(func.trim(func.coalesce(handled.c.template_id,""))!="",
+            func.trim(func.coalesce(handled.c.template_snapshot["source"]["code"].as_string(),""))!=""))
+    clauses=[ranked.c.position==1,~manual_exists,~attached,~known_source.correlate(inspection).exists()]
+    if period=="today":
+        start,end=_pending_today_bounds()
+        clauses.extend((inspection.c.created_at>=start,inspection.c.created_at<end))
+    joined=inspection.join(ranked,ranked.c.id==inspection.c.id)
+    latest_patches=select(db.corrections.c.patches).where(db.corrections.c.inspection_id==inspection.c.id).order_by(
+        db.corrections.c.revision.desc()).limit(1).correlate(inspection).scalar_subquery()
+    query=select(inspection.c.id,inspection.c.image_id,inspection.c.created_at,
+        inspection.c.result["fields"]["product"]["value"].as_string().label("product"),
+        inspection.c.ocr["lines"].label("ocr_lines"),
+        inspection.c.ocr["image_status"].as_string().label("image_status"),
+        inspection.c.ocr["recognition_engine"].as_string().label("recognition_engine"),
+        inspection.c.ocr["label_scope"].label("observed_scope"),
+        inspection.c.result["label_scope"].label("evaluated_scope"),
+        inspection.c.result["source_match"]["status"].as_string().label("source_status"),
+        latest_patches.label("patches")).select_from(joined).where(*clauses)
+    items,total=[],0
+    start=(page-1)*limit
+    with engine.connect() as conn:
+        # One shared Python rule avoids SQLite/PostgreSQL JSON-rule drift. The
+        # SQL filters run first; a server cursor retains at most 50 candidate
+        # summaries and the requested page, never the entire OCR history.
+        result=conn.execute(query.order_by(inspection.c.created_at.desc(),inspection.c.id.desc())
+            .execution_options(stream_results=True,yield_per=50))
+        try:
+            for batch in result.mappings().partitions(50):
+                for row in batch:
+                    quality=draft_eligibility({"lines":row["ocr_lines"],"image_status":row["image_status"],
+                        "recognition_engine":row["recognition_engine"],"label_scope":row["observed_scope"]},row["patches"],
+                        {"label_scope":row["evaluated_scope"],"source_match":{"status":row["source_status"]}})
+                    if not quality["eligible"]:
+                        continue
+                    if start<=total<start+limit:
+                        items.append({"inspection_id":row["id"],"image_id":row["image_id"],"created_at":row["created_at"],
+                            "name":_pending_name(row["product"],row["ocr_lines"]),
+                            "thumbnail":f"/media/{quote(str(row['image_id']),safe='')}/thumb.jpg"})
+                    total+=1
+        finally:
+            result.close()
+    return {"items":items,
+        "page":page,"total":total,"has_more":page*limit<total,"range":period}
+
+
 def fields_from_lines(lines, name):
     """Text-only references have no invented geometry or neighbouring columns."""
     candidates = {key: set() for key in TEXT_FIELDS}
@@ -151,7 +243,39 @@ def _context(engine, inspection):
         return False, existing, "這筆檢查已有比對來源，請使用「修正比對標準」建立新版。"
     if existing:
         return False, existing, "這張照片已建立人工文字標準，請選用既有標準重新核對。"
+    quality=draft_eligibility(inspection.get("ocr"),result=inspection.get("result"))
+    if quality["reason_code"]=="multiple_labels":
+        return False, existing, quality["reason"]
     return True, "", "辨識文字只是草稿，請逐字修正後核准；日期請另填相對基準日規則。"
+
+
+def _near_date_fragments(lines, excluded):
+    """Do not freeze the final day of an observed split '到店日 11/ 19'."""
+    def bounds(line):
+        box=line.get("box") or []
+        return (min(p[0] for p in box),min(p[1] for p in box),max(p[0] for p in box),max(p[1] for p in box)) if len(box)==4 else None
+    excluded=set(excluded)
+    for _ in range(3):
+        added=set()
+        for line in lines:
+            first=bounds(line)
+            if line.get("id") not in excluded or first is None or not re.search(r"\d\s*[./\-年月:：]\s*$",line.get("text","")):
+                continue
+            x,y,r,b=first; height=max(b-y,1)
+            for following in lines:
+                second=bounds(following)
+                if following.get("id") in excluded or second is None or not re.fullmatch(r"\s*\d{1,2}\s*[./年月日]?\s*",following.get("text","")):
+                    continue
+                nx,ny,nr,nb=second
+                if (0<=nx-r<=height*1.5 and min(b,nb)-max(y,ny)>=min(height,nb-ny)*.6
+                        and not any(other.get("id") not in (line.get("id"),following.get("id"))
+                            and (middle:=bounds(other)) is not None and middle[0]>=r and middle[2]<=nx
+                            and min(b,middle[3])>max(y,middle[1]) for other in lines)):
+                    added.add(following["id"])
+        if not added-excluded:
+            break
+        excluded.update(added)
+    return excluded
 
 
 def payload(engine, inspection):
@@ -162,6 +286,7 @@ def payload(engine, inspection):
     lines = deepcopy(original_lines)
     with engine.connect() as conn:
         correction = corrections.latest(conn, inspection["id"])
+    quality = draft_eligibility(inspection.get("ocr"), (correction or {}).get("patches"), inspection.get("result"))
     patches = {patch["line_id"]: patch for patch in (correction or {}).get("patches", [])}
     excluded_unconfirmed, applied = [], []
     for line in lines:
@@ -198,6 +323,14 @@ def payload(engine, inspection):
         except HTTPException:
             safe = False
         (draft_lines if safe else excluded).append({"id": line.get("id"), "text": value})
+    date_ids=_near_date_fragments(lines,{row["id"] for row in excluded})
+    for row in draft_lines:
+        if row["id"] in date_ids:
+            excluded.append(row)
+    draft_lines=[row for row in draft_lines if row["id"] not in date_ids]
+    from text_rows import group_observed_rows
+    safe_ids = {row["id"] for row in draft_lines}
+    draft_lines = group_observed_rows([line for line in lines if line.get("id") in safe_ids])
     skus = {value for line in lines if line.get("id") not in excluded_ids
             for value in _identifiers(line.get("text", ""), _SKU_LABEL, normalize=lambda v:v)}
     product = fields.get("product", {})
@@ -212,6 +345,7 @@ def payload(engine, inspection):
         except HTTPException:
             pass  # Incomplete OCR remains an editable draft, never approval.
     return {"can_create": can_create, "existing_code": existing, "notice": notice,
+            "manual_standard_eligibility": quality,
             "suggested_name": suggested_name,
             "suggested_sku": next(iter(skus)) if len(skus) == 1 else "",
             "ocr_lines": original_lines, "draft_lines": draft_lines, "excluded_date_lines": excluded,
@@ -246,8 +380,9 @@ def definition(body):
         text = fixed_line_text(item["text"])
         if _kind(text) == "product" and normalize_text(text) != normalize_text(name):
             abort(400, description="品名與標準文字中的品名不同，請逐字修正後再預覽。")
-        if text not in texts:
-            texts.append(text)
+        # Repeated values are separate evidence (e.g. two nutrition columns).
+        # Deduplicating them would silently delete a printed value.
+        texts.append(text)
     if not any(normalize_text(text) == normalize_text(name) for text in texts):
         texts.insert(0, "品名：" + name)
     listed_skus = {value for text in texts for value in _identifiers(text, _SKU_LABEL, normalize=lambda v:v)}
@@ -331,8 +466,10 @@ def preview(engine, inspection, body):
         abort(409, description=notice)
     source, digest = definition(body)
     equivalents = equivalent_references(engine, source, digest)
+    from nutrition_checks import checks_for
     return {"source": source, "preview_hash": digest, "equivalent_references": equivalents,
             "suggested_source": equivalents[0] if len(equivalents) == 1 else None,
+            "nutrition_checks": checks_for({"lines":source["lines"], "context":"standard_draft"}),
             "warnings": LIMITATIONS + ["日期位移直接相對本批基準日；不會自動加上保存天數。"]}
 
 
@@ -376,6 +513,14 @@ def register_routes(app, engine):
         except ValueError:
             abort(400, description="頁碼與每頁筆數須為整數。")
         return jsonify(listing(engine, request.args.get("q", ""), page, limit))
+
+    @app.get("/api/manual-standards/pending")
+    def list_pending_manual_references():
+        try:
+            page,limit=int(request.args.get("page",1)),int(request.args.get("limit",24))
+        except ValueError:
+            abort(400,description="頁碼與每頁筆數須為整數。")
+        return jsonify(pending_listing(engine,request.args.get("range","today"),page,limit))
 
     @app.get("/api/inspections/<identifier>/manual-standard")
     def get_manual_reference(identifier):

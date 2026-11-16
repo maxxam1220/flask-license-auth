@@ -7,9 +7,10 @@ import unicodedata
 from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
                             date_evidence_overlaps, without_date_evidence)
+from text_rows import group_observed_rows, nutrition_label
 
 
-RULE_VERSION = "1.10"
+RULE_VERSION = "1.11"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -21,7 +22,7 @@ def _field_uncertain(field):
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
                "phone": "電話", "spec": "規格", "storage": "保存條件", "item_code": "貨號",
                "pack_count": "入數", "barcode": "條碼", "manufacture": "製造日期",
-               "expiry": "有效日期", "arrival": "到店日", "shelf_days": "保存天數"}
+               "expiry": "有效日期", "arrival": "到店日", "shelf_days": "保存天數", "nutrition": "營養標示"}
 HEADINGS = {
     "product": r"(?:產品名稱|商品名稱|產品品名|品名)",
     "origin": r"(?:原料產地|原產地|原產國|產地)",
@@ -116,7 +117,7 @@ def _groups(lines, source_fields=None):
             text = "".join(item["text"] for item in chain)
             groups.append({"lines": chain.copy(), "ids": frozenset(item["id"] for item in chain),
                            "text": text, "normal": normalize_text(text),
-                           "kind": chain[0].get("_kind") or _kind(chain[0]["text"], source_fields),
+                           "kind": chain[0].get("_kind") or _kind(chain[0]["text"], source_fields) or ("nutrition" if nutrition_label(chain[0]["text"]) else None),
                            "barcode_kind": chain[0].get("_barcode_kind"),
                            "barcode_heading": chain[0].get("_barcode_heading", False),
                            "score": min(float(item.get("score", 0)) for item in chain),
@@ -133,6 +134,17 @@ def _groups(lines, source_fields=None):
                        "barcode_kind": None, "barcode_heading": False,
                        "score": row["score"], "ambiguous": row["ambiguous"], "assembled_product": True,
                        "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in row["lines"])})
+    for row in group_observed_rows(lines):
+        if row["row_type"] not in {"nutrition", "nutrition_values"}:
+            continue
+        identifiers=frozenset(row["source_line_ids"])
+        # Geometry may mark even a one-box row as conflicting. Retaining an
+        # optimistic raw singleton with the same evidence would bypass that.
+        groups=[group for group in groups if group["ids"] != identifiers]
+        groups.append({"lines": row["source_lines"], "ids": frozenset(row["source_line_ids"]),
+            "text": row["text"], "normal": normalize_text(row["text"]), "kind": row["row_type"],
+            "barcode_kind":None, "barcode_heading":False, "score":row["score"],
+            "ambiguous":row["ambiguous"], "confidence_ok":row["confidence_ok"], "assembled_nutrition":True})
     return groups
 
 
@@ -164,6 +176,9 @@ def _compatible(expected, actual):
         return True  # The explicit database barcode type owns its payload semantics.
     if a in DATE_KEYS or b in DATE_KEYS:
         return False
+    if a == "nutrition" and b in {"nutrition", "nutrition_values"}:
+        first, second = nutrition_label(expected["text"]), nutrition_label(actual["text"])
+        return not (first and second and first != second)
     if a and b and a != b:
         return False
     # Bare long numeric codes must not be mistaken for an almost-matching phone number.
@@ -200,20 +215,29 @@ def _source_rows(source):
 def _text_checks(lines, source):
     source_rows = _source_rows(source)
     expected_groups = _groups(source_rows, (source or {}).get("fields"))
+    assembled_expected = [group for group in expected_groups if group.get("assembled_nutrition") and len(group["lines"])>1]
+    expected_groups = [group for group in expected_groups if group.get("assembled_nutrition") or
+        not any(group["ids"] <= row["ids"] for row in assembled_expected)]
     actual_groups = _groups(lines)
     used_source, used_actual, checks, fields, keys = set(), set(), [], {}, set()
 
     def usable(expected, actual):
         if actual["ids"] & used_actual or not _compatible(expected, actual):
             return False
+        if expected["kind"] == "nutrition":
+            if len(actual["lines"])>1 and not actual.get("assembled_nutrition"):
+                return False  # A vertical chain cannot fill missing table columns.
+            if any(actual["ids"] < row["ids"] for row in actual_groups if row.get("assembled_nutrition")):
+                return False
         # Once geometry establishes a complete observed product row, do not
         # accept a shorter subset and hide extra/mistyped adjacent characters.
         return expected["kind"] != "product" or not any(
             actual["ids"] < row["ids"] for row in actual_groups if row.get("assembled_product"))
 
     def record(expected, actual=None, ambiguous=False):
-        kind = expected["kind"] if len(expected["lines"]) == 1 else None
-        key = kind or f"source_text_{expected['lines'][0]['id']}"
+        kind = expected["kind"] if len(expected["lines"]) == 1 or expected.get("assembled_nutrition") else None
+        key = (f"source_nutrition_{expected['lines'][0]['id']}" if kind == "nutrition" else
+               kind or f"source_text_{expected['lines'][0]['id']}")
         if key in keys:
             key += f"_{expected['lines'][0]['id']}"
         keys.add(key)
@@ -232,7 +256,8 @@ def _text_checks(lines, source):
                 fields[kind] = {"value": text, "score": confidence, "line_ids": identifiers, "ambiguous": ambiguous or actual["ambiguous"]}
         used_source.update(expected["ids"])
         same_normal = actual is not None and _equivalent(expected, actual)
-        checks.append({"key": key, "label": FIELD_NAMES.get(kind, "資料庫文字"), "status": status, "reason": reason,
+        label=("營養標示・"+(nutrition_label(expected["text"]) or "文字列")) if kind=="nutrition" else FIELD_NAMES.get(kind,"資料庫文字")
+        checks.append({"key": key, "label": label, "status": status, "reason": reason,
                        "expected": expected["text"], "actual": text, "raw_actual": text,
                        "line_ids": identifiers, "source_line_ids": [item["id"] for item in expected["lines"]],
                        "score": confidence, "diff": diff_parts(expected["text"], text), "source": "database",
@@ -250,7 +275,7 @@ def _text_checks(lines, source):
                 best = candidates[0]
                 ambiguous = any(not best["ids"] & other["ids"] for other in candidates[1:])
                 record(expected, best, ambiguous)
-    for expected in [group for group in expected_groups if len(group["lines"]) == 1]:
+    for expected in [group for group in expected_groups if len(group["lines"]) == 1 or group.get("assembled_nutrition")]:
         if expected["ids"] & used_source:
             continue
         ranked = []

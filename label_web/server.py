@@ -38,6 +38,7 @@ import cloud_budget
 from sticker_scope import recognize_scoped
 from inspection_evidence import augment
 from access_control import AccessControl
+from standard_draft_quality import eligibility as draft_eligibility
 
 register_heif_opener()
 Image.MAX_IMAGE_PIXELS = 32_000_000
@@ -171,7 +172,7 @@ def create_app(config=None, ocr=None):
             token, expected = request.headers.get("X-CSRF-Token", ""), session.get("csrf", "")
             if not isinstance(expected, str) or not expected or not secrets.compare_digest(token.encode(), expected.encode()):
                 abort(403, description="頁面已過期，請重新整理後再試。")
-        if request.endpoint in {"list_templates", "save_template", "source_label", "list_manual_references",
+        if request.endpoint in {"list_templates", "save_template", "source_label", "list_manual_references", "list_pending_manual_references",
                 "get_manual_reference", "preview_manual_reference", "create_manual_reference",
                 "get_comparison_standard", "preview_comparison_standard", "update_comparison_standard"}:
             access.require_admin()
@@ -736,6 +737,8 @@ def create_app(config=None, ocr=None):
         if inspection_id:
             with engine.connect() as conn:
                 history_cleanup.ensure_active(conn, inspection_id)
+        if (row.get("result") or {}).get("ocr"):
+            row["manual_standard_eligibility"] = draft_eligibility(row["result"]["ocr"])
         row["image"] = image_payload(row["image_id"])
         return jsonify(row)
 
@@ -797,6 +800,8 @@ def create_app(config=None, ocr=None):
             recent = corrections.history(conn, identifier, size=10)
             row["correction_history"] = recent["items"]
             row["correction_history_has_more"] = recent["has_more"]
+        row["manual_standard_eligibility"] = draft_eligibility(row.get("ocr"),
+            (row.get("manual_revision") or {}).get("patches"), row.get("result"))
         return row
 
     @app.get("/api/inspections/<identifier>")

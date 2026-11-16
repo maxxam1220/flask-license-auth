@@ -107,8 +107,16 @@ Preserve the actual traditional/simplified Chinese characters, spelling errors, 
 letter case, spaces, punctuation and printed dates. Do NOT normalize, translate, spell-correct,
 complete a company/address/product from memory, infer missing dates, or substitute expected values.
 Do not combine text from separate labels. Report multiple_labels if separate labels are visible.
+A nutrition table and adjacent product information belonging to the same label/package panel
+are parts of that label, not separate labels just because they use separate columns or borders.
 Do not decode barcode bars by guessing; include human-readable digits only if they are visible.
 Keep separately positioned text in separate lines, in top-to-bottom reading order.
+Exception: in a nutrition table, transcribe each visually aligned horizontal row as one line,
+including its nutrient name followed by ALL visible numeric cells and their units in left-to-right order.
+Keep repeated equal cells (e.g. two printed values of 0.1公克) as two separate occurrences.
+Include the serving-size text and column headings. Do not merge a table row with product or date text
+beside the table. If a nutrient name or numeric cell is unreadable, preserve its position with □
+and uncertain=true; never fill a missing cell from a neighboring row, arithmetic, or common knowledge.
 If a character cannot be read, use the single placeholder □ at that position and set uncertain=true.
 If there are multiple plausible visual readings, preserve your direct reading in text, set uncertain=true,
 and put alternate full-line visual readings in alternatives. No confidence probabilities are requested.
