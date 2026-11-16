@@ -297,6 +297,32 @@ def _context(engine, inspection):
     return base, None
 
 
+def _inspection_draft_barcodes(rows, source, ocr):
+    """Do not turn a newly observed batch barcode into permanent text.
+
+    Only complete stand-alone valid GTINs or independently decoded literals
+    qualify. Ordinary numeric lines, SKUs and nutrition quantities stay intact.
+    """
+    from barcode_checks import gtin_valid
+    decoded = {str(item.get("text", "")) for item in (ocr.get("barcodes") or {}).get("items", [])}
+    def value(text):
+        text = unicodedata.normalize("NFKC", str(text)).strip()
+        text = re.sub(r"^(?:條碼|条码|Barcode|EAN|GTIN)\s*[:：]?\s*", "", text, count=1, flags=re.I)
+        compact = re.sub(r"\s+", "", text)
+        return compact if gtin_valid(compact) is True else text if text in decoded else ""
+    approved = {str(item) for item in source.get("barcode_values", [])}
+    approved.update(found for row in source.get("lines", []) if (found := value(row.get("text", ""))))
+    kept, excluded = [], []
+    for row in rows:
+        found = value(row.get("text", ""))
+        if found and (source.get("barcode_config") or found not in approved):
+            excluded.append(dict(row, value=found,
+                reason="條碼可能含批次資料，未自動寫入固定文字；原始辨識與條碼檢查仍保留。"))
+        else:
+            kept.append(row)
+    return kept, excluded
+
+
 def payload(engine, inspection):
     base, unsupported = _context(engine, inspection)
     if unsupported:
@@ -318,11 +344,20 @@ def payload(engine, inspection):
            "focus_ids_stale":str(((inspection.get("template_snapshot") or {}).get("source") or {}).get("revision", "")) != str(effective["revision"])}
     if extra["supports_line_replacement"]:
         from manual_reference import payload as authoring_payload
+        from reference_photos import current_image
         draft=authoring_payload(engine,inspection)
-        extra.update(regrouped_draft_lines=draft["draft_lines"],
+        draft_rows,excluded_barcodes=_inspection_draft_barcodes(draft["draft_lines"],effective,inspection.get("ocr") or {})
+        extra.update(regrouped_draft_lines=draft_rows,
+            regrouped_excluded_barcode_lines=excluded_barcodes,
             regrouped_excluded_date_lines=draft["excluded_date_lines"],
             regrouped_excluded_unconfirmed_lines=draft["excluded_unconfirmed_lines"],
             regrouped_manual_revision=draft["manual_revision"],
+            regrouped_inspection_id=inspection["id"],
+            regrouped_draft_basis=draft["draft_basis"],
+            regrouped_suggested_name=draft["suggested_name"],
+            regrouped_eligibility=draft["manual_standard_eligibility"],
+            regrouped_can_apply=bool(draft_rows) and draft["manual_standard_eligibility"]["eligible"],
+            current_reference_image=current_image(engine,effective),
             regrouped_notice="這是依本張照片及已確認辨識訂正整理的草稿；不會自動取代目前已核准的文字。")
     return {"editable": True, "kind": base["source_kind"], "code": base["code"], "name": effective["name"],
             "base_revision": current["revision"] if current else 0, "source_revision": str(base["revision"]),
@@ -331,9 +366,41 @@ def payload(engine, inspection):
             "history": [dict(row) for row in history[:10]], "has_more": len(history) > 10, **extra}
 
 
+def _check_draft_revision(conn, inspection, body, source):
+    """Guard an explicit current-inspection draft, without changing the OCR.
+
+    Saves call this while holding the inspection row lock used by corrections,
+    so a concurrent human correction cannot silently change the draft's basis.
+    Ordinary edits of the approved standard do not need this optional guard.
+    """
+    if "draft_manual_revision" not in body:
+        return
+    if source.get("source_kind") != "manual":
+        abort(400, description="帶入本次辨識只適用人工文字標準。")
+    wanted = _integer(body["draft_manual_revision"], "辨識訂正版本", 0, 2**31-2)
+    import corrections
+    from standard_draft_quality import eligibility
+    correction = corrections.latest(conn, inspection["id"])
+    if wanted != (correction["revision"] if correction else 0):
+        abort(409, description="本次辨識訂正已更新，請重新載入最新辨識草稿後確認。")
+    quality = eligibility(inspection.get("ocr"), (correction or {}).get("patches"), inspection.get("result"))
+    if not quality["eligible"]:
+        abort(409, description=quality["reason"])
+
+
+def _use_inspection_photo(body, source):
+    value = body.get("use_inspection_photo", False)
+    if not isinstance(value, bool):
+        abort(400, description="更新標準照片須為明確的勾選設定。")
+    if value and source.get("source_kind") != "manual":
+        abort(400, description="本次照片只能設為既有人工文字標準的目前照片。")
+    return value
+
+
 def preview_changes(engine, inspection, body):
     """Validate the exact replacement/delta without writing a standard version."""
-    if not isinstance(body,dict) or set(body)!={"base_revision","source_revision","changes"}:
+    if (not isinstance(body,dict) or not {"base_revision","source_revision","changes"} <= set(body)
+            or set(body)-{"base_revision","source_revision","changes","draft_manual_revision","use_inspection_photo"}):
         abort(400,description="請提供目前版本與待預覽的修改內容。")
     base,unsupported=_context(engine,inspection)
     if unsupported:
@@ -344,12 +411,22 @@ def preview_changes(engine, inspection, body):
             or body.get("source_revision")!=str(base["revision"])):
         abort(409,description="標準或來源已更新，請重新載入後預覽。")
     effective=apply_current(engine,base,current or {})
+    use_photo = _use_inspection_photo(body,effective)
+    with engine.connect() as conn:
+        _check_draft_revision(conn,inspection,body,effective)
+        if use_photo:
+            from reference_photos import require_inspection_image
+            require_inspection_image(conn,inspection)
     source=changed_snapshot(base,effective,body["changes"])
+    if use_photo:
+        source["reference_image_id"]=inspection["image_id"]
+        source["reference_inspection_id"]=inspection["id"]
     if source.get("source_kind")=="manual":
         from manual_reference import validate_date_rules
         validate_date_rules(source)
     from nutrition_checks import checks_for
     return {"base_revision":revision,"source_revision":str(base["revision"]),"source":source,
+            "use_inspection_photo":use_photo,
             "nutrition_checks":checks_for({"lines":source["lines"],"context":"standard_draft"})}
 
 
@@ -384,13 +461,17 @@ def preview(engine, inspection, operation, target_revision=None):
 def save(engine, inspection, body):
     if not isinstance(body, dict) or body.get("confirmed") is not True:
         abort(400, description="請明確確認此標準將用於後續同款標籤。")
-    if set(body) - {"base_revision", "source_revision", "changes", "reviewer", "note", "confirmed", "operation", "target_revision"}:
+    if set(body) - {"base_revision", "source_revision", "changes", "reviewer", "note", "confirmed", "operation", "target_revision", "draft_manual_revision", "use_inspection_photo"}:
         abort(400, description="不支援的標準修改欄位。")
     base_revision = _integer(body.get("base_revision"), "版本", 0, 2**31-2)
     reviewer, note = _text(body.get("reviewer"), "確認人", 100), _text(body.get("note"), "修改原因", 2000)
     operation = body.get("operation", "update")
     if not isinstance(operation, str) or operation not in {"update", "reset", "restore"}:
         abort(400, description="不支援的版本操作。")
+    if operation != "update" and "draft_manual_revision" in body:
+        abort(400, description="還原版本時不可同時帶入本次辨識。")
+    if operation != "update" and body.get("use_inspection_photo"):
+        abort(400, description="還原版本時不可同時更新標準照片。")
     base, unsupported = _context(engine, inspection)
     if unsupported:
         abort(409, description=unsupported["notice"])
@@ -409,6 +490,8 @@ def save(engine, inspection, body):
             prior = conn.execute(select(versions).where((versions.c.code == code) &
                 (versions.c.revision == current_revision))).mappings().first() if current_revision else None
             effective = apply_current(engine, base, dict(prior) if prior else {})
+            _check_draft_revision(conn,inspection,body,effective)
+            use_photo = _use_inspection_photo(body,effective)
             if operation == "reset":
                 if body.get("changes"):
                     abort(400, description="還原原始來源時不可同時修改欄位。")
@@ -426,16 +509,30 @@ def save(engine, inspection, body):
             if snapshot.get("source_kind") == "manual":
                 from manual_reference import validate_date_rules
                 validate_date_rules(snapshot)
+            if use_photo:
+                from reference_photos import require_inspection_image
+                snapshot["reference_image_id"] = require_inspection_image(conn,inspection)
+                snapshot["reference_inspection_id"] = inspection["id"]
             new_revision = current_revision + 1
-            conn.execute(insert(versions).values(id=db.uid(), code=code, revision=new_revision,
+            stored_changes = deepcopy(body.get("changes", {}))
+            if "draft_manual_revision" in body:
+                stored_changes["draft_origin"] = {"inspection_id": inspection["id"],
+                    "manual_revision": body["draft_manual_revision"]}
+            if use_photo:
+                stored_changes["reference_photo"] = {"image_id": inspection["image_id"], "inspection_id": inspection["id"]}
+            version = dict(id=db.uid(), code=code, revision=new_revision,
                 source_revision=str(base["revision"]), operation=operation, snapshot=snapshot,
-                changes=body.get("changes", {}), inspection_id=inspection["id"], reviewer=reviewer, note=note, created_at=db.now()))
+                changes=stored_changes, inspection_id=inspection["id"], reviewer=reviewer, note=note, created_at=db.now())
+            conn.execute(insert(versions).values(**version))
             if head:
                 changed = conn.execute(update(heads).where((heads.c.code == code) & (heads.c.revision == current_revision)).values(revision=new_revision))
                 if changed.rowcount != 1:
                     abort(409, description="標準版本已變更，請重新載入。")
             else:
                 conn.execute(insert(heads).values(code=code, revision=new_revision))
+            if use_photo:
+                from reference_photos import attach_locked
+                attach_locked(conn,inspection,apply_current(engine,base,version),new_revision,reviewer,note)
     except IntegrityError:
         abort(409, description="另一位使用者已建立新版，請重新載入後修改。")
     return payload(engine, inspection)

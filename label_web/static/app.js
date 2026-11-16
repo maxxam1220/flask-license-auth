@@ -1036,20 +1036,40 @@ function standardEditorRows(source,inspection,allowMapped=true){
     return {text:line.text || "",ids,section:classifyTextSection(line),row_type:line.row_type};
   });
 }
+function standardDraftOptions(context=state.standardEdit){
+  if(context?.data?.kind!=="manual" || context.operation!=="update")return {};
+  return {...(context.draftMode==="latest" ? {draft_manual_revision:context.data.regrouped_manual_revision} : {}),use_inspection_photo:!!$("#standard-use-photo").checked};
+}
+function updateStandardDraftControls(){
+  const context=state.standardEdit;if(!context?.textMode)return;const latest=context.draftMode==="latest",locked=state.busy || context.operation!=="update" || context.conflict;
+  $("#standard-draft-latest").setAttribute("aria-pressed",String(latest));$("#standard-draft-current").setAttribute("aria-pressed",String(!latest));$("#standard-draft-latest").disabled=locked || !context.canUseLatest;$("#standard-draft-current").disabled=locked;$("#standard-use-photo").disabled=locked || !context.inspection?.image?.url;
+  $("#standard-photo-option").hidden=context.operation!=="update";
+  const dates=context.data.regrouped_excluded_date_lines?.length || 0,unconfirmed=context.data.regrouped_excluded_unconfirmed_lines?.length || 0,barcodes=context.data.regrouped_excluded_barcode_lines?.length || 0;
+  $("#standard-draft-status").textContent=latest ? `目前編輯本次辨識草稿${context.data.regrouped_manual_revision ? "（含已確認的辨識訂正）" : ""}，尚未核准。${dates ? `已略過 ${dates} 行本批日期。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行印錯或不確定文字未帶入，請依照片補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字；仍照常檢查條碼格式。" : ""}保存天數與日期規則沿用現行標準；未讀到的舊文字不會自動補回，請確認完整內容。` : `目前編輯已核准的現行標準。${context.canUseLatest ? "可切回本次辨識草稿，兩邊的未存文字各自保留。" : `${context.data.regrouped_eligibility?.reason || "本次沒有可安全帶入的辨識草稿"}；請對照照片手動修正，或重新辨識。`}`;
+  $("#standard-editor-intro").textContent=latest ? "本次辨識文字已自動分區帶入。只需對照照片修正錯處，預覽後確認存成同一份標準的新版。" : "現行核准文字已分區帶入。修改後先預覽差異，再確認更新同一份標準。";
+}
+function selectStandardDraft(mode,replacement=null,initial=false){
+  const context=state.standardEdit;if(!requireAdmin() || state.busy || !context?.textMode || context.operation!=="update" || context.conflict || !["latest","current"].includes(mode) || (mode==="latest" && !context.canUseLatest))return;
+  context.textDrafts ||= {};context.photoChoices ||= {latest:true,current:false};
+  if(context.draftMode){context.textDrafts[context.draftMode]={text:$("#standard-edit-text").value,rows:JSON.parse(JSON.stringify(context.textRows || []))};context.photoChoices[context.draftMode]=$("#standard-use-photo").checked;}
+  if(replacement)context.textDrafts[mode]={text:replacement.map(row=>row.text).join("\n"),rows:JSON.parse(JSON.stringify(replacement))};
+  const draft=context.textDrafts[mode];if(!draft)return;context.draftMode=mode;$("#standard-edit-text").value=draft.text;context.textRows=JSON.parse(JSON.stringify(draft.rows));context.activeTextSection="content";$("#standard-use-photo").checked=!!context.photoChoices[mode] && !!context.inspection?.image?.url;
+  renderSectionEditors("standard");renderTextRowLocations("standard");invalidateStandardPreview();context.regroupPreview=null;$("#standard-regroup-preview").hidden=true;drawTextEditorPhoto("standard");updateStandardDraftControls();
+  if(!initial)$("#standard-text-selection").textContent=mode==="latest" ? "已切到本次辨識草稿；文字尚未核准，請預覽後確認儲存。" : "已切到現行標準；本次草稿的未存修改仍保留。";
+}
 function previewRegroupedStandard(){
-  const context=state.standardEdit;if(state.busy || !requireAdmin() || !context?.textMode || context.operation!=="update" || context.conflict)return;
+  const context=state.standardEdit;if(state.busy || !requireAdmin() || !context?.textMode || !context.canUseLatest || context.operation!=="update" || context.conflict)return;
   const rows=(context.data.regrouped_draft_lines || []).map(draftTextRow);if(!rows.length)return;
-  const dates=context.data.regrouped_excluded_date_lines?.length || 0,unconfirmed=context.data.regrouped_excluded_unconfirmed_lines?.length || 0;
-  $("#standard-regroup-notice").textContent=`共 ${rows.length} 行。${dates ? `已略過 ${dates} 行本批日期，日期請另外設定規則。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行印錯或不確定文字未帶入，請依正確資料補齊。` : ""}`;
+  const dates=context.data.regrouped_excluded_date_lines?.length || 0,unconfirmed=context.data.regrouped_excluded_unconfirmed_lines?.length || 0,barcodes=context.data.regrouped_excluded_barcode_lines?.length || 0;
+  $("#standard-regroup-notice").textContent=`共 ${rows.length} 行。${dates ? `已略過 ${dates} 行本批日期，日期請另外設定規則。` : ""}${unconfirmed ? `另有 ${unconfirmed} 行印錯或不確定文字未帶入，請依正確資料補齊。` : ""}${barcodes ? "本批條碼可能含批次資料，未自動寫入固定文字。" : ""}`;
   context.regroupPreview=rows;$("#standard-regroup-text").textContent=rows.map(row=>row.text).join("\n");$("#standard-regroup-preview").hidden=false;
   $("#standard-regroup-preview").scrollIntoView({block:"nearest",behavior:"instant"});
 }
 function applyRegroupedStandard(){
   const context=state.standardEdit;if(state.busy || !requireAdmin() || !context?.regroupPreview || context.operation!=="update" || context.conflict)return;
-  const rows=context.regroupPreview;$("#standard-edit-text").value=rows.map(row=>row.text).join("\n");context.textRows=reconcileTextRows(rows,$("#standard-edit-text").value);renderSectionEditors("standard");renderTextRowLocations("standard");
-  context.regroupPreview=null;$("#standard-regroup-preview").hidden=true;invalidateStandardPreview();drawTextEditorPhoto("standard");
-  if(!$("#standard-edit-note").value.trim())$("#standard-edit-note").value="依照片重新整理完整文字列";
-  focusTextEditorRow("standard",0);$("#standard-text-selection").textContent="已分區帶入照片草稿，尚未儲存。只需修正錯處，再預覽修改差異。";
+  const rows=context.regroupPreview;selectStandardDraft("latest",rows);
+  if(!$("#standard-edit-note").value.trim())$("#standard-edit-note").value="依本次照片重新整理完整文字列";
+  focusTextEditorRow("standard",0);$("#standard-text-selection").textContent="已分區帶入本次照片草稿，尚未儲存。只需修正錯處，再預覽修改差異。";
 }
 async function openStandardEditor(inspectionId = state.inspection?.id, focusLineIds = []) {
   if(!requireAdmin())return;
@@ -1057,7 +1077,7 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
   state.standardEdit={inspectionId,loading:true,operation:"update",focusLineIds:Array.isArray(focusLineIds) ? focusLineIds.map(String) : []};
   $$("#standard-edit-dialog button").forEach(button=>{button.disabled=false;});
   $("#standard-edit-form").reset();$("#standard-edit-form").hidden=true;$("#standard-edit-photo-template").hidden=true;$("#standard-edit-reload").hidden=true;$("#standard-edit-reset").hidden=true;$("#standard-edit-operation").hidden=true;$("#standard-text-workspace").hidden=true;$("#standard-regroup-preview").hidden=true;$("#standard-text-selection").textContent="";
-  $("#standard-full-text").open=false;
+  $("#standard-full-text").open=false;$("#standard-draft-choice").hidden=true;$("#standard-use-photo").checked=false;
   $("#standard-edit-source").textContent="載入比對標準中…";$("#standard-edit-notice").textContent="";$("#standard-edit-history-list").replaceChildren();$("#standard-edit-history").hidden=true;setDialogError("#standard-edit-error");invalidateStandardPreview();
   if (!$("#standard-edit-dialog").open) $("#standard-edit-dialog").showModal();
   const context=state.standardEdit;
@@ -1089,10 +1109,13 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
     const lines=$("#standard-edit-line-fields");lines.replaceChildren();
     if(context.textMode){
       context.inspection=state.inspection?.id===inspectionId ? state.inspection : await api(`/api/inspections/${encodeURIComponent(inspectionId)}`);if(state.standardEdit!==context)return;
-      $("#standard-text-workspace").hidden=false;$("#standard-edit-text").value=(source.lines || []).map(line=>line.text || "").join("\n");
-      context.textRows=reconcileTextRows(standardEditorRows(source,context.inspection,!data.focus_ids_stale),$("#standard-edit-text").value);context.activeTextSection="content";renderSectionEditors("standard");renderTextRowLocations("standard");
-      $("#standard-photo-link").href=context.inspection.image?.url || "";drawTextEditorPhoto("standard");
-      $("#standard-regroup-button").hidden=!(data.regrouped_draft_lines || []).length;
+      $("#standard-text-workspace").hidden=false;$("#standard-draft-choice").hidden=false;
+      const currentRows=standardEditorRows(source,context.inspection,!data.focus_ids_stale),latestRows=(data.regrouped_draft_lines || []).map(draftTextRow);
+      context.canUseLatest=data.regrouped_can_apply===true && latestRows.length>0 && Number.isInteger(data.regrouped_manual_revision) && (!data.regrouped_inspection_id || data.regrouped_inspection_id===inspectionId);
+      context.currentTextRows=currentRows;context.textDrafts={current:{text:currentRows.map(row=>row.text).join("\n"),rows:currentRows},latest:{text:latestRows.map(row=>row.text).join("\n"),rows:latestRows}};context.photoChoices={latest:true,current:false};
+      $("#standard-photo-link").href=context.inspection.image?.url || "";selectStandardDraft(context.canUseLatest && !context.focusLineIds.length ? "latest" : "current",null,true);
+      $("#standard-regroup-button").hidden=!context.canUseLatest;
+      if(context.draftMode==="latest")$("#standard-edit-note").value="依本次照片核對完整文字，更新原標準";
     }else (source.lines || []).forEach((line,index)=>{
       const title=`第 ${index+1} 段標準文字`,label=element("label","",title),input=element("textarea");input.rows=2;input.maxLength=2000;input.value=line.text || "";input.dataset.standardLine=String(line.id);label.append(input);lines.append(label);context.lineControls.push({line,input,label,title});
     });
@@ -1105,9 +1128,10 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
       $("#standard-edit-notice").textContent+=" 標準已更新，原先異常的定位可能已改變，請重新選擇文字。";
     }else if(context.focusLineIds.length){
       if(context.textMode){
-        const index=(source.lines || []).findIndex(line=>context.focusLineIds.includes(String(line.id)));
-        if(index>=0){focusTextEditorRow("standard",index);$("#standard-edit-notice").textContent+=` 已選取對應的第 ${index+1} 行，可直接在全文修改。`;}
-        else setDialogError("#standard-edit-error","目前標準已變更，找不到原先對應的文字。請核對目前全文。");
+        let index=(source.lines || []).findIndex(line=>context.focusLineIds.includes(String(line.id)));
+        if(context.draftMode==="latest"){const evidence=new Set((source.lines || []).flatMap((line,i)=>context.focusLineIds.includes(String(line.id)) ? context.currentTextRows[i]?.ids || [] : []));index=context.textRows.findIndex(row=>(row.ids || []).some(id=>evidence.has(id)));}
+        if(index>=0){focusTextEditorRow("standard",index);$("#standard-edit-notice").textContent+=` 已選取本次照片對應的第 ${index+1} 行，請核對內容。`;}
+        else $("#standard-edit-notice").textContent+=" 原先異常沒有確定對應到目前草稿，請直接核對完整文字；不按舊行號猜測位置。";
       }else{
       const matched=context.lineControls.filter(item=>context.focusLineIds.includes(String(item.line.id)));
       if(matched.length){
@@ -1127,11 +1151,13 @@ function lockStandardContent(locked) {
   for(const id of ["standard-text-delete","standard-text-merge","standard-text-split","standard-regroup-button","standard-regroup-apply"])$("#"+id).disabled=locked || !!state.standardEdit?.conflict;
   for(const item of state.standardEdit?.lineControls || [])item.input.disabled=locked;
   for(const item of state.standardEdit?.dateControls || [])item.input.disabled=locked;
+  updateStandardDraftControls();
 }
 function standardOperationDifferences(before, after, operation, revision) {
   const changes=[{label:"還原操作",before:"目前網站比對標準",after:operation==="reset" ? "恢復目前原始來源；保留先前修改紀錄。" : `採用第 ${revision} 版內容，另建立新版；保留先前修改紀錄。`}];
   function compare(label,oldValue,newValue){if(JSON.stringify(oldValue ?? null)!==JSON.stringify(newValue ?? null))changes.push({label,before:oldValue ?? "未設定",after:newValue ?? "未設定"});}
   compare("標準品名",before.name,after.name);compare("保存天數",before.keep_days,after.keep_days);
+  if((before.reference_image_id || null)!==(after.reference_image_id || null))changes.push({label:"目前標準照片",before:"目前顯示的標準照片",after:after.reference_image_id ? "改用此版本指定的標準照片；舊照片仍保留。" : "恢復建立標準時的參考照片；之後附加的照片仍保留。"});
   const beforeLines=new Map((before.lines || []).map((line,index)=>[String(line.id),{line,index}])),afterLines=new Map((after.lines || []).map((line,index)=>[String(line.id),{line,index}]));
   for(const id of new Set([...beforeLines.keys(),...afterLines.keys()])){const prior=beforeLines.get(id),next=afterLines.get(id);compare(`第 ${(next?.index ?? prior.index)+1} 段標準文字`,prior?.line.text ?? "（原本沒有這段）",next?.line.text ?? "（此版沒有這段）");}
   const beforeDates=before.date_settings || [],afterDates=after.date_settings || [];
@@ -1178,7 +1204,7 @@ async function selectStandardOperation(operation, targetRevision) {
 }
 function standardPreviewSignature(collected) {
   const context=state.standardEdit;
-  return JSON.stringify({operation:context.operation || "update",target_revision:context.targetRevision,changes:collected.changes,preview:collected.preview});
+  return JSON.stringify({operation:context.operation || "update",target_revision:context.targetRevision,changes:collected.changes,preview:collected.preview,draftMode:context.draftMode,...standardDraftOptions(context)});
 }
 function collectStandardChanges() {
   const context=state.standardEdit;if(!context?.data?.editable || context.conflict)return null;
@@ -1207,7 +1233,13 @@ function collectStandardChanges() {
   const dates=[];
   for(const {index,setting,input} of context.dateControls){if(!input.checkValidity()){ $("#standard-edit-dates").open=true;input.reportValidity();return null;}const value=Number(input.value);if(value !== Number(setting.shift_days ?? 0)){dates.push({index,shift_days:value});preview.push({label:`${setting.content || `日期欄 ${index+1}`} 位移天數`,before:setting.shift_days ?? 0,after:value});}}
   if(dates.length)changes.date_settings=dates;
+  if(standardDraftOptions(context).use_inspection_photo)preview.push({label:"目前標準照片",before:"現行標準照片（將保留）",after:"改用本次檢查照片，舊照片仍保留"});
   return {changes,preview};
+}
+function appendStandardPhotoPreview(area,context){
+  if(!standardDraftOptions(context).use_inspection_photo)return;
+  const photos=element("div","standard-photo-comparison");
+  for(const [label,photo] of [["目前標準照片（保留）",context.data.current_reference_image],["本次照片（儲存後設為目前照片）",context.inspection?.image]]){const figure=element("figure");figure.append(element("figcaption","",label));if(photo?.url){const image=element("img");image.src=photo.thumbnail || photo.url;image.alt=label;figure.append(image);}else figure.append(element("p","help","尚無可讀取的照片"));photos.append(figure);}area.append(photos);
 }
 function previewStandardChanges() {
   if(!requireAdmin())return;
@@ -1215,14 +1247,18 @@ function previewStandardChanges() {
   setDialogError("#standard-edit-error");const collected=collectStandardChanges();if(!collected)return;
   if(!collected.preview.length){invalidateStandardPreview();setDialogError("#standard-edit-error","目前沒有修改內容。");return;}
   invalidateStandardPreview();const context=state.standardEdit,nonce=context.previewNonce,signature=standardPreviewSignature(collected);
-  const area=$("#standard-edit-preview");area.replaceChildren(element("h3","","請核對修改前後差異"));
+  const area=$("#standard-edit-preview");area.replaceChildren(element("h3","","請核對修改前後差異"));if(context.draftMode==="latest" && context.operation==="update")area.append(element("p","note","這次會以本次草稿完整取代原標準固定文字；未帶入的舊文字也會移除。請對照照片確認沒有漏字、漏欄，日期規則另外保留。"));
+  appendStandardPhotoPreview(area,context);
   collected.preview.forEach(item=>{const row=element("div","standard-preview-row");row.append(element("strong","",item.label),element("p","before",`修改前：${item.before ?? "未設定"}`),element("p","after",`修改後：${item.after}`));area.append(row);});
   const finish=checks=>{if(state.standardEdit!==context || context.previewNonce!==nonce)return;renderNutritionPreview(area,checks);context.preview=signature;area.hidden=false;$("#standard-edit-confirm").checked=false;$("#standard-edit-confirm-label").hidden=false;$("#standard-edit-save").hidden=false;};
   if(!context.textMode || context.operation!=="update"){finish(context.operation!=="update" ? context.targetNutrition : null);return;}
   context.previewLoading=true;$("#standard-edit-preview-button").disabled=true;$("#standard-edit-preview-button").textContent="檢查草稿中…";
-  return api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard/preview`,{method:"POST",body:{base_revision:context.data.base_revision,source_revision:context.data.source_revision,changes:collected.changes}}).then(data=>{
+  return api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard/preview`,{method:"POST",body:{base_revision:context.data.base_revision,source_revision:context.data.source_revision,changes:collected.changes,...standardDraftOptions(context)}}).then(data=>{
     if(state.standardEdit!==context || context.previewNonce!==nonce)return;
     if(data.base_revision!==context.data.base_revision || data.source_revision!==context.data.source_revision){const error=new Error("標準已更新，請重新載入最新標準後確認。");error.status=409;throw error;}
+    if(data.use_inspection_photo!==undefined && data.use_inspection_photo!==standardDraftOptions(context).use_inspection_photo)throw new Error("照片更新選項已變更，請重新預覽。");
+    if(data.source?.name && data.source.name!==$("#standard-edit-name").value.trim()){const nameRow=element("div","standard-preview-row");nameRow.append(element("strong","","文字中的品名會同步更新"),element("p","before",`目前標準品名：${context.data.source.name}`),element("p","after",`實際儲存品名：${data.source.name}`));area.append(nameRow);}
+    if(data.source?.lines){const actual=element("details");actual.append(element("summary","","查看實際將儲存的完整標準文字"),element("pre","standard-full-text",data.source.lines.map(line=>line.text || "").join("\n")));area.append(actual);}
     finish(data.nutrition_checks);
   }).catch(error=>{if(state.standardEdit!==context || context.previewNonce!==nonce)return;if(error.status===409){context.conflict=true;$("#standard-edit-reload").hidden=false;}setDialogError("#standard-edit-error",`${error.message}${error.status===409 ? " 你的編輯仍保留，這次尚未儲存。" : ""}`);}).finally(()=>{context.previewLoading=false;if(state.standardEdit===context){$("#standard-edit-preview-button").disabled=false;$("#standard-edit-preview-button").textContent="預覽修改差異";}});
 }
@@ -1243,14 +1279,15 @@ async function saveStandardEdit(event) {
   setDialogError("#standard-edit-error");setBusy(true);$$("#standard-edit-dialog button").forEach(button=>{button.disabled=true;});
   $$("#standard-edit-form input, #standard-edit-form textarea").forEach(input=>{input.disabled=true;});
   try {
-    const body={base_revision:context.data.base_revision,source_revision:context.data.source_revision,changes:collected.changes,reviewer,note,confirmed:true,operation:context.operation || "update"};
+    const body={base_revision:context.data.base_revision,source_revision:context.data.source_revision,changes:collected.changes,reviewer,note,confirmed:true,operation:context.operation || "update",...standardDraftOptions(context)};
     if(body.operation==="restore")body.target_revision=context.targetRevision;
     await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/standard`,{method:"POST",body});
     sessionStorage.setItem("labelcheck-operator",reviewer);$("#standard-edit-dialog").close();
     if(state.inspection?.id===context.inspectionId)standardSavedNotice();
-    toast("新版比對標準已儲存，之後同款會套用；這張照片可再按「重新核對」。");
+    toast(body.use_inspection_photo ? "新版文字與目前標準照片已一併更新，舊照片保留；可重新核對本張。" : "新版比對標準已儲存，之後同款會套用；這張照片可再按「重新核對」。");
+    if(context.data.kind==="manual")loadManualLibrary(1);
   } catch(error){
-    if(error.status===409){context.conflict=true;$("#standard-edit-reload").hidden=false;setDialogError("#standard-edit-error","標準已被更新。你的輸入仍保留；請先複製需要的文字，再重新載入最新標準核對，這次尚未儲存。");}
+    if(error.status===409){context.conflict=true;$("#standard-edit-reload").hidden=false;setDialogError("#standard-edit-error",`${error.message} 你的輸入仍保留；請先複製需要的文字，再重新載入最新資料核對，這次尚未儲存。`);}
     else setDialogError("#standard-edit-error",error.message);
   } finally {setBusy(false);$$("#standard-edit-dialog button").forEach(button=>{button.disabled=false;});$$("#standard-edit-form input, #standard-edit-form textarea").forEach(input=>{input.disabled=false;});lockStandardContent(context.operation!=="update");$("#standard-edit-save").disabled=!!context.conflict;restoreStandardOperationButtons();}
 }
@@ -2042,6 +2079,9 @@ $("#standard-edit-preview-button").onclick=previewStandardChanges;
 $("#standard-edit-text").oninput=()=>changeTextEditor("standard");
 $("#standard-photo-canvas").onclick=event=>textEditorPhotoClicked("standard",event);
 $("#standard-regroup-button").onclick=previewRegroupedStandard;
+$("#standard-draft-latest").onclick=()=>selectStandardDraft("latest");
+$("#standard-draft-current").onclick=()=>selectStandardDraft("current");
+$("#standard-use-photo").onchange=invalidateStandardPreview;
 $("#standard-regroup-apply").onclick=applyRegroupedStandard;
 $("#standard-regroup-cancel").onclick=()=>{if(!state.busy){if(state.standardEdit)state.standardEdit.regroupPreview=null;$("#standard-regroup-preview").hidden=true;}};
 $("#standard-edit-reset").onclick=()=>selectStandardOperation("reset");

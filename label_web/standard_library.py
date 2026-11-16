@@ -166,7 +166,8 @@ def detail(engine,kind,key,image_payload,summary=False):
             origin=conn.execute(select(db.inspections.c.image_id).where(db.inspections.c.id==context["master"]["inspection_id"])).scalar_one_or_none()
             attached=conn.execute(select(reference_photos.photos.c.image_id).where(reference_photos.photos.c.source_code==key)
                 .order_by(reference_photos.photos.c.created_at.desc()).limit(1 if summary else 50)).scalars().all()
-            image_ids=list(dict.fromkeys([*([origin] if origin else []),*attached]))
+            selected=source.get("reference_image_id")
+            image_ids=list(dict.fromkeys([*([selected] if selected else []),*([origin] if origin else []),*attached]))
             photo_ids=union_all(select(db.inspections.c.image_id).where(db.inspections.c.id==context["master"]["inspection_id"]),
                 select(reference_photos.photos.c.image_id).where(reference_photos.photos.c.source_code==key)).subquery()
             photo_count=conn.scalar(select(func.count(func.distinct(photo_ids.c.image_id))).where(photo_ids.c.image_id!=""))

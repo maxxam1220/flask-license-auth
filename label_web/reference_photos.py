@@ -1,5 +1,5 @@
 """Explicit photo associations with existing comparison sources, never new OCR truth."""
-from flask import abort, jsonify, request
+from flask import abort, current_app, jsonify, request
 from sqlalchemy import Column, Integer, String, Table, Text, UniqueConstraint, select, insert, func
 from sqlalchemy.exc import IntegrityError
 
@@ -43,6 +43,54 @@ def source_info(source):
             "source_kind": source.get("source_kind", "desktop"),
             "source_revision": str(source["revision"]),
             "base_revision": source.get("standard_reference", {}).get("revision", 0)}
+
+
+def require_inspection_image(conn, inspection):
+    """Validate a current-inspection photo for an atomic standard update."""
+    identifier = inspection["image_id"]
+    available = current_app.extensions.get("label_reference_image_available")
+    if (available is None or not available(identifier) or
+            conn.execute(select(db.images.c.id).where(db.images.c.id == identifier)).first() is None):
+        abort(409, description="這筆紀錄的原照片已不存在，無法設為目前標準照片；標準尚未儲存。")
+    return identifier
+
+
+def current_image(engine, source):
+    """The approved current photo, falling back to the creation photograph."""
+    identifier = source.get("reference_image_id")
+    if not identifier:
+        with engine.connect() as conn:
+            identifier = conn.execute(select(db.inspections.c.image_id).join(db.manual_sources,
+                db.manual_sources.c.inspection_id == db.inspections.c.id)
+                .where(db.manual_sources.c.code == str(source["code"]))).scalar_one_or_none()
+    image_payload = current_app.extensions.get("label_reference_image_payload")
+    if not identifier or image_payload is None:
+        return None
+    from werkzeug.exceptions import HTTPException
+    try:
+        return image_payload(identifier)
+    except HTTPException as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def attach_locked(conn, inspection, source, revision, reviewer, note):
+    """Caller holds inspection + source/head locks and owns the transaction.
+
+    Existing associations retain their original audit metadata. The standard
+    snapshot separately records which retained photograph is current.
+    """
+    identifier = require_inspection_image(conn, inspection)
+    existing = conn.execute(select(photos.c.id).where(photos.c.image_id == identifier,
+        photos.c.source_code == str(source["code"]))).scalar_one_or_none()
+    if existing:
+        return existing
+    identifier_row = db.uid()
+    conn.execute(insert(photos).values(id=identifier_row, image_id=identifier, inspection_id=inspection["id"],
+        source_code=str(source["code"]), source_revision=str(source["revision"]), standard_revision=revision,
+        reviewer=reviewer, note=note, created_at=db.now()))
+    return identifier_row
 
 
 def _public(row, image_payload, current_revision=None):
@@ -162,6 +210,8 @@ def save(engine, inspection, body, image_payload, image_available):
 
 
 def register_routes(app, engine, require_admin, get_inspection, image_payload, image_available):
+    app.extensions["label_reference_image_available"] = image_available
+    app.extensions["label_reference_image_payload"] = image_payload
     @app.get("/api/inspections/<identifier>/reference-photo")
     def get_reference_photo(identifier):
         require_admin()
