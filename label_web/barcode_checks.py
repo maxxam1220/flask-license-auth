@@ -42,7 +42,8 @@ def checks_for(ocr):
         value=code["text"]
         checks.append({"key":f"barcode_decode_{index}", "label":"條碼圖形", "status":"pass", "actual":value,
                        "reason":"黑白條紋可解碼；只確認可讀取，不代表商品資料正確。", "line_ids":[], "box":code["box"]})
-    # Only complete standalone numeric rows or explicit headings are possible HRI.
+    # Without decoded bars, only existing full-length numeric candidates are
+    # strong enough to suggest barcode/checksum evidence rather than a SKU.
     candidates=[]
     for line in ocr.get("lines",[]):
         raw=str(line.get("text",""))
@@ -63,13 +64,31 @@ def checks_for(ocr):
             valid=gtin_valid(value)
             checks.append({"key":f"barcode_checksum_{index}", "label":"條碼檢查碼", "status":"review" if ambiguous else "pass" if valid else "fail",
                 "actual":value,"reason":"EAN／GTIN 檢查碼符合計算規則。" if valid and not ambiguous else "請確認條碼數字與檢查碼；辨識不確定。" if ambiguous else "EAN／GTIN 檢查碼不符合計算規則。", "line_ids":[line.get("id")]})
-    paired=[(line,value) for line,value in candidates if len(decoded)==1 and _near_bars(line,decoded[0])]
+    paired=[]
+    if len(decoded)==1:
+        # A successful spatially adjacent decode is independent evidence that
+        # even a short digit row may be a partially read HRI. Do not require a
+        # GTIN length here or silently leave missing digits unchecked.
+        for line in ocr.get("lines",[]):
+            match=re.fullmatch(r"\s*(?:(?:條碼|条码|EAN|GTIN)\s*[:：]?\s*)?([0-9][0-9 \t]*)\s*",
+                               str(line.get("text","")),re.I)
+            if match and _near_bars(line,decoded[0]):
+                paired.append((line,re.sub(r"\s","",match[1])))
     if len(decoded)==1 and len(paired)==1:
         line,value=paired[0]
         uncertain=line_is_uncertain(line,.65)
         same=value==decoded[0]["text"]
+        partial=decoded[0]["text"].isascii() and decoded[0]["text"].isdigit() and len(value)<len(decoded[0]["text"])
+        reason=("條紋解碼與印出的數字一致。" if same and not uncertain else
+                "條碼圖形已解碼，但下方數字可能只辨識到一部分，請對照原圖確認完整印字。" if partial and not line.get("human_verified") else
+                "條紋解碼與文字讀取不同或不確定，請查看原圖。")
         checks.append({"key":"barcode_hri", "label":"條碼與印字", "status":"review" if uncertain else "pass" if same else "fail" if line.get("human_verified") else "review",
-            "actual":value,"expected":decoded[0]["text"],"reason":"條紋解碼與印出的數字一致。" if same and not uncertain else "條紋解碼與文字讀取不同或不確定，請查看原圖。", "line_ids":[line.get("id")]})
+            "actual":value,"expected":decoded[0]["text"],"reason":reason, "line_ids":[line.get("id")]})
+    elif len(decoded)==1 and len(paired)>1:
+        checks.append({"key":"barcode_hri", "label":"條碼與印字", "status":"review",
+            "actual":"；".join(value for _,value in paired), "expected":decoded[0]["text"],
+            "reason":"條碼附近讀到多段數字，無法唯一配對；請對照原圖確認完整印字，未自動拼接或補字。",
+            "line_ids":[line.get("id") for line,_ in paired]})
     elif candidates and not decoded:
         checks.append({"key":"barcode_unread", "label":"條碼圖形", "status":"review", "actual":candidates[0][1],
             "reason":"只讀到疑似條碼數字，尚未成功解碼條紋，不能確認可掃描或檢查碼。", "line_ids":[x[0].get("id") for x in candidates]})
