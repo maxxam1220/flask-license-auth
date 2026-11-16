@@ -1,0 +1,38 @@
+{
+  "暫存照片附件不正確，每筆最多 3 張；資料仍保留，請聯絡管理員。": {
+    "id": "Lampiran foto tidak valid. Maksimal 3 foto per catatan. Data tetap tersimpan; hubungi admin.",
+    "vi": "Tệp ảnh đính kèm không hợp lệ. Tối đa 3 ảnh mỗi bản ghi. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên."
+  },
+  "第 {position} 張暫存照片缺少檔名；資料仍保留，請聯絡管理員。": {
+    "id": "Foto tersimpan ke-{position} tidak memiliki nama file. Data tetap tersimpan; hubungi admin.",
+    "vi": "Ảnh tạm số {position} thiếu tên tệp. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên."
+  },
+  "第 {position} 張暫存照片未傳入任何內容；資料仍保留，請稍後重試或聯絡管理員，勿刪除暫存。": {
+    "id": "Foto tersimpan ke-{position} terkirim tanpa isi. Data tetap tersimpan; coba lagi nanti atau hubungi admin. Jangan hapus catatan tersebut.",
+    "vi": "Ảnh tạm số {position} được gửi lên không có nội dung. Dữ liệu vẫn được giữ; hãy thử lại sau hoặc liên hệ quản trị viên. Không xóa bản ghi tạm."
+  },
+  "第 {position} 張暫存照片超過 8 MB；資料仍保留，請聯絡管理員。": {
+    "id": "Foto tersimpan ke-{position} melebihi 8 MB. Data tetap tersimpan; hubungi admin.",
+    "vi": "Ảnh tạm số {position} vượt quá 8 MB. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên."
+  },
+  "第 {position} 張暫存照片讀取失敗；資料仍保留，請重新同步。": {
+    "id": "Foto tersimpan ke-{position} tidak dapat dibaca. Data tetap tersimpan; coba sinkronkan lagi.",
+    "vi": "Không đọc được ảnh tạm số {position}. Dữ liệu vẫn được giữ; hãy thử đồng bộ lại."
+  },
+  "暫存備註含不支援的字元或超過 2,000 字；資料仍保留，請聯絡管理員。": {
+    "id": "Catatan berisi karakter yang tidak didukung atau lebih dari 2.000 karakter. Data tetap tersimpan; hubungi admin.",
+    "vi": "Ghi chú có ký tự không được hỗ trợ hoặc vượt quá 2.000 ký tự. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên."
+  },
+  "第 {number} 張照片無法完整讀取，尚未暫存；請重新選擇照片後再按 OK。": {
+    "id": "Foto ke-{number} tidak dapat dibaca sepenuhnya dan belum disimpan. Pilih ulang foto, lalu tekan OK.",
+    "vi": "Không đọc được toàn bộ ảnh số {number}, ảnh chưa được lưu tạm. Hãy chọn lại ảnh rồi nhấn OK."
+  },
+  "第 {number} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。": {
+    "id": "Foto tersimpan ke-{number} tidak dapat dibaca sepenuhnya. Data tetap tersimpan; coba lagi nanti atau hubungi admin. Jangan hapus data browser.",
+    "vi": "Không đọc được toàn bộ ảnh tạm số {number}. Dữ liệu vẫn được giữ; hãy thử lại sau hoặc liên hệ quản trị viên. Không xóa dữ liệu trình duyệt."
+  },
+  "暫存資料欄位不正確；資料仍保留，請聯絡管理員確認，勿刪除暫存。": {
+    "id": "Kolom data tersimpan tidak valid. Data tetap tersimpan; hubungi admin dan jangan hapus catatan tersebut.",
+    "vi": "Trường dữ liệu tạm không hợp lệ. Dữ liệu vẫn được giữ; hãy liên hệ quản trị viên và không xóa bản ghi tạm."
+  }
+}

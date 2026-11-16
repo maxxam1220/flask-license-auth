@@ -83,6 +83,7 @@
     const navigator = options.navigator || env.navigator || {};
     const connectTimeout = options.connectTimeout || 5000;
     const uploadTimeout = options.uploadTimeout || 30000;
+    const photoReadTimeout = options.photoReadTimeout || 10000;
     const listeners = new Set();
     let tabId, capabilityError;
     try {
@@ -90,6 +91,38 @@
       tabId = uuid();
     } catch (error) { capabilityError = error?.code === 'support' ? error : fault('support', '此瀏覽器無法啟用安全離線暫存，目前僅支援線上打卡；請連線操作或更新瀏覽器。'); }
     const requireSupport = () => { if (capabilityError) throw capabilityError; };
+    async function copyPhotos(photos, saved = false) {
+      if (!Array.isArray(photos) || photos.length > 3) throw fault('photos', '最多可附 3 張照片。');
+      const copies = [];
+      for (let index = 0; index < photos.length; index++) {
+        const item = photos[index], blob = saved ? item?.blob : item;
+        const message = saved ? `第 ${index + 1} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。` :
+          `第 ${index + 1} 張照片無法完整讀取，尚未暫存；請重新選擇照片後再按 OK。`;
+        let timeout, reader;
+        try {
+          if (!blob || !Number.isInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
+              (saved && blob.size !== item.size)) throw new Error('Invalid stored photo size');
+          const read = typeof blob.arrayBuffer === 'function' ? () => blob.arrayBuffer() :
+            typeof env.FileReader === 'function' ? () => new Promise((resolve, reject) => {
+              reader = new env.FileReader(); reader.onload = () => resolve(reader.result);
+              reader.onerror = reader.onabort = () => reject(new Error('Photo read failed'));
+              reader.readAsArrayBuffer(blob);
+            }) : typeof env.Response === 'function' ? () => new env.Response(blob).arrayBuffer() :
+              () => Promise.reject(new Error('Photo reading unavailable'));
+          const buffer = await Promise.race([Promise.resolve().then(read), new Promise((_, reject) => {
+            timeout = timers.setTimeout(() => { reject(new Error('Photo read timed out')); try { reader?.abort(); } catch (_) {} }, photoReadTimeout);
+          })]);
+          if (Object.prototype.toString.call(buffer) !== '[object ArrayBuffer]' || buffer.byteLength !== blob.size) throw new Error('Incomplete photo bytes');
+          // Materialize phone camera Files before clearing the form. A File's
+          // advertised size alone does not prove its backing bytes can be read.
+          const copied = new env.Blob([buffer], { type: blob.type || item.type || '' });
+          if (copied.size !== blob.size) throw new Error('Incomplete photo copy');
+          copies.push({ blob: copied, name: item.name || 'photo.jpg', type: copied.type, size: copied.size });
+        } catch (_) { throw fault('photo_read', message); }
+        finally { if (timeout !== undefined) timers.clearTimeout(timeout); }
+      }
+      return copies;
+    }
     let dbPromise, state = { locked: true, prepared: false, queue: [], receipts: [], pending: 0, blocked: 0, online: navigator.onLine !== false,
       supported: !capabilityError, supportMessage: capabilityError?.message || '' };
     let epoch = 0, syncController, syncing = false, cancelled = false, syncState = {}, message = '', messageSource = null, privacyHold = false;
@@ -286,14 +319,22 @@
     }
     async function enqueue(input) {
       requireSupport();
+      const startEpoch = epoch, capturedMs = now();
       const photos = Array.from(input.photos || []); validatePhotos(photos);
       const note = String(input.note || '').replace(/\r\n?/g, '\n').trim();
       if (Array.from(note).length > 2000) throw fault('note', '巡檢備註最多 2,000 字。');
       if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ud800-\udfff]/u.test(note)) throw fault('note', '巡檢備註含無法儲存的字元，請移除特殊控制字元後重試。');
-      const client_id = uuid(), captured_device_at = new Date(now()).toISOString();
+      const photoOwner = photos.length ? await transaction(['meta'], 'readonly', (tx, done) => {
+        const request = tx.objectStore('meta').get('active'); request.onsuccess = () => done(request.result?.owner);
+      }) : null;
+      const savedPhotos = await copyPhotos(photos);
+      if (epoch !== startEpoch) throw fault('owner', '帳號狀態已變更，請重新開啟點位。');
+      const client_id = uuid(), captured_device_at = new Date(capturedMs).toISOString();
       const saved = await transaction(STORES, 'readwrite', (tx, done, fail) => readAll(tx, data => {
+        if (epoch !== startEpoch) return fail(fault('owner', '帳號狀態已變更，請重新開啟點位。'));
         const { manifest } = current(data);
         if (!manifest) return fail(fault('locked', '請先連線登入，準備今日離線資料。'));
+        if (photos.length && photoOwner !== manifest.owner) return fail(fault('owner', '帳號狀態已變更，請重新開啟點位。'));
         if (input.owner && input.owner !== manifest.owner) return fail(fault('owner', '帳號或手機綁定已變更，請重新開啟點位。'));
         if (!checklistCapable(manifest)) return fail(fault('checklist_update', CHECKLIST_UPDATE_MESSAGE));
         if (!fresh(manifest)) return fail(fault('expired', '今日離線資料已到期，請連線重新準備。原有待補傳資料仍保留。'));
@@ -320,8 +361,8 @@
         const sequence = (data.meta.find(item => item.key === 'sequence')?.value || 0) + 1;
         const row = { client_id, sequence, owner: manifest.owner, user_id: manifest.identity.id, auth_version: manifest.identity.auth_version,
           binding_id: manifest.identity.binding_id, token: point.token, grant: point.grant, slot,
-          observed_at: new Date(now() + manifest.offset_ms).toISOString(), captured_device_at, note, is_abnormal: Boolean(input.is_abnormal),
-          photos: photos.map(file => ({ blob: file, name: file.name || 'photo.jpg', type: file.type, size: file.size })),
+          observed_at: new Date(capturedMs + manifest.offset_ms).toISOString(), captured_device_at, note, is_abnormal: Boolean(input.is_abnormal),
+          photos: savedPhotos,
           day: manifest.day, sync_until: manifest.sync_until, created_ms: now(), code: point.code, name: point.name, name_i18n: point.name_i18n,
           stage: point.stage, frequency: point.frequency, period_key: point.period_key, status: 'pending', retryable: true, attempts: 0,
           checklist, checklist_snapshot };
@@ -402,13 +443,24 @@
           if (!row) { syncState.processed++; continue; }
           syncState.current = row.code; syncState.phase = 'uploading'; await refresh();
           if (cancelled || epoch !== startEpoch) break;
-          const Form = options.FormData || env.FormData, body = new Form();
-          const entry = { client_id: row.client_id, owner: row.owner, token: row.token, grant: row.grant, slot: row.slot,
-            observed_at: row.observed_at, note: row.note, is_abnormal: row.is_abnormal };
-          if (owns(row, 'checklist')) entry.checklist = row.checklist;
-          body.append('entry', JSON.stringify(entry));
-          for (const photo of row.photos) body.append('photos', photo.blob, photo.name);
           try {
+            const photos = await copyPhotos(row.photos, true);
+            if (cancelled || epoch !== startEpoch) break;
+            // Reading a large camera image may outlast a lease in a suspended
+            // tab. Check ownership again before uploading the immutable bytes.
+            if (!await lease(owner)) break;
+            if (!await ownedEntry(id, owner)) { syncState.processed++; continue; }
+            if (cancelled || epoch !== startEpoch) break;
+            const Form = options.FormData || env.FormData, body = new Form();
+            const entry = { client_id: row.client_id, owner: row.owner, token: row.token, grant: row.grant, slot: row.slot,
+              observed_at: row.observed_at, note: row.note, is_abnormal: row.is_abnormal };
+            if (owns(row, 'checklist')) entry.checklist = row.checklist;
+            body.append('entry', JSON.stringify(entry));
+            for (let index = 0; index < photos.length; index++) {
+              const photo = photos[index];
+              try { body.append('photos', photo.blob, photo.name); }
+              catch (_) { throw fault('photo_read', `第 ${index + 1} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。`); }
+            }
             const { response, json } = await network('/api/offline/sync', { method: 'POST', headers: { 'X-CSRF-Token': status.json.csrf_token }, body }, uploadTimeout);
             const acknowledged = response.ok && json?.ok === true && ['saved', 'already_synced'].includes(json.status) && json.client_id === id;
             if (acknowledged) {

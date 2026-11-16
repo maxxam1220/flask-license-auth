@@ -49,8 +49,11 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                      executor_can_scan, point_revision, inspection_in_slot, audit):
     signer = URLSafeSerializer(app.secret_key, salt="patrol-offline-v1")
 
-    def fail(code, message, status=409, retryable=False):
-        return jsonify(ok=False, code=code, message=t(message), message_source=message, retryable=retryable), status
+    def fail(code, message, status=409, retryable=False, reason=None):
+        result = dict(ok=False, code=code, message=t(message), message_source=message, retryable=retryable)
+        if reason:
+            result["reason"] = reason
+        return jsonify(result), status
 
     def owner(user, binding):
         return f"u{user.id}v{user.auth_version}b{binding.id}-{user.role}-{user.patrol_category or 'all'}"
@@ -277,43 +280,76 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         user, binding, error = actor(lock=True)
         if error:
             return error
+        validation_reason = "entry_json"
+        photo_position = 0
         try:
             raw_entry = request.form.get("entry", "")
             if len(raw_entry) > 20000:
                 raise ValueError("oversized entry")
             entry = json.loads(raw_entry)
+            validation_reason = "entry_fields"
             required = {"client_id", "owner", "token", "grant", "slot", "observed_at", "note", "is_abnormal"}
             if not isinstance(entry, dict) or not required <= set(entry) or set(entry) - required - {"checklist"}:
                 raise ValueError("invalid entry fields")
+            validation_reason = "entry_checklist"
             if "checklist" in entry and (not isinstance(entry["checklist"], list) or len(entry["checklist"]) > 30
                     or any(not isinstance(item, str) or len(item) > 100 for item in entry["checklist"])):
                 raise ValueError("invalid checklist fields")
+            validation_reason = "entry_types"
             if any(not isinstance(entry[key], str) for key in required - {"is_abnormal"}):
                 raise ValueError("invalid entry type")
             if type(entry["is_abnormal"]) is not bool:
                 raise ValueError("invalid abnormal state")
+            validation_reason = "entry_id"
             if str(UUID(entry["client_id"])) != entry["client_id"]:
                 raise ValueError("invalid visit identifier")
+            validation_reason = "entry_time"
             observed = parse_time(entry["observed_at"])
+            validation_reason = "entry_note"
             note = entry["note"].replace("\r\n", "\n").replace("\r", "\n").strip()
             note.encode("utf-8")  # JSON may contain an invalid lone surrogate.
             if len(note) > 2000 or any((ord(c) < 32 and c not in "\t\n") or ord(c) == 127 for c in note):
                 raise ValueError("invalid note")
+            validation_reason = "photo_fields"
             uploads = request.files.getlist("photos")
             if len(uploads) > MAX_PHOTOS or set(request.files) - {"photos"}:
                 raise ValueError("invalid photo count")
             photo_hashes = []
-            for upload in uploads:
+            for photo_position, upload in enumerate(uploads, 1):
+                validation_reason = "photo_read"
                 raw = upload.stream.read(MAX_INPUT_BYTES + 1)
-                if not upload.filename or not raw or len(raw) > MAX_INPUT_BYTES:
+                validation_reason = "photo_name"
+                if not upload.filename:
+                    raise ValueError("invalid photo name")
+                validation_reason = "photo_empty"
+                if not raw:
+                    raise ValueError("empty photo")
+                validation_reason = "photo_size"
+                if len(raw) > MAX_INPUT_BYTES:
                     raise ValueError("invalid photo size")
                 photo_hashes.append(hashlib.sha256(raw).hexdigest())
+                validation_reason = "photo_read"
                 upload.stream.seek(0)
+            validation_reason = "entry_canonical"
             canonical = dict(entry, note=note, observed_at=iso(observed), photos=photo_hashes)
             payload_hash = hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=True,
                                                     separators=(",", ":")).encode()).hexdigest()
         except (ValueError, TypeError, OverflowError, RecursionError):
-            return fail("invalid_entry", "暫存格式不正確；備註最多 2,000 字、照片最多 3 張且每張 8 MB。資料仍保留。", 400)
+            # Log only bounded validation categories and authenticated IDs. Never
+            # log request bodies, signed grants, notes, names or photo contents.
+            app.logger.warning("offline_sync_rejected user_id=%s binding_id=%s reason=%s photo_position=%s",
+                               user.id, binding.id, validation_reason, photo_position)
+            messages = {
+                "photo_fields": "暫存照片附件不正確，每筆最多 3 張；資料仍保留，請聯絡管理員。",
+                "photo_name": f"第 {photo_position} 張暫存照片缺少檔名；資料仍保留，請聯絡管理員。",
+                "photo_empty": f"第 {photo_position} 張暫存照片未傳入任何內容；資料仍保留，請稍後重試或聯絡管理員，勿刪除暫存。",
+                "photo_size": f"第 {photo_position} 張暫存照片超過 8 MB；資料仍保留，請聯絡管理員。",
+                "photo_read": f"第 {photo_position} 張暫存照片讀取失敗；資料仍保留，請重新同步。",
+                "entry_note": "暫存備註含不支援的字元或超過 2,000 字；資料仍保留，請聯絡管理員。",
+            }
+            message = messages.get(validation_reason,
+                "暫存資料欄位不正確；資料仍保留，請聯絡管理員確認，勿刪除暫存。")
+            return fail("invalid_entry", message, 400, reason=validation_reason)
         if entry["owner"] != owner(user, binding):
             return fail("owner_changed", "帳號權限或手機綁定已變更，這批暫存無法自動同步；請聯絡管理員。", 403)
         # An acknowledged-lost request must still resolve after its grant has
