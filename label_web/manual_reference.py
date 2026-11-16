@@ -125,15 +125,14 @@ def _pending_name(stored, lines):
         return ""
 
 
-def pending_listing(engine, period="today", page=1, limit=24):
-    """A read-only queue of existing inspections, not unapproved database standards."""
+def _pending_query(period="today", state="active"):
     import history_cleanup
+    import pending_drafts
     import reference_photos
-    from standard_reference import _integer
     if period not in {"today","all"}:
         abort(400,description="請選擇今日或全部待建立紀錄。")
-    page=_integer(page,"頁碼",1,1_000_000)
-    limit=_integer(limit,"每頁筆數",1,24)
+    if state not in {"active","removed"}:
+        abort(400,description="請選擇待建立或已移除草稿。")
     inspection=db.inspections
     ranked=select(inspection.c.id,func.row_number().over(partition_by=inspection.c.image_id,
         order_by=(inspection.c.created_at.desc(),inspection.c.id.desc())).label("position"))
@@ -150,11 +149,18 @@ def pending_listing(engine, period="today", page=1, limit=24):
     known_source=select(handled.c.id).where(handled.c.image_id==inspection.c.image_id,
         history_cleanup.active_filter(handled),or_(func.trim(func.coalesce(handled.c.template_id,""))!="",
             func.trim(func.coalesce(handled.c.template_snapshot["source"]["code"].as_string(),""))!=""))
-    clauses=[ranked.c.position==1,~manual_exists,~attached,~known_source.correlate(inspection).exists()]
+    decisions=pending_drafts.current_states()
+    clauses=[ranked.c.position==1]
+    if state=="active":
+        clauses.extend((~manual_exists,~attached,~known_source.correlate(inspection).exists(),
+            func.coalesce(decisions.c.removed,False).is_(False)))
+    else:
+        clauses.append(decisions.c.removed.is_(True))
     if period=="today":
         start,end=_pending_today_bounds()
-        clauses.extend((inspection.c.created_at>=start,inspection.c.created_at<end))
-    joined=inspection.join(ranked,ranked.c.id==inspection.c.id)
+        timestamp=decisions.c.created_at if state=="removed" else inspection.c.created_at
+        clauses.extend((timestamp>=start,timestamp<end))
+    joined=inspection.join(ranked,ranked.c.id==inspection.c.id).outerjoin(decisions,decisions.c.image_id==inspection.c.image_id)
     latest_patches=select(db.corrections.c.patches).where(db.corrections.c.inspection_id==inspection.c.id).order_by(
         db.corrections.c.revision.desc()).limit(1).correlate(inspection).scalar_subquery()
     query=select(inspection.c.id,inspection.c.image_id,inspection.c.created_at,
@@ -165,32 +171,54 @@ def pending_listing(engine, period="today", page=1, limit=24):
         inspection.c.ocr["label_scope"].label("observed_scope"),
         inspection.c.result["label_scope"].label("evaluated_scope"),
         inspection.c.result["source_match"]["status"].as_string().label("source_status"),
+        func.coalesce(decisions.c.revision,0).label("pending_revision"),
+        func.coalesce(decisions.c.removed,False).label("pending_removed"),
+        decisions.c.created_at.label("pending_updated_at"), decisions.c.note.label("pending_note"),
         latest_patches.label("patches")).select_from(joined).where(*clauses)
+    return query
+
+
+def _pending_ocr(row):
+    return {"lines":row["ocr_lines"],"image_status":row["image_status"],
+            "recognition_engine":row["recognition_engine"],"label_scope":row["observed_scope"]}
+
+
+def _pending_result(row):
+    return {"label_scope":row["evaluated_scope"],"source_match":{"status":row["source_status"]}}
+
+
+def pending_listing(engine, period="today", page=1, limit=24, state="active"):
+    """A read-only queue of existing inspections, not unapproved database standards."""
+    from standard_reference import _integer
+    page=_integer(page,"頁碼",1,1_000_000)
+    limit=_integer(limit,"每頁筆數",1,24)
+    query=_pending_query(period,state)
+    inspection=db.inspections
     items,total=[],0
     start=(page-1)*limit
     with engine.connect() as conn:
         # One shared Python rule avoids SQLite/PostgreSQL JSON-rule drift. The
         # SQL filters run first; a server cursor retains at most 50 candidate
         # summaries and the requested page, never the entire OCR history.
-        result=conn.execute(query.order_by(inspection.c.created_at.desc(),inspection.c.id.desc())
+        order_time=query.selected_columns.pending_updated_at if state=="removed" else inspection.c.created_at
+        result=conn.execute(query.order_by(order_time.desc(),inspection.c.id.desc())
             .execution_options(stream_results=True,yield_per=50))
         try:
             for batch in result.mappings().partitions(50):
                 for row in batch:
-                    quality=draft_eligibility({"lines":row["ocr_lines"],"image_status":row["image_status"],
-                        "recognition_engine":row["recognition_engine"],"label_scope":row["observed_scope"]},row["patches"],
-                        {"label_scope":row["evaluated_scope"],"source_match":{"status":row["source_status"]}})
-                    if not quality["eligible"]:
+                    quality=draft_eligibility(_pending_ocr(row),row["patches"],_pending_result(row))
+                    if state=="active" and not quality["eligible"]:
                         continue
                     if start<=total<start+limit:
                         items.append({"inspection_id":row["id"],"image_id":row["image_id"],"created_at":row["created_at"],
                             "name":_pending_name(row["product"],row["ocr_lines"]),
-                            "thumbnail":f"/media/{quote(str(row['image_id']),safe='')}/thumb.jpg"})
+                            "thumbnail":f"/media/{quote(str(row['image_id']),safe='')}/thumb.jpg",
+                            **{key:row[key] for key in ("pending_revision","pending_removed","pending_updated_at","pending_note")}})
                     total+=1
         finally:
             result.close()
     return {"items":items,
-        "page":page,"total":total,"has_more":page*limit<total,"range":period}
+        "page":page,"total":total,"has_more":page*limit<total,"range":period,"state":state}
 
 
 def fields_from_lines(lines, name):
@@ -520,7 +548,7 @@ def register_routes(app, engine):
             page,limit=int(request.args.get("page",1)),int(request.args.get("limit",24))
         except ValueError:
             abort(400,description="頁碼與每頁筆數須為整數。")
-        return jsonify(pending_listing(engine,request.args.get("range","today"),page,limit))
+        return jsonify(pending_listing(engine,request.args.get("range","today"),page,limit,request.args.get("state","active")))
 
     @app.get("/api/inspections/<identifier>/manual-standard")
     def get_manual_reference(identifier):

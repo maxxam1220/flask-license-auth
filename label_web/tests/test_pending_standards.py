@@ -114,7 +114,8 @@ class PendingStandardTests(unittest.TestCase):
         for index in range(27):self.add(f"item-{index:02}",product="確認品名" if index==26 else "")
         first=self.get();second=self.get(page=2)
         self.assertEqual((first["total"],len(first["items"]),first["has_more"],len(second["items"]),second["has_more"]),(27,24,True,3,False))
-        self.assertEqual(set(first["items"][0]),{"inspection_id","image_id","created_at","name","thumbnail"})
+        self.assertEqual(set(first["items"][0]),{"inspection_id","image_id","created_at","name","thumbnail",
+            "pending_revision","pending_removed","pending_updated_at","pending_note"})
         self.assertEqual(first["items"][0]["name"],"確認品名")
         self.assertEqual(first["items"][1]["name"],"待確認蘋果")
         with self.engine.connect() as conn:

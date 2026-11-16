@@ -34,6 +34,7 @@ import history_cleanup
 import photo_regions
 import recognition_samples
 import reference_photos
+import pending_drafts
 import cloud_budget
 from sticker_scope import recognize_scoped
 from inspection_evidence import augment
@@ -894,6 +895,7 @@ def create_app(config=None, ocr=None):
 
     standard_reference.register_routes(app, engine)
     history_cleanup.register_routes(app, engine, access.require_admin)
+    pending_drafts.register_routes(app, engine, access.require_admin)
     recognition_samples.register_routes(app, engine, access.require_admin, data_dir)
     reference_photos.register_routes(app,engine,access.require_admin,
         lambda identifier:get_one(db.inspections,identifier),image_payload,

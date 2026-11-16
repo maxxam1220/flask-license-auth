@@ -150,5 +150,141 @@ class StickerScopeTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), original_bytes)
 
 
+class PanelRecognizer:
+    """Class-level capability, unlike a dynamic Mock attribute."""
+    def __init__(self, result):
+        self.result = result
+        self.panel_calls = []
+        self.full_calls = []
+
+    def recognize_panel(self, path):
+        self.panel_calls.append(Path(path))
+        return deepcopy(self.result)
+
+    def recognize(self, path):
+        self.full_calls.append(Path(path))
+        return deepcopy(self.result)
+
+
+class CloudPanelScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp.name)
+        self.addCleanup(self.temp.cleanup)
+        self.path = self.folder/"transparent-pack.png"
+        # Synthetic transparent panel, separate white barcode backing and a
+        # lower advertising strip. No customer image or fixed product text.
+        with Image.new("RGB", (800, 700), (150, 90, 70)) as photo:
+            draw = ImageDraw.Draw(photo)
+            draw.rectangle((430, 290, 690, 370), fill="white")
+            draw.rectangle((0, 520, 799, 699), fill=(220, 20, 30))
+            draw.rectangle((130, 150, 140, 160), fill="black")
+            photo.save(self.path)
+        self.region = {"x":100, "y":100, "width":600, "height":300,
+                       "polygon":[[110,100],[700,100],[700,400],[100,400],[100,110]],
+                       "method":"cloud_panel_v1", "auto_selected":True}
+        self.observed = [
+            {"id":0,"text":"營養標示","score":1.,"score_kind":"uncertainty_gate",
+             "confidence":None,"box":[[120,130],[280,130],[280,160],[120,160]]},
+            {"id":1,"text":"製造日期：2026.11.16","score":1.,
+             "box":[[440,250],[680,250],[680,280],[440,280]],
+             "alternatives":[{"text":"2026.11.18","box":[[440,250],[680,250],[680,280],[440,280]]}]},
+        ]
+        self.payload = {"lines":deepcopy(self.observed),"label_region":deepcopy(self.region),
+                        "engine":"offline cloud fixture","usage":{"input_tokens":321},
+                        "diagnostics":{"processed_width":800,"processed_height":700}}
+        self.codes = {"state":"decoded","items":[{"text":"12345678","format":"Code128",
+                       "box":[[340,190],[570,190],[570,270],[340,270]]}]}
+
+    def test_panel_uses_original_once_and_keeps_nutrition_date_coordinates(self):
+        recognizer = PanelRecognizer(self.payload)
+        before = self.path.read_bytes()
+        seen = {}
+        def decode(target):
+            seen["path"] = Path(target)
+            with Image.open(target) as crop:
+                seen["size"] = crop.size
+                seen["nutrition_ink"] = crop.getpixel((35,55))
+                seen["corner"] = crop.getpixel((0,0))
+                self.assertNotEqual(crop.getpixel((300,299)), (220,20,30))
+            return deepcopy(self.codes)
+        with patch("sticker_scope.detect_sticker", side_effect=AssertionError("must not pre-crop")), \
+             patch("barcode_checks.decode_barcodes", side_effect=decode) as decode_mock:
+            result = recognize_scoped(self.path, recognizer)
+        self.assertEqual(recognizer.panel_calls, [self.path])
+        self.assertEqual(recognizer.full_calls, [])
+        self.assertEqual(decode_mock.call_count, 1)
+        self.assertEqual(result["lines"], self.observed)
+        self.assertEqual(result["usage"], {"input_tokens":321})
+        self.assertEqual(result["label_scope"], {"status":"selected","region":self.region,"candidates":[self.region]})
+        self.assertEqual(result["image_size"], {"width":800,"height":700})
+        self.assertEqual(result["diagnostics"]["processed_width"], 800)
+        self.assertEqual(result["diagnostics"]["scope_width"], 600)
+        self.assertEqual(seen["size"], (600,300))
+        self.assertEqual(seen["nutrition_ink"], (0,0,0))
+        self.assertEqual(seen["corner"], (255,255,255))
+        self.assertEqual(result["barcodes"]["items"][0]["box"],
+                         [[440,290],[670,290],[670,370],[440,370]])
+        self.assertEqual(self.codes["items"][0]["box"][0], [340,190])
+        self.assertFalse(seen["path"].exists())
+        self.assertFalse(seen["path"].parent.exists())
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_full_mode_uses_full_recognition_and_decodes_original(self):
+        self.payload.pop("label_region")
+        self.payload["lines"].append({"id":2,"text":"包材廣告","box":[[20,550],[300,550],[300,590],[20,590]]})
+        recognizer = PanelRecognizer(self.payload)
+        with patch("sticker_scope.detect_sticker", side_effect=AssertionError("full mode")), \
+             patch("barcode_checks.decode_barcodes", return_value=deepcopy(self.codes)) as decode:
+            result = recognize_scoped(self.path, recognizer, "full")
+        self.assertEqual(recognizer.panel_calls, [])
+        self.assertEqual(recognizer.full_calls, [self.path])
+        self.assertEqual(Path(decode.call_args.args[0]), self.path)
+        self.assertEqual(result["lines"], self.payload["lines"])
+        self.assertEqual(result["barcodes"], self.codes)
+        self.assertEqual(result["label_scope"]["status"], "full")
+        self.assertNotIn("label_region", result)
+
+    def test_cloud_failure_never_retries_with_full_or_local_crop(self):
+        recognizer = PanelRecognizer(self.payload)
+        error = RuntimeError("ambiguous panel")
+        with patch.object(PanelRecognizer, "recognize_panel", side_effect=error) as panel, \
+             patch("sticker_scope.detect_sticker") as detect, \
+             patch("barcode_checks.decode_barcodes") as decode:
+            with self.assertRaisesRegex(RuntimeError, "ambiguous panel"):
+                recognize_scoped(self.path, recognizer)
+        self.assertEqual(panel.call_count, 1)
+        self.assertEqual(recognizer.full_calls, [])
+        detect.assert_not_called()
+        decode.assert_not_called()
+
+    def test_barcode_failure_still_cleans_transient_crop_without_repeating_ocr(self):
+        recognizer = PanelRecognizer(self.payload)
+        seen = []
+        def failed_decode(target):
+            seen.append(Path(target))
+            self.assertTrue(Path(target).is_file())
+            raise RuntimeError("local decoder failure")
+        with patch("barcode_checks.decode_barcodes", side_effect=failed_decode):
+            with self.assertRaisesRegex(RuntimeError, "local decoder failure"):
+                recognize_scoped(self.path, recognizer)
+        self.assertEqual(recognizer.panel_calls, [self.path])
+        self.assertEqual(recognizer.full_calls, [])
+        self.assertFalse(seen[0].exists())
+        self.assertFalse(seen[0].parent.exists())
+        self.assertTrue(self.path.is_file())
+
+    def test_dynamic_mock_attribute_is_not_a_panel_capability(self):
+        recognizer = Mock()
+        recognizer.recognize_panel.return_value = deepcopy(self.payload)
+        recognizer.recognize.return_value = {"lines":[],"engine":"ordinary local"}
+        with patch("sticker_scope.detect_sticker", return_value={"status":"no_clear_sticker","region":None,"candidates":[]}), \
+             patch("barcode_checks.decode_barcodes", return_value={"state":"none","items":[]}):
+            result = recognize_scoped(self.path, recognizer)
+        recognizer.recognize_panel.assert_not_called()
+        recognizer.recognize.assert_called_once_with(self.path)
+        self.assertEqual(result["label_scope"]["status"], "no_clear_sticker")
+
+
 if __name__ == "__main__":
     unittest.main()
