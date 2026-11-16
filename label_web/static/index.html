@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261116-workflow">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261116-cloud-default">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261116-workflow" defer></script>
+  <script src="/static/app.js?v=20261116-cloud-default" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -41,7 +41,7 @@
         <div class="panel inspect-input">
           <label for="base-date" class="base-date-label">本批基準日<input id="base-date" type="date" required></label>
           <p class="help base-date-help">依此日期與標籤系統設定核對日期；查歷史標籤時可調整。</p>
-          <div class="recognition-choices"><label>辨識方式<select id="recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="label-scope"><option value="sticker">只看貼紙（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="recognition-choice-note" class="help">使用本站一般辨識，不呼叫付費雲端服務。</p>
+          <div class="recognition-choices"><label>辨識方式<select id="recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="label-scope"><option value="sticker">只看貼紙（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="recognition-choice-note" class="help">正在讀取辨識設定…</p>
           <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
           <div class="upload-zone" id="inspect-drop">
             <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>每次拍一張完整標籤</h3><p>靠近拍清細字，保留此標籤完整文字；避開反光與遮擋</p>

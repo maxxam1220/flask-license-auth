@@ -361,12 +361,13 @@ async function loadScanConfig() {
   configureRecognition(config.recognition || {});
 }
 function configureRecognition(config){
-  state.recognition={...config,cloud_available:config.cloud_available===true,default_engine:"local"};
+  state.recognition={...config,cloud_available:config.cloud_available===true,default_engine:config.default_engine==="cloud" ? "cloud" : "local"};
   for(const prefix of ["","reference-","crop-"]){
     const input=$("#"+prefix+"recognition-engine"),previous=input.value;
+    const selected=input.dataset.recognitionInitialized==="true" && ["local","cloud"].includes(previous) ? previous : state.recognition.default_engine==="cloud" && state.recognition.cloud_available ? "cloud" : "local";
     input.replaceChildren(new Option("一般辨識", "local"),new Option(config.cloud_available ? "雲端辨識（付費）" : "雲端辨識（暫不可用）","cloud"));
     if(input.options?.[1])input.options[1].disabled=!state.recognition.cloud_available;
-    input.value=previous==="cloud" && state.recognition.cloud_available ? "cloud" : "local";
+    input.value=selected;input.dataset.recognitionInitialized="true";
     if(!["sticker","full"].includes($("#"+prefix+"label-scope").value))$("#"+prefix+"label-scope").value="sticker";
     recognitionChoiceNote(prefix);
   }
@@ -374,13 +375,13 @@ function configureRecognition(config){
 function recognitionSettings(prefix=""){
   const engine=$("#"+prefix+"recognition-engine").value || "local",scope=$("#"+prefix+"label-scope").value || "sticker";
   if(!["local","cloud"].includes(engine) || !["sticker","full"].includes(scope))throw new Error("請選擇辨識方式與照片範圍。");
-  if(engine==="cloud" && !state.recognition.cloud_available)throw new Error("目前無法使用雲端辨識，請改用一般辨識。");
+  if(engine==="cloud" && !state.recognition.cloud_available)throw new Error("目前無法使用雲端辨識，未送出照片。請自行改用一般辨識，或待雲端恢復可用後再送出。");
   return {recognition_engine:engine,label_scope:scope};
 }
 function recognitionChoiceNote(prefix=""){
   const cloud=$("#"+prefix+"recognition-engine").value==="cloud",config=state.recognition;
   const quota=Number.isInteger(config.cloud_remaining) ? `目前剩餘 ${config.cloud_remaining}${Number.isInteger(config.cloud_limit) ? `／${config.cloud_limit}` : ""} 次試用。` : "";
-  $("#"+prefix+"recognition-choice-note").textContent=cloud ? `這次送出會使用雲端付費辨識。${quota}照片將交由雲端服務讀取，仍需核對文字。` : `使用本站一般辨識，不呼叫付費雲端服務。${config.cloud_available ? quota : "雲端辨識目前未開放或額度已用完。"}`;
+  $("#"+prefix+"recognition-choice-note").textContent=cloud ? config.cloud_available ? `這次送出會使用雲端付費辨識。${quota}照片將交由雲端服務讀取，仍需核對文字。` : `雲端辨識目前未開放或額度已用完。${quota}已保留雲端選擇，不會自動改用一般辨識；請自行選擇一般辨識，或待雲端恢復可用後再送出。` : `使用本站一般辨識，不呼叫付費雲端服務。${config.cloud_available ? quota : "雲端辨識目前未開放或額度已用完。"}`;
   if(prefix==="crop-"){if(state.crop && !state.crop.manualScope)state.crop.wholeScope=$("#crop-label-scope").value || "sticker";invalidateCropPreview();}
 }
 function renderInspectSource() {
@@ -1634,7 +1635,7 @@ $$("[data-file]").forEach(b=>b.onclick=()=>$("#"+b.dataset.file).click());
 for (const id of ["inspect-file","inspect-camera","reference-file","reference-camera"]) $("#"+id).onchange=event=>{ const file=event.target.files[0]; event.target.value=""; upload(file,id.startsWith("inspect")?"inspection":"reference"); };
 for (const [id,kind] of [["inspect-drop","inspection"],["reference-drop","reference"]]) { const zone=$("#"+id); zone.ondragover=e=>{ e.preventDefault(); zone.classList.add("dragging"); }; zone.ondragleave=()=>zone.classList.remove("dragging"); zone.ondrop=e=>{ e.preventDefault(); zone.classList.remove("dragging"); upload(e.dataTransfer.files[0],kind); }; }
 $("#template-select").onchange=()=>{ state.inspectSource=null; renderInspectSource(); selectedStandard(); markResultChanged(); };
-for(const prefix of ["","reference-","crop-"])for(const name of ["recognition-engine","label-scope"])$("#"+prefix+name).onchange=()=>recognitionChoiceNote(prefix);
+for(const prefix of ["","reference-","crop-"])for(const name of ["recognition-engine","label-scope"])$("#"+prefix+name).onchange=()=>{if(name==="recognition-engine")$("#"+prefix+name).dataset.recognitionInitialized="true";recognitionChoiceNote(prefix);};
 for(const slot of ["inspect","reference"])$("#"+slot+"-upload-resend").onclick=()=>{const pending=state.uploadRequests[slot];if(pending && !state.busy)upload(pending.file,slot==="reference" ? "reference" : "inspection");};
 $("#base-date").onchange=markResultChanged;
 $("#batch-date").onchange=markResultChanged;

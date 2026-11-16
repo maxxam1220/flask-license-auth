@@ -243,9 +243,10 @@ def create_app(config=None, ocr=None):
     @app.get("/api/scan-config")
     def scan_config():
         remaining=cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])
+        cloud_available=bool(os.environ.get("OPENAI_API_KEY", "").strip() or app.config.get("CLOUD_OCR")) and remaining>0
         return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today(),recognition={
-            "cloud_available":bool(os.environ.get("OPENAI_API_KEY") or app.config.get("CLOUD_OCR")) and remaining>0,
-            "default_engine":"local", "cloud_model":os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),
+            "cloud_available":cloud_available,
+            "default_engine":"cloud" if cloud_available else "local", "cloud_model":os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),
             "cloud_limit":app.config["CLOUD_TRIAL_LIMIT"],"cloud_remaining":remaining})
 
     def active_jobs():
@@ -747,12 +748,31 @@ def create_app(config=None, ocr=None):
 
     @app.get("/api/inspections")
     def history():
+        def product_name(row):
+            field = (row["result"].get("fields") or {}).get("product") or {}
+            current = field.get("value", "") if isinstance(field, dict) else ""
+            if isinstance(current, str) and current.strip():
+                return current
+            # Display-only fallback from this inspection's original evidence.
+            # Do not substitute a standard's answer or write a historical result.
+            from validation import ALIASES
+            lines = (row.get("ocr") or {}).get("lines", [])
+            try:
+                candidate = extract_fields(lines).get("product", {})
+                value = candidate.get("value", "")
+                ids = set(candidate.get("line_ids", []))
+                headed = any(line.get("id") in ids and re.match(r"^\s*"+ALIASES["product"], line.get("text", "")) for line in lines)
+                numeric_date_or_phone = re.fullmatch(r"(?:民國)?[()（）\d\s:：./\-年月日時时分]+", value)
+                return value if headed and not candidate.get("ambiguous") and not numeric_date_or_phone else ""
+            except (KeyError, TypeError, ValueError, IndexError):
+                return ""  # One incomplete old OCR row must not break history.
         try:
             page = max(1, int(request.args.get("page", 1)))
         except ValueError:
             abort(400, description="頁碼不正確。")
         query = select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status,
-                       db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result).where(history_cleanup.active_filter())
+                       db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result,
+                       db.inspections.c.ocr).where(history_cleanup.active_filter())
         if request.args.get("status") in {"pass", "fail", "review"}:
             query = query.where(db.inspections.c.status == request.args["status"])
         with engine.connect() as conn:
@@ -761,7 +781,7 @@ def create_app(config=None, ocr=None):
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
             version=x["template_snapshot"]["version"], created_at=x["created_at"], image=image_payload(x["image_id"]),
             counts=x["result"].get("counts",{}), base_date=x["result"].get("inputs",{}).get("base_date",""),
-            product=x["result"].get("fields",{}).get("product",{}).get("value", ""),
+            product=product_name(x),
             manual_revision=manual.get(x["id"], {}).get("revision", 0),
             manual_status=manual.get(x["id"], {}).get("status")) for x in rows[:24]],
             has_more=len(rows) > 24, page=page)
