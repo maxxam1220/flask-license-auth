@@ -23,6 +23,7 @@ from validation import line_is_uncertain, parse_date
 DAY_LABELS={"base_date":"本批基準日","manufacture":"製造日期","expiry":"有效日期","arrival":"到店日"}
 RULE_KEYS={"version","symbology","prefix","day_source","day_width","suffix"}
 CHOICE_KEYS={"base_revision","source_revision","manual_revision","candidate_id","fill_keep_days"}
+MANUAL_KEYS={"manual_rule","confirmed_ean13"}
 
 
 def _digest(value):
@@ -166,6 +167,7 @@ def _load(engine,identifier,conn=None):
     inputs=original.get("result",{}).get("inputs") or {}
     ocr=_observed(original,current)
     observation,dates,value,reason=read_observations(ocr,inputs.get("base_date",""))
+    observation_reason=reason
     base,unsupported=standards._context(engine,original)
     if base and base.get("catalog_barcode_line_ids"):
         # _context supplies synthetic editor rows for catalog literals. This
@@ -203,6 +205,16 @@ def _load(engine,identifier,conn=None):
             if not reason:reason=str(error) if isinstance(error,ValueError) else "清單組碼證據缺少版本，請重新載入清單。"
     prefixes=[structure["prefix"]] if structure else _known_prefixes(base or {},effective)
     kind=str(((base or {}).get("barcode_config") or {}).get("kind","")).strip()
+    manual_reason=observation_reason
+    if not base or unsupported or original.get("template_id") or effective.get("source_kind")!="manual" or not str(effective.get("code","")).startswith("manual:"):
+        manual_reason="手動補上組碼目前只適用仍有效的人工文字標準。"
+    elif kind not in {"","1"}:
+        manual_reason="此來源已指定其他條碼種類，不能以手動確認覆蓋為 EAN13。"
+    elif not manual_reason and not dates:
+        manual_reason="尚未取得可信的完整日期或本批基準日，無法試算日期條碼。"
+    manual_entry={"available":not bool(manual_reason),"reason":manual_reason,"observed_value":value,
+        "dates":deepcopy(observation["dates"]),"base_date":observation["base_date"],
+        "requires_ean13_confirmation":not bool(kind)}
     if not reason and not kind and not observation["decoded"]:
         reason="來源尚未確認條碼種類，只有數字印字不足以認定 EAN13；請取得明確 EAN13 條紋解碼後再建立候選。"
     if not reason and not prefixes:reason="這份來源沒有已知數字前綴，不能只從完整條碼猜商品前綴。"
@@ -235,6 +247,7 @@ def _load(engine,identifier,conn=None):
         "base_revision":version["revision"] if version else 0,"source_revision":str((base or {}).get("revision","")),
         "manual_revision":current["revision"] if current else 0,"current_rule":effective.get("web_barcode_rule"),
         "can_write":bool(candidates) and not bool(reason),"reason":reason,"observed":observation,
+        "manual_entry":manual_entry,
         "keep_days":{"current":current_days,"suggested":suggested,"can_fill":current_days is None and suggested is not None,"reason":days_reason},
         "candidates":candidates,"warnings":["只變更網站核對規則，不會改列印程式、原始文字、照片或日期排程。"]}
     return original,base,effective,payload
@@ -244,14 +257,48 @@ def suggest(engine,inspection_id):
     return _load(engine,inspection_id)[3]
 
 
+def _manual_candidate(payload,body):
+    entry=payload["manual_entry"]
+    if not entry["available"]:abort(409,description=entry["reason"])
+    acknowledgement=body.get("confirmed_ean13")
+    if type(acknowledgement) is not bool or (entry["requires_ean13_confirmation"] and not acknowledgement):
+        abort(400,description="目前來源未指定條碼種類，請先明確確認實物是 EAN13 條碼。")
+    try:rule=validate_rule(body.get("manual_rule"))
+    except ValueError as error:abort(400,description=str(error))
+    if rule["day_source"]=="base_date":
+        date_value=entry["base_date"]
+    else:
+        row=next((item for item in entry["dates"] if item["kind"]==rule["day_source"] and not item["uncertain"]),None)
+        date_value=row.get("iso") if row else None
+    try:chosen=date.fromisoformat(date_value)
+    except (ValueError,TypeError):abort(400,description="所選日期尚未唯一、清楚且完整辨識，不能用其他日期代替。")
+    expected=compose(rule,chosen)
+    if expected!=entry["observed_value"]:
+        abort(400,description=f"這份公式試算為 {expected}，與本張完整條碼 {entry['observed_value']} 不同，請確認各段與日期來源。")
+    width=rule["day_width"];day=chosen.timetuple().tm_yday
+    return {"id":"manual","rule":rule,"summary":f"人工輸入前綴{rule['prefix']}＋{DAY_LABELS[rule['day_source']]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
+        "parts":[{"label":"人工輸入固定前綴","value":rule["prefix"]},
+            {"label":DAY_LABELS[rule["day_source"]],"value":chosen.isoformat()},
+            {"label":f"{width}位太陽日","value":f"{day%100:02d}" if width==2 else f"{day:03d}"},
+            {"label":"人工輸入固定尾碼","value":rule["suffix"]},{"label":"EAN13檢查碼","value":expected[-1]}],
+        "keep_days_suggestion":payload["keep_days"]["suggested"],
+        "warnings":["前綴、太陽日位數及尾碼由人員輸入，並非系統由完整條碼自動猜取。",
+            "本次試算相符仍可能有其他組成方式；確認後此規則將用於這份人工標準的後續標籤，日期排程仍獨立檢查。"],
+        "evidence":{"kind":"manual_entry","confirmed_ean13":acknowledgement,
+            "observed_value":entry["observed_value"],"entered_rule":deepcopy(rule)}}
+
+
 def _selection(payload,body):
     for key in ("base_revision","manual_revision"):
         if standards._integer(body.get(key),"版本",0,2**31-2)!=payload[key]:
             abort(409,description="標準或人工訂正已變更，請重新取得條碼候選。")
     if body.get("source_revision")!=payload["source_revision"]:
         abort(409,description="來源已變更，請重新取得條碼候選。")
-    if not payload["can_write"]:abort(409,description=payload["reason"])
-    candidate=next((item for item in payload["candidates"] if item["id"]==body.get("candidate_id")),None)
+    if body.get("candidate_id")=="manual":
+        candidate=_manual_candidate(payload,body)
+    else:
+        if not payload["can_write"]:abort(409,description=payload["reason"])
+        candidate=next((item for item in payload["candidates"] if item["id"]==body.get("candidate_id")),None)
     if candidate is None:abort(409,description="候選不存在或已變更，請重新預覽。")
     fill=body.get("fill_keep_days")
     if type(fill) is not bool:abort(400,description="請明確選擇是否填入缺少的保存天數。")
@@ -263,7 +310,8 @@ def _preview(payload,body,inspection_id):
     candidate,days=_selection(payload,body)
     before={"rule":payload["current_rule"],"keep_days":payload["keep_days"]["current"]}
     after={"rule":candidate["rule"],"keep_days":days}
-    signature={"inspection_id":inspection_id,"choice":{key:body[key] for key in CHOICE_KEYS},
+    keys=CHOICE_KEYS|MANUAL_KEYS if body.get("candidate_id")=="manual" else CHOICE_KEYS
+    signature={"inspection_id":inspection_id,"choice":{key:body[key] for key in keys},
         "observed":payload["observed"],"before":before,"after":after,"candidate_evidence":candidate.get("evidence")}
     return {**{key:payload[key] for key in ("base_revision","source_revision","manual_revision")},
         "preview_hash":_digest(signature),"candidate":candidate,"before":before,"after":after,
@@ -271,12 +319,13 @@ def _preview(payload,body,inspection_id):
 
 
 def preview(engine,inspection_id,body):
-    if not isinstance(body,dict) or set(body)!=CHOICE_KEYS:abort(400,description="請選擇條碼候選並提供目前版本。")
+    if not isinstance(body,dict) or set(body)!=(CHOICE_KEYS|MANUAL_KEYS if body.get("candidate_id")=="manual" else CHOICE_KEYS):
+        abort(400,description="請選擇條碼候選或填寫完整公式，並提供目前版本。")
     return _preview(suggest(engine,inspection_id),body,inspection_id)
 
 
 def save(engine,inspection_id,body):
-    if not isinstance(body,dict) or set(body)!=CHOICE_KEYS|{"preview_hash","reviewer","note","confirmed"} or body.get("confirmed") is not True:
+    if not isinstance(body,dict) or set(body)!=(CHOICE_KEYS|(MANUAL_KEYS if body.get("candidate_id")=="manual" else set())|{"preview_hash","reviewer","note","confirmed"}) or body.get("confirmed") is not True:
         abort(400,description="請預覽並明確確認此規則將用於之後同款標籤。")
     reviewer=standards._text(body["reviewer"],"確認人員",100);note=standards._text(body["note"],"確認原因",2000)
     try:
@@ -304,7 +353,7 @@ def save(engine,inspection_id,body):
             evidence={"inspection_id":inspection_id,"manual_revision":payload["manual_revision"],
                 "candidate_id":body["candidate_id"],"preview_hash":body["preview_hash"],"observed":payload["observed"]}
             if reviewed["candidate"].get("evidence"):
-                evidence["catalog_structure"]=deepcopy(reviewed["candidate"]["evidence"])
+                evidence["manual_entry" if body["candidate_id"]=="manual" else "catalog_structure"]=deepcopy(reviewed["candidate"]["evidence"])
             snapshot["web_barcode_rule_evidence"]=evidence
             new_revision=revision+1;created=db.now()
             conn.execute(insert(standards.versions).values(id=db.uid(),code=code,revision=new_revision,

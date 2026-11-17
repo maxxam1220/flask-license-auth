@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-catalog-barcode">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-manual-barcode">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261117-catalog-barcode" defer></script>
+  <script src="/static/app.js?v=20261117-manual-barcode" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -172,9 +172,10 @@
   <div id="barcode-rule-basis"><section class="barcode-observation"><h3>本次讀到的依據</h3><div id="barcode-rule-observed"></div></section>
   <section class="barcode-current"><h3>現行已核准規則</h3><div id="barcode-rule-current"></div></section>
   <div id="barcode-rule-warnings"></div>
-  <p id="barcode-rule-write-note" class="help"></p></div>
+  <p id="barcode-rule-write-note" class="help"></p><button id="barcode-rule-unlock" class="button primary" type="button" hidden>切換管理員以設定</button></div>
   <form id="barcode-rule-form" hidden>
-    <div id="barcode-rule-selection"><fieldset class="barcode-candidates-fieldset"><legend>候選推算（尚未核准）</legend><p class="help">候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。</p><div id="barcode-rule-candidates"></div></fieldset>
+    <div id="barcode-rule-selection"><label id="barcode-rule-mode-label" hidden>設定方式<select id="barcode-rule-mode"><option value="candidate">選擇候選推算</option><option value="manual">手動設定並試算</option></select></label><fieldset id="barcode-rule-candidate-fields" class="barcode-candidates-fieldset"><legend>候選推算（尚未核准）</legend><p class="help">候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。</p><div id="barcode-rule-candidates"></div></fieldset>
+    <section id="barcode-rule-manual" class="barcode-rule-manual" hidden><h3>手動設定並試算</h3><p id="barcode-rule-manual-observed" class="barcode-manual-observed"></p><p id="barcode-rule-manual-note" class="help"></p><div class="barcode-manual-grid"><label>商品固定前綴<input id="barcode-rule-prefix" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="請依商品組碼設定填寫"></label><label>日期來源<select id="barcode-rule-day-source"><option value="">請選擇日期來源</option></select></label><label>太陽日位數<select id="barcode-rule-day-width"><option value="">請選擇位數</option><option value="2">2 位（年序日末兩位）</option><option value="3">3 位（年序日）</option></select></label><label>固定尾碼（可空白）<input id="barcode-rule-suffix" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="沒有固定尾碼可留空"></label></div><label class="check-label"><input id="barcode-rule-ean13" type="checkbox"><span id="barcode-rule-ean13-text">我已確認實際條碼種類為 EAN13，不只依數字長度推定。</span></label><p class="help">不會從完整條碼自動猜前綴或尾碼。試算必須能組出本張讀值；相同數字仍不代表已證明印製規則，最後需核准才會寫入。</p></section>
     <label id="barcode-rule-fill-label" class="check-label" hidden><input id="barcode-rule-fill-days" type="checkbox"><span id="barcode-rule-fill-text"></span></label><p id="barcode-rule-days-note" class="help"></p>
     <button id="barcode-rule-preview-button" class="button primary" type="button">預覽自動帶入的規則</button></div>
     <button id="barcode-rule-adjust" class="button secondary" type="button" hidden>返回調整候選</button>
