@@ -155,7 +155,7 @@ def create_app(config=None, ocr=None):
         match = ({"status": "scope_review", "reason": scope["reason"], "candidates": []}
                  if scope["blocked"] else
                  label_source.resolve(engine, lines if match_lines is None else match_lines, inputs["source_code"]))
-        source = prepare_source(match.get("source"), inputs["base_date"])
+        source = prepare_source(None if match.get("status") == "source_conflict" else match.get("source"), inputs["base_date"])
         prefix = {"catalog": "清單比對", "manual": "人工文字標準"}.get((source or {}).get("source_kind"), "系統標籤")
         standard = {"id": "", "name": f"{prefix} {source['code']} · {source['name']}" if source else "直接掃描・文字與日期檢查",
                     "version": 0, "image_id": "", "mode": "system_label", "source": source}

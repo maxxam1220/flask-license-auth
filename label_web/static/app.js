@@ -1,7 +1,7 @@
 "use strict";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const state = {csrf: "", templates: [], referenceJob: null, source: null, inspectSource: null, inspectSearchRequest: 0, supersedes: null, busy: false, page: 1, inspection: null, resultDirty: false, retryJobs: {}, failedJobs: [], failedJobsRequest: 0, manualView: true, correction: null, correctionImageRequest: 0, standardEdit: null};
+const state = {csrf: "", templates: [], referenceJob: null, source: null, inspectSource: null, nextScanChoice: null, inspectSearchRequest: 0, supersedes: null, busy: false, page: 1, inspection: null, resultDirty: false, retryJobs: {}, failedJobs: [], failedJobsRequest: 0, manualView: true, correction: null, correctionImageRequest: 0, standardEdit: null};
 const statusLabels = {pass: "已核對項目相符", fail: "發現差異", review: "需要人工複核", read: "僅辨識"};
 const reviewLabels = {confirmed_good: "人工確認正確", confirmed_bad: "人工確認異常", retake: "需要重拍"};
 const textFields = ["product", "spec", "storage", "origin", "company", "address", "phone"];
@@ -60,10 +60,11 @@ function applySession(session) {
   $("#logout").hidden=!session.requires_login; $("#admin-logout").hidden=!session.requires_login;
   $("#login").hidden=state.authenticated; $("#app-shell").hidden=!state.authenticated;
   if(!state.authenticated){
-    state.inspection=null;state.correction=null;state.inspectSource=null;state.templates=[];state.failedJobs=[];state.inspectSearchRequest++;state.failedJobsRequest++;
+    state.inspection=null;state.correction=null;state.inspectSource=null;state.nextScanChoice=null;state.templates=[];state.failedJobs=[];state.inspectSearchRequest++;state.failedJobsRequest++;
     state.uploadRequests={};$("#inspect-upload-resend").hidden=true;$("#reference-upload-resend").hidden=true;
     for(const id of ["result-area","history-list","inspect-source-results","inspect-source-selected","selected-standard","failed-jobs-list"])$("#"+id).replaceChildren();
     $("#template-select").replaceChildren(new Option("自動對應系統標籤與清單",""));
+    renderNextScanChoice();
     $("#correction-form").reset();$("#correction-original").value="";$("#correction-text").value="";$("#correction-standard").textContent="";$("#correction-full-photo").removeAttribute("href");
     const canvas=$("#correction-photo");canvas.width=canvas.width;
     closeCropDialog();
@@ -327,6 +328,7 @@ function setBusy(busy, kind = "") {
   $("#inspect-progress").hidden = !busy || !["inspection", "recognition"].includes(kind);
   $("#reference-progress").hidden = !busy || kind !== "reference";
   updatePendingControls();
+  renderNextScanChoice();
 }
 function clearResult() { state.resultRenderEpoch=(state.resultRenderEpoch || 0)+1;state.resultPhotoCache=null;if($("#result-image-dialog").open)$("#result-image-dialog").close();$("#result-image-canvas").width=1;$("#result-image-link").removeAttribute("href");state.inspection = null; state.resultDirty = false; state.standardSaved=false; $("#result-area").replaceChildren(); $("#result-area").hidden = true; $("#result-placeholder").hidden = false; }
 function markResultChanged(preserveSaved = false) {
@@ -343,6 +345,31 @@ function validBaseDate() {
   if (!input.value || !input.checkValidity()) { input.reportValidity(); toast("請設定本批基準日。", true); return false; }
   return true;
 }
+function selectedScanChoice(){
+  if(state.inspectSource?.code)return {source:{...state.inspectSource},templateId:"",name:sourceOptionLabel(state.inspectSource)};
+  const template=state.templates.find(item=>item.id===$("#template-select").value);
+  return template ? {source:null,templateId:template.id,name:`${template.name} · 照片第 ${template.version} 版`} : null;
+}
+function renderNextScanChoice(){
+  const choice=state.nextScanChoice,current=selectedScanChoice();
+  $("#next-scan-status").textContent=choice ? `下一張：${choice.pinned ? "固定使用" : "僅本張指定"} ${choice.name}` : "下一張：自動對應";
+  $("#next-scan-note").textContent=choice ? choice.pinned ? "固定設定會持續套用到新照片；換商品前請改回自動對應。查看歷史不會更換此固定設定。" : "這是你主動選擇的下一張標準；照片送出後回到自動對應。勾選下方可固定使用。" : "依每張照片重新尋找標準；查看紀錄或本張重新核對，不會固定下一張。";
+  $("#next-scan-pin").checked=!!choice?.pinned;$("#next-scan-pin").disabled=state.busy || (!choice?.pinned && !current);
+  $("#next-scan-pin-label").textContent=choice?.pinned ? `固定使用：${choice.name}` : current ? `固定使用此標準：${current.name}` : "固定使用此標準（先在比對設定選擇）";
+  $("#next-scan-auto").hidden=!choice;$("#next-scan-auto").disabled=state.busy;
+}
+function pinNextScanChoice(){
+  if(state.busy)return;
+  if(!$("#next-scan-pin").checked)state.nextScanChoice=null;
+  else{const choice=selectedScanChoice();if(choice)state.nextScanChoice={...choice,pinned:true};}
+  renderNextScanChoice();
+}
+function autoNextScan(){if(state.busy)return;state.nextScanChoice=null;renderNextScanChoice();}
+function rememberExplicitNextChoice(){
+  if(!state.inspection){const choice=selectedScanChoice();state.nextScanChoice=choice ? {...choice,pinned:!!state.nextScanChoice?.pinned} : null;}
+  renderNextScanChoice();
+}
+function changePhotoTemplateChoice(){state.inspectSource=null;renderInspectSource();selectedStandard();rememberExplicitNextChoice();markResultChanged();}
 function selectedStandard() {
   const standard = state.templates.find(t => t.id === $("#template-select").value);
   const node = $("#selected-standard"), missing = !standard && !!$("#template-select").value; node.replaceChildren(); node.hidden = !standard && !missing;
@@ -419,18 +446,20 @@ function recognitionChoiceNote(prefix=""){
 }
 function renderInspectSource() {
   const node = $("#inspect-source-selected"); node.replaceChildren(); node.hidden = !state.inspectSource;
+  renderNextScanChoice();
   if (!state.inspectSource) return;
-  node.append(element("strong", "", `已選擇：${sourceOptionLabel(state.inspectSource)}`));
-  const reset = element("button", "quiet", "改用自動對應"); reset.type = "button";
-  reset.onclick = () => { if (state.busy) return; state.inspectSource = null; renderInspectSource(); markResultChanged(); };
+  node.append(element("strong", "", `本張比對設定：${sourceOptionLabel(state.inspectSource)}`));
+  const reset = element("button", "quiet", "本張改用自動對應"); reset.type = "button";
+  reset.onclick = () => { if (state.busy) return; state.inspectSource = null; renderInspectSource();rememberExplicitNextChoice(); markResultChanged(); };
   node.append(reset); $("#template-options").open = true;
 }
 function selectInspectSource(item) {
   if (state.busy) return;
   state.inspectSource = {code:item.code,name:item.name,source_kind:item.source_kind}; state.inspectSearchRequest++;
   $("#template-select").value = ""; selectedStandard(); renderInspectSource();
-  $("#inspect-source-results").replaceChildren(); $("#inspect-source-note").textContent = isCatalogSource(item) ? "將依這筆清單已有資料核對；未提供的內容不算已確認。" : `掃描或重新核對時將使用選定的${sourceKindLabel(item)}。`;
-  markResultChanged(); toast(state.inspection ? "已選擇比對資料，請按重新核對套用。" : "已選擇比對資料，可以開始掃描。");
+  rememberExplicitNextChoice();
+  $("#inspect-source-results").replaceChildren(); $("#inspect-source-note").textContent = state.inspection ? "這個選擇用於本張重新核對。若下一張也要使用，請勾選上方『固定使用此標準』。" : "這個選擇僅套用下一張；勾選上方『固定使用此標準』才會持續沿用。";
+  markResultChanged(); toast(state.inspection ? "已選擇本張比對資料，請按重新核對套用；下一張仍依上方設定。" : "下一張將使用選定資料；送出後回到自動對應。");
 }
 function newStandard(previous = null) {
   if(!requireAdmin())return;
@@ -504,30 +533,34 @@ function newRequestId(){return [...window.crypto.getRandomValues(new Uint8Array(
 function uploadRequest(file,kind,body){
   const slot=retrySlot(kind),signature=JSON.stringify(body),old=state.uploadRequests[slot];
   if(old?.file===file && old.signature===signature)return old;
-  return state.uploadRequests[slot]={file,kind,signature,id:newRequestId()};
+  return state.uploadRequests[slot]={file,kind,signature,options:JSON.parse(signature),id:newRequestId()};
 }
-async function upload(file, kind) {
+async function resendUpload(slot){const pending=state.uploadRequests[slot];if(pending && !state.busy)return upload(pending.file,pending.kind,pending);}
+async function upload(file, kind, retryRequest=null) {
   if(kind==="reference" && !requireAdmin())return;
   if (!file || state.busy) return;
   setUploadError(kind); setRetryJob(kind);
   if (kind === "reference") $("#reference-recovery").hidden = true;
   if (file.size > maxPhotoBytes) return reportUploadFailure(kind, "照片超過 15 MB，請改選較小的 JPG 照片，並保留標籤文字清晰。");
-  const sourceCode = state.inspectSource?.code || "";
-  const template = sourceCode ? "" : $("#template-select").value;
+  const original=retryRequest?.file===file && state.uploadRequests[retrySlot(kind)]===retryRequest ? retryRequest.options : null;
+  const choice=state.nextScanChoice,sourceCode=original ? original.sourceCode : kind==="reference" ? "" : choice?.source?.code || "";
+  const template=original ? original.template : kind==="reference" || sourceCode ? "" : choice?.templateId || "";
   if (kind === "inspection" && !template) kind = "recognition";
-  if (kind !== "reference" && !validPhotoTemplateChoice()) { setUploadError(kind,"請先選擇有效照片標準，或明確改選自動對應。"); return; }
-  if (kind !== "reference" && !validBaseDate()) { setUploadError(kind, "請設定本批基準日後再上傳。"); return; }
-  let settings;try{settings=recognitionSettings(kind==="reference" ? "reference-" : "");}catch(error){reportUploadFailure(kind,error);return;}
-  const pending=uploadRequest(file,kind,{kind,template,sourceCode,...settings,base_date:$("#base-date").value,batch_date:$("#batch-date").value,arrival_date:$("#arrival-date").value,supersedes:state.supersedes?.id || ""});
+  if(!original && kind!=="reference" && template && !state.templates.some(item=>item.id===template)){setUploadError(kind,"下一張固定的照片標準已非有效版本。請先改回自動對應，或明確選擇有效版本並重新固定。");return;}
+  if (!original && kind !== "reference" && !validBaseDate()) { setUploadError(kind, "請設定本批基準日後再上傳。"); return; }
+  let settings;try{settings=original ? {recognition_engine:original.recognition_engine,label_scope:original.label_scope} : recognitionSettings(kind==="reference" ? "reference-" : "");}catch(error){reportUploadFailure(kind,error);return;}
+  const options=original || {kind,template,sourceCode,...settings,base_date:$("#base-date").value,batch_date:$("#batch-date").value,arrival_date:$("#arrival-date").value,supersedes:state.supersedes?.id || ""};
+  const pending=original ? retryRequest : uploadRequest(file,kind,options);if(!original)pending.scanChoice=choice;
   const slot=retrySlot(kind);$("#"+slot+"-upload-resend").hidden=true;
   const form = new FormData(); form.append("photo", file); form.append("kind", kind);form.append("request_id",pending.id);for(const [key,value] of Object.entries(settings))form.append(key,value);
-  if (kind !== "reference") { form.append("template_id", template); form.append("source_code", sourceCode); form.append("base_date", $("#base-date").value); form.append("batch_date", $("#batch-date").value); form.append("arrival_date", $("#arrival-date").value); clearResult(); }
+  if (kind !== "reference") { form.append("template_id", template); form.append("source_code", sourceCode); form.append("base_date", options.base_date); form.append("batch_date", options.batch_date); form.append("arrival_date", options.arrival_date); clearResult(); }
   else { state.referenceJob = null; state.source = null; $("#standard-fields").disabled = true; $("#reference-preview").hidden = true; $("#reference-ocr").hidden = true; }
   setBusy(true, kind);
   try {
     const job = await api("/api/jobs", {method: "POST", body: form});
     if(state.uploadRequests[slot]===pending)delete state.uploadRequests[slot];
-    sessionStorage.setItem("labelcheck-pending", JSON.stringify({id: job.id, kind, supersedes_id:kind === "reference" ? state.supersedes?.id || null : null}));
+    if(kind!=="reference" && state.nextScanChoice===pending.scanChoice && !pending.scanChoice?.pinned){state.nextScanChoice=null;renderNextScanChoice();}
+    sessionStorage.setItem("labelcheck-pending", JSON.stringify({id: job.id, kind, supersedes_id:kind === "reference" ? options.supersedes || null : null}));
     await pollJob(job.id, kind);
   } catch (error) { reportUploadFailure(kind, error);if(state.authenticated && state.uploadRequests[slot]===pending && (!error.status || error.status>=500 || error.status===429))$("#"+slot+"-upload-resend").hidden=false; }
   finally { setBusy(false); }
@@ -706,7 +739,7 @@ async function saveLibraryCategory(){const context=state.libraryDetail;if(!requi
 function openLibraryCategory(target="filter"){if(!requireAdmin() || state.busy || (target==="detail" && state.libraryDetail?.editing))return;state.libraryCategoryContext={target,detail:state.libraryDetail};$("#library-category-form").reset();$("#library-category-name").value="";setDialogError("#library-category-error");$("#library-category-dialog").showModal();$("#library-category-name").focus();}
 function closeLibraryCategory(force=false){if(state.busy && !force)return;state.libraryCategoryContext=null;if($("#library-category-dialog").open)$("#library-category-dialog").close();$("#library-category-name").value="";setDialogError("#library-category-error");}
 async function saveLibraryNewCategory(event){event.preventDefault();const context=state.libraryCategoryContext;if(!requireAdmin() || state.busy || !context)return;const name=$("#library-category-name").value.trim();if(!name){setDialogError("#library-category-error","請填寫分類名稱。");return;}setBusy(true);$("#library-category-save").disabled=true;setDialogError("#library-category-error");try{const data=await api("/api/standard-library/categories",{method:"POST",body:{name}});if(state.libraryCategoryContext!==context || !allowed())return;await loadLibraryCategories();if(context.target==="detail" && state.libraryDetail===context.detail){$("#library-detail-category").value=data.id;$("#library-detail-notice").textContent="分類已建立；按「儲存分類」將此標準加入。";}else{await loadManualLibrary(manualLibraryPage);if(state.libraryCategoryContext!==context || !allowed())return;const message="分類已建立，開啟標準內容可指定分類。";$("#standard-library-status").textContent=message;toast(message);}closeLibraryCategory(true);}catch(error){if(state.libraryCategoryContext===context)setDialogError("#library-category-error",error.message);}finally{setBusy(false);$("#library-category-save").disabled=false;}}
-async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind!=="photo")selectInspectSource({code:data.key,name:data.name,source_kind:data.source_kind || data.source?.source_kind || "manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();markResultChanged();}closeLibraryDetail();showView("inspect");}
+async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind!=="photo")selectInspectSource({code:data.key,name:data.name,source_kind:data.source_kind || data.source?.source_kind || "manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();rememberExplicitNextChoice();markResultChanged();}closeLibraryDetail();showView("inspect");}
 async function loadInspection(id, restoreSettings = true) {
   const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
   state.manualView = true;
@@ -723,7 +756,8 @@ function restoreInspectionSettings(inspection) {
   else $("#template-select").value = template ? template.id : "";
   selectedStandard();
   const match = result.source_match;
-  state.inspectSource = !inspection.template_id && (inputs.source_code || match?.status === "matched") ? {...match, code: inputs.source_code || match.code, name: match?.name || inspection.name || inputs.source_code} : null;
+  const selected=match?.status==="source_conflict" ? match.selected_source : null,explicitCode=inputs.source_code || selected?.code;
+  state.inspectSource = !inspection.template_id && (explicitCode || match?.status === "matched") ? {...match,...selected,code:explicitCode || match.code,name:selected?.name || match?.name || inspection.name || explicitCode} : null;
   renderInspectSource();
 }
 const correctionLabels = {ocr_misread:"OCR 辨識讀錯",label_misprint:"標籤實際印錯",uncertain:"看不清楚，待確認"};
@@ -1360,6 +1394,7 @@ function drawEvidence(canvas, inspection, focusRegion=false,stillCurrent=null) {
   }; image.src = inspection.image.url;
 }
 function buildResultRows(checks, ocrLines) {
+  checks=checks.filter(check=>check.key!=="source_identity_conflict");
   const rank = {fail:0,review:1,pass:2,read:3}, sources = new Map(), rows = new Map();
   ocrLines.forEach(line => sources.set(line.id, line));
   checks.forEach(check => (check.source_lines || []).forEach(line => sources.set(line.id, {...sources.get(line.id),...line})));
@@ -1504,7 +1539,7 @@ function renderSourceMatch(match, area, baseDate) {
     if (match.source_kind === "manual")node.append(element("p","source-scope","僅核對人工已確認的文字與日期規則；未列入的內容不算已核對。"));
   }
   else {
-    const text = {ambiguous:"找到多份相似標籤，請選定後重新核對。",unmatched:"尚未找到對應標籤，可手動選擇後重新核對。",unavailable:"暫時無法讀取系統標籤，目前僅檢查可判讀的內容。"}[match.status] || match.reason;
+    const text = {source_conflict:"選用標準與照片不同，請改回自動對應。",ambiguous:"找到多份相似標籤，請選定後重新核對。",unmatched:"尚未找到對應標籤，可手動選擇後重新核對。",unavailable:"暫時無法讀取系統標籤，目前僅檢查可判讀的內容。"}[match.status] || match.reason;
     node.append(element("p", "", text));
     if (match.candidates?.length) {
       const choices = element("div", "match-candidates");
@@ -1516,6 +1551,17 @@ function renderSourceMatch(match, area, baseDate) {
   }
   if (baseDate) node.append(element("p", "source-base-date", `基準日：${baseDate}`));
   area.append(node);
+}
+async function autoRecheckInspection(identifier=state.inspection?.id){
+  if(state.busy || !identifier || state.inspection?.id!==identifier)return;
+  state.inspectSource=null;$("#template-select").value="";selectedStandard();renderInspectSource();markResultChanged();return recheckInspection();
+}
+function renderSourceConflict(inspection,result,area){
+  const match=result.source_match;if(match?.status!=="source_conflict")return;
+  const block=element("section","source-conflict-card");block.id="result-source-conflict";block.setAttribute("role","status");block.append(element("h3","","選用標準與照片不同，請改回自動對應"));
+  if(match.selected_source?.name)block.append(element("p","",`原選用：${match.selected_source.name}（尚未確認為本張來源）`));
+  for(const evidence of Array.isArray(match.identity_evidence) ? match.identity_evidence : [])block.append(element("p","",`${fieldLabels[evidence.field] || "辨別資料"}：讀到 ${evidence.actual || "未讀到"}；選用標準為 ${evidence.expected || "未提供"}`));
+  const action=element("button","button primary","自動重新核對這張");action.type="button";action.id="source-conflict-auto-recheck";action.dataset.recognitionAction="true";action.disabled=state.busy;action.onclick=()=>autoRecheckInspection(inspection.id);block.append(action,element("p","help","使用已辨識文字重新尋找標準，不重新呼叫雲端，也不修改原標準。"));area.append(block);
 }
 async function recheckInspection() {
   if (!state.inspection || state.busy || !validBaseDate() || !validPhotoTemplateChoice()) return;
@@ -1535,18 +1581,19 @@ function renderRecheckControls(area) {
   const dirty = element("p", "recheck-dirty", state.standardSaved ? "標準已儲存，之後同款會使用新版。以下仍是上次結果，請重新核對本張照片。" : "設定已變更，以下仍是上次結果，請重新核對。"); dirty.id = "recheck-dirty"; dirty.hidden = !state.resultDirty; dirty.setAttribute("role","status");
   const button = element("button", `button ${state.standardSaved ? "primary" : "secondary"}`, state.standardSaved ? "用新標準重新核對本張" : "重新核對"); button.id = "recheck-button"; button.type = "button"; button.disabled = state.busy; button.onclick = recheckInspection;
   const result=state.inspection?.manual_revision?.result || state.inspection?.result;
-  const hasSource=!!state.inspection?.template_id || !!state.inspection?.template_snapshot?.source?.code;
+  const conflict=result?.source_match?.status==="source_conflict",hasSource=!conflict && (!!state.inspection?.template_id || !!state.inspection?.template_snapshot?.source?.code);
   const edit = element("button","button secondary",hasSource ? "更新比對標準" : "建立文字比對標準");edit.type="button";edit.dataset.editStandard="true";edit.disabled=state.busy || !!state.resultDirty;edit.hidden=!allowed() || !hasSource;edit.onclick=()=>{if(state.resultDirty)return toast("比對設定已變更，請先重新核對來源。",true);return hasSource ? openStandardEditor() : openManualStandard();};
   const hasPatches = !!state.inspection?.manual_revision?.patches?.length;
   block.append(dirty,button,edit,element("p","recheck-help",hasPatches ? "沿用目前人工訂正，依最新標準與上方本批日期重新核對；原紀錄保留。" : "使用原辨識文字，依最新系統標籤、清單與上方本批日期核對。"));
   const referenceCode=state.inspectSource?.code || state.inspection?.template_snapshot?.source?.code || (result?.source_match?.status==="matched" ? result.source_match.code : "");
-  if(allowed() && referenceCode && !result?.label_scope?.blocked && state.inspection?.ocr?.label_scope?.status!=="multiple"){const attach=element("button","button secondary","附加這張參考照");attach.type="button";attach.dataset.editStandard="reference-photo";attach.disabled=state.busy;attach.onclick=()=>openReferencePhoto(state.inspection.id,referenceCode);block.append(attach);}
+  if(allowed() && referenceCode && !conflict && !result?.label_scope?.blocked && state.inspection?.ocr?.label_scope?.status!=="multiple"){const attach=element("button","button secondary","附加這張參考照");attach.type="button";attach.dataset.editStandard="reference-photo";attach.disabled=state.busy;attach.onclick=()=>openReferencePhoto(state.inspection.id,referenceCode);block.append(attach);}
   block.append(element("p","workflow-help",allowed() ? "「訂正辨識」只影響本筆；管理員在這裡更新比對標準，才會影響之後同款掃描。" : "辨識讀錯時，按該行「訂正」，只影響本筆；變更後續比對標準需管理員處理。"));
   disclosure.append(block);area.append(disclosure);
 }
 function resultStandardAction(inspection,result){
   if(!allowed())return null;
   const match=result.source_match || {},source=inspection.template_snapshot?.source || {},eligibility=inspection.manual_standard_eligibility,photo=!!inspection.template_id;
+  if(match.status==="source_conflict")return null;
   if(result.label_scope?.blocked || inspection.ocr?.label_scope?.status==="multiple")return {blocked:"請先框選一張完整標籤，再確認要建立或更新的標準。",action:"crop",label:"調整標籤範圍"};
   if(eligibility?.eligible===false)return {blocked:`${eligibility.reason || "本次沒有足夠可用文字"}，請先重新拍攝或辨識。`,action:"retake",label:"重新拍攝",invalid:true};
   if(state.inspection?.id===inspection.id && state.resultDirty)return {blocked:state.standardSaved ? "標準已儲存；重新核對本張照片即可看到最新結果。" : "比對設定已變更，請先重新核對，確認這次要更新的來源。",action:"recheck",label:state.standardSaved ? "用新標準重新核對" : "先重新核對來源"};
@@ -1614,12 +1661,12 @@ function renderResultLines(rows, area, inspection, manual = false, options = {})
   }); area.append(list);
 }
 function resultCoverage(inspection,result,visibleRows=null){
-  const matched=result.source_match?.status==="matched" || !!inspection.template_id || !!inspection.template_snapshot?.source?.code;
+  const conflict=result.source_match?.status==="source_conflict",matched=!conflict && (result.source_match?.status==="matched" || !!inspection.template_id || !!inspection.template_snapshot?.source?.code);
   const hasUnread=visibleRows?.some(row=>row.status==="read"),partial=["catalog_fields","manual_text"].includes(result.verified_scope) || result.counts?.read>0 || hasUnread;
   const blocked=result.label_scope?.blocked || inspection.ocr?.label_scope?.status==="multiple",status=result.status!=="fail" && blocked ? "review" : result.status==="pass" && (!matched || hasUnread) ? "review" : result.status;
   return {matched,status,
-    title:blocked ? "請先確認單張標籤範圍" : !matched ? result.status==="fail" ? "發現差異 · 尚無比對標準" : "尚無比對標準" : hasUnread && result.status==="pass" ? "仍有文字尚無比對依據" : statusLabels[result.status] || "需要確認",
-    note:!matched ? "目前只做可判讀的日期、條碼等邏輯檢查；沒有標準，不能確認整張標籤正確。" : partial ? "只確認已設定的內容；沒有比對依據的文字仍需人工核對。" : "依本次選用的標準及日期規則核對；請確認選到的貼紙範圍完整。"};
+    title:conflict ? "選用標準與照片不同" : blocked ? "請先確認單張標籤範圍" : !matched ? result.status==="fail" ? "發現差異 · 尚無比對標準" : "尚無比對標準" : hasUnread && result.status==="pass" ? "仍有文字尚無比對依據" : statusLabels[result.status] || "需要確認",
+    note:conflict ? "原選用來源尚未確認適用，請以自動對應重新核對；不能將不同商品視為已相符。" : !matched ? "目前只做可判讀的日期、條碼等邏輯檢查；沒有標準，不能確認整張標籤正確。" : partial ? "只確認已設定的內容；沒有比對依據的文字仍需人工核對。" : "依本次選用的標準及日期規則核對；請確認選到的貼紙範圍完整。"};
 }
 function openResultRow(identifier){
   const row=$$("#result-lines [data-line-id]").find(node=>node.dataset.lineId===identifier);
@@ -1648,8 +1695,8 @@ function renderResultOverview(inspection,result,rows,area){
   block.append(issues);area.append(block);
 }
 function renderLogicChecks(result,area){
-  const checks=(result.checks || []).filter(check=>check.source==="date" || isNutritionCheck(check) || /barcode|^date_|^keep_days$|^batch$/.test(check.key || "") || /條碼/.test(check.label || ""));
-  const details=element("details","logic-checks");details.id="result-logic-details";details.append(element("summary","",`日期、條碼與營養檢查 · ${checks.length} 項`));
+  const checks=(result.checks || []).filter(check=>check.key==="source_identity_conflict" || check.source==="date" || isNutritionCheck(check) || /barcode|^date_|^keep_days$|^batch$/.test(check.key || "") || /條碼/.test(check.label || ""));
+  const details=element("details","logic-checks");details.id="result-logic-details";details.append(element("summary","",`${checks.some(check=>check.key==="source_identity_conflict") ? "來源、" : ""}日期、條碼與營養檢查 · ${checks.length} 項`));
   if(!checks.length)details.append(element("p","help","本筆沒有可核對的日期、條碼或營養資料，不代表這些項目已通過。"));
   for(const check of checks){const row=element("div",`logic-check ${check.status}`);row.dataset.checkKey=check.key || "";row.append(badge(check.status,({pass:"✓ 相符",fail:"✕ 有差異",review:"? 需確認",read:"僅辨識"})[check.status]),element("strong","",check.label || "檢查項目"));
     if(check.display_actual || check.actual)row.append(element("p","",`讀到：${check.display_actual || check.actual}`));if(check.display_expected || check.expected)row.append(element("p","help",`依據：${check.display_expected || check.expected}`));if(check.reason)row.append(element("p","help",check.reason));details.append(row);}
@@ -1676,7 +1723,7 @@ function barcodeOnlyEvidence(line,result,checks){
 }
 function buildResultSections(inspection,result,ocr){
   const allChecks=result.checks || [],dateChecks=allChecks.filter(dateResultCheck),barcodeChecks=allChecks.filter(barcodeResultCheck),nutritionChecks=allChecks.filter(isNutritionCheck);
-  const contentChecks=allChecks.filter(check=>!dateResultCheck(check) && !barcodeResultCheck(check) && !isNutritionCheck(check) && check.key!=="photo_scope");
+  const contentChecks=allChecks.filter(check=>!dateResultCheck(check) && !barcodeResultCheck(check) && !isNutritionCheck(check) && !["photo_scope","source_identity_conflict"].includes(check.key));
   const lines=(ocr.lines || []).filter(line=>!dateOnlyEvidence(line,result) && !barcodeOnlyEvidence(line,result,barcodeChecks));
   const rows=groupedResultRows(buildResultRows(contentChecks,lines),result.display_rows),compact=rows.map(row=>String(row.text || "").replace(/\s+/g,"")),hasTable=compact.some(nutritionHeader) || compact.filter(fullNutrientRow).length>=2;
   const content=[],nutrition=[];
@@ -1713,8 +1760,8 @@ function resultPhotoButton(inspection,row=null){
 function renderResultHero(inspection,result,area){
   const hero=element("section","result-overview result-visual-hero"),figure=element("figure","result-label-photo");figure.append(resultPhotoButton(inspection));
   figure.append(element("figcaption","",inspection.ocr?.label_scope?.status==="no_clear_sticker" ? "未能自動選出標籤，這次辨識整張照片；可手動框選。" : selectedLabelRegion(inspection) ? "本次標籤範圍 · 原圖保留" : "本次照片 · 原圖保留"));hero.append(figure);
-  const side=element("div","result-photo-context"),match=result.source_match;side.append(element("h3","",inspection.template_snapshot?.fields?.product || inspection.template_snapshot?.source?.name || match?.name || result.fields?.product?.value || "標籤檢查"));
-  if(match?.status==="matched")side.append(element("p","",`${sourceKindLabel(match)} · ${sourceCodeLabel(match)}`));else if(inspection.template_id)side.append(element("p","","照片標準比對"));else side.append(element("p","",match?.status==="ambiguous" ? "找到多份可能來源，尚未選定。" : "目前尚無確定比對標準。"));
+  const side=element("div","result-photo-context"),match=result.source_match;side.append(element("h3","",match?.status==="source_conflict" ? result.fields?.product?.value || "本張標籤" : inspection.template_snapshot?.fields?.product || inspection.template_snapshot?.source?.name || match?.name || result.fields?.product?.value || "標籤檢查"));
+  if(match?.status==="source_conflict")side.append(element("p","","原指定標準與照片衝突，尚未確認本張來源。"));else if(match?.status==="matched")side.append(element("p","",`${sourceKindLabel(match)} · ${sourceCodeLabel(match)}`));else if(inspection.template_id)side.append(element("p","","照片標準比對"));else side.append(element("p","",match?.status==="ambiguous" ? "找到多份可能來源，尚未選定。" : "目前尚無確定比對標準。"));
   if(result.label_scope?.blocked || inspection.ocr?.label_scope?.status==="multiple"){const warning=element("p","result-scope-warning",result.label_scope?.reason || "照片內有多張可能的標籤，請先框選一張完整標籤，避免混用不同貼紙的文字。");warning.setAttribute("role","status");side.append(warning);}
   side.append(element("p","help","先看照片與標記的文字。辨識讀錯可訂正本筆，不會修改比對標準。"));
   const controls=element("div","photo-summary-actions"),crop=element("button","button secondary","調整標籤範圍");crop.type="button";crop.disabled=state.busy;crop.dataset.recognitionAction="true";crop.onclick=()=>openCropDialog(inspection);controls.append(crop);side.append(controls);hero.append(side);area.append(hero);
@@ -1980,6 +2027,7 @@ function renderInspection(inspection) {
   const ruleChecks=[...new Set([...model.dateChecks,...model.barcodeChecks,...model.nutritionChecks])];
   for(const [status,label] of [["fail","✕ 規則差異"],["review","? 規則需確認"]]){const count=ruleChecks.filter(check=>check.status===status).length;if(count)counts.append(element("span",`count-${status}`,`${label} ${count} 個檢查點`));}
   header.append(element("strong","result-verdict",coverage.title),counts,element("p","result-coverage",coverage.note)); area.append(header);
+  renderSourceConflict(inspection,result,area);
   if(!coverage.matched)renderUnmatchedDates(inspection,result,area);
   if(inspection.manual_revision){
     const toolbar=element("div","manual-toolbar"),toggle=element("button","button secondary",manual ? "查看原始判定" : "查看人工訂正後判定");toggle.type="button";toggle.dataset.toggleOriginal="true";toggle.disabled=state.busy;toggle.onclick=()=>{state.manualView=!state.manualView;renderInspection(inspection);};
@@ -2478,9 +2526,11 @@ $$("[data-action='new-standard']").forEach(b=>b.onclick=()=>newStandard());
 $$("[data-file]").forEach(b=>b.onclick=()=>$("#"+b.dataset.file).click());
 for (const id of ["inspect-file","inspect-camera","reference-file","reference-camera"]) $("#"+id).onchange=event=>{ const file=event.target.files[0]; event.target.value=""; upload(file,id.startsWith("inspect")?"inspection":"reference"); };
 for (const [id,kind] of [["inspect-drop","inspection"],["reference-drop","reference"]]) { const zone=$("#"+id); zone.ondragover=e=>{ e.preventDefault(); zone.classList.add("dragging"); }; zone.ondragleave=()=>zone.classList.remove("dragging"); zone.ondrop=e=>{ e.preventDefault(); zone.classList.remove("dragging"); upload(e.dataTransfer.files[0],kind); }; }
-$("#template-select").onchange=()=>{ state.inspectSource=null; renderInspectSource(); selectedStandard(); markResultChanged(); };
+$("#template-select").onchange=changePhotoTemplateChoice;
+$("#next-scan-pin").onchange=pinNextScanChoice;
+$("#next-scan-auto").onclick=autoNextScan;
 for(const prefix of ["","reference-","crop-"])for(const name of ["recognition-engine","label-scope"])$("#"+prefix+name).onchange=()=>{if(name==="recognition-engine")$("#"+prefix+name).dataset.recognitionInitialized="true";recognitionChoiceNote(prefix);};
-for(const slot of ["inspect","reference"])$("#"+slot+"-upload-resend").onclick=()=>{const pending=state.uploadRequests[slot];if(pending && !state.busy)upload(pending.file,slot==="reference" ? "reference" : "inspection");};
+for(const slot of ["inspect","reference"])$("#"+slot+"-upload-resend").onclick=()=>resendUpload(slot);
 $("#base-date").onchange=markResultChanged;
 $("#batch-date").onchange=markResultChanged;
 $("#arrival-date").onchange=markResultChanged;

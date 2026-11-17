@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-barcode-autofill">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-source-match">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261117-barcode-autofill" defer></script>
+  <script src="/static/app.js?v=20261117-source-match" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -43,6 +43,7 @@
           <p class="help base-date-help">依此日期與標籤系統設定核對日期；查歷史標籤時可調整。</p>
           <div class="recognition-choices"><label>辨識方式<select id="recognition-engine"><option value="local">一般辨識</option><option value="cloud" disabled>雲端辨識（暫不可用）</option></select></label><label>辨識範圍<select id="label-scope"><option value="sticker">標籤主要區域（自動選取）</option><option value="full">整張照片</option></select></label></div><p id="recognition-choice-note" class="help">正在讀取辨識設定…</p>
           <div class="section-title"><svg><use href="#i-scan"/></svg><h2>拍攝待檢查標籤</h2></div>
+          <section id="next-scan-selection" class="next-scan-selection" aria-label="下一張照片比對方式"><strong id="next-scan-status" role="status">下一張：自動對應</strong><p id="next-scan-note" class="help">依每張照片重新尋找標準；查看紀錄不會固定下一張。</p><label class="check-label"><input id="next-scan-pin" type="checkbox" disabled><span id="next-scan-pin-label">固定使用此標準（先在比對設定選擇）</span></label><button id="next-scan-auto" class="button secondary" type="button" hidden>下一張改回自動對應</button></section>
           <div class="upload-zone" id="inspect-drop">
             <div class="upload-symbol"><svg><use href="#i-camera"/></svg></div><h3>每次拍一張完整標籤</h3><p>靠近拍清細字，保留此標籤完整文字；避開反光與遮擋</p>
             <div class="upload-actions"><button id="scan-button" class="button primary capture-button"><svg><use href="#i-camera"/></svg>掃描標籤</button><button class="button secondary" data-file="inspect-file"><svg><use href="#i-upload"/></svg>選擇照片</button></div>

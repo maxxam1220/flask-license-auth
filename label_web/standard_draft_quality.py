@@ -19,6 +19,11 @@ def eligibility(ocr, patches=None, result=None):
     observed_scope = ocr.get("label_scope") or {}
     evaluated_scope = result.get("label_scope") or {}
     source_match = result.get("source_match") or {}
+    if isinstance(source_match, dict) and source_match.get("status") == "source_conflict":
+        return {"eligible":False, "reason_code":"source_conflict",
+                "reason":"選用標準與照片不同，請先自動重新核對或選擇正確標準，再建立草稿。",
+                "needs_review":True, "usable_line_count":0, "uncertain_line_count":0,
+                "total_line_count":len(ocr.get("lines") or [])}
     blocked = (ocr.get("image_status") == "multiple_labels" or
                (isinstance(observed_scope, dict) and observed_scope.get("status") == "multiple") or
                (isinstance(evaluated_scope, dict) and bool(evaluated_scope.get("blocked"))) or

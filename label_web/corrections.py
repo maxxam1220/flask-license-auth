@@ -122,6 +122,9 @@ def build_revision(original, current, action, created_at):
         result = evaluate(ocr["lines"], standard, inputs.get("batch_date", ""), inputs.get("arrival_date", ""),
             base_date=inputs.get("base_date", ""))
     from inspection_evidence import augment
+    # A text correction does not select a different reference. Keep this warning
+    # until an explicit recheck resolves the source from the corrected evidence.
+    result["source_match"] = deepcopy(original["result"].get("source_match"))
     augment(result, ocr)
     affected = set(patches)
     for check in result["checks"]:

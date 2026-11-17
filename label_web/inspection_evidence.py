@@ -7,8 +7,17 @@ from text_rows import group_observed_rows
 
 def augment(result, ocr):
     # Re-evaluation is idempotent; never re-use conclusions from another OCR pass.
-    checks=[x for x in result.get("checks",[]) if x.get("source")=="database" or
-            not x.get("key","").startswith(("barcode_", "cloud_word_", "photo_scope", "nutrition_"))]
+    checks=[x for x in result.get("checks",[]) if x.get("key") != "source_identity_conflict" and (x.get("source")=="database" or
+            not x.get("key","").startswith(("barcode_", "cloud_word_", "photo_scope", "nutrition_")))]
+    match = result.get("source_match") or {}
+    if match.get("status") == "source_conflict":
+        selected = match.get("selected_source") or {}
+        evidence = match.get("identity_evidence") or []
+        checks.insert(0, {"key":"source_identity_conflict", "label":"選用標準與照片不同", "status":"review",
+            "actual":"；".join(str(item.get("actual", "")) for item in evidence),
+            "expected":selected.get("name", ""), "source":"source_selection", "score":None,
+            "line_ids":list(dict.fromkeys(identifier for item in evidence for identifier in item.get("line_ids", []))),
+            "reason":match.get("reason") or "照片品名與選用標準衝突，請改回自動對應或重新選擇；尚未套用該標準。"})
     checks.extend(checks_for(ocr))
     checks.extend(nutrition_checks(ocr))
     result["display_rows"] = [{key: row[key] for key in

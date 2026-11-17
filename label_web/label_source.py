@@ -44,6 +44,46 @@ def _fixed_barcodes(value):
     return values
 
 
+def _reliable_lines(lines):
+    return [line for line in lines if not line.get("human_uncertain") and
+            (line.get("human_verified") is True or (float(line.get("score",0))>=.65 and not line.get("ambiguous")))]
+
+
+def _name_observations(reliable,fields):
+    observations=[];blocked=set()
+    for index,line in enumerate(reliable):
+        if index and re.fullmatch(r"\s*(?:內容物|内容物|成分|原料)\s*[:：]?\s*",reliable[index-1]["text"]):
+            blocked.add(line["id"])
+    product=fields.get("product",{})
+    if product.get("value") and not product.get("ambiguous") and not blocked.intersection(product.get("line_ids",[])):
+        observations.append({"value":product["value"],"line_ids":product.get("line_ids",[])})
+    for line in reliable:
+        if line["id"] in blocked or _kind(line["text"]) in {"company","address","phone","storage"}:continue
+        value=re.sub(r"^(?:產品名稱|商品名稱|產品品名|品名)\s*[:：]?\s*","",line["text"])
+        # Complete standalone names only. An ingredients heading and its value
+        # are not a second product, whether printed in one box or two.
+        if re.match(r"\s*(?:內容物|内容物|成分|原料)\s*[:：]",value):continue
+        observations.append({"value":value,"line_ids":[line["id"]]})
+    return observations
+
+
+def _barcode_matches(item,value):
+    """Typography is interchangeable only for explicitly typed GTIN values."""
+    known=item.get("barcode",set())
+    if value in known:return True
+    length={"1":13,"2":12,"3":8}.get(str(item.get("barcode_kind","")).strip())
+    if not length:return False
+    from barcode_checks import gtin_valid
+    def canonical(raw):
+        # Code128 can contain meaningful spaces, so this branch is type-gated.
+        raw=re.sub(r"^(?:條碼|条码|商品條碼|商品条码|Barcode)\s*[:：]\s*","",str(raw).strip(),count=1,flags=re.I)
+        if re.fullmatch(r"[0-9 \t]+",raw) is None:return None
+        compact=re.sub(r"[ \t]","",raw)
+        return compact if len(compact)==length and gtin_valid(compact) is True else None
+    normalized=canonical(value)
+    return bool(normalized) and any(canonical(raw)==normalized for raw in known)
+
+
 def _desktop_available(engine):
     if engine.dialect.name != "postgresql":
         return False
@@ -187,13 +227,13 @@ def raw_catalog(engine):
     masters, details = [], []
     if _desktop_available(engine):
         with engine.connect() as conn:
-            masters = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name '
+            masters = conn.execute(text('SELECT "CodeNo" AS code, "CodeName" AS name, "TypesOfBarcode" AS barcode_kind '
                                         'FROM barcode53."BcMst" ORDER BY "CodeNo"')).mappings().all()
             details = conn.execute(text('SELECT "CodeNo" AS code, "ObjContent" AS content '
                 'FROM barcode53."BcDtl" WHERE LEFT("Attr", 1)=\'3\' AND "ObjContent" IS NOT NULL')).mappings().all()
     catalog = {str(row["code"]).strip(): {"code": str(row["code"]).strip(), "name": str(row["name"] or ""),
                 "sku": set(), "barcode": set(), "spec": set(), "origin": set(), "text": set(),
-                "source_kind": "desktop", "text_by_kind": {}} for row in masters}
+                "source_kind": "desktop", "barcode_kind":str(row.get("barcode_kind") or "").strip(),"text_by_kind": {}} for row in masters}
     for row in details:
         item = catalog.get(str(row["code"]).strip())
         if item is None:
@@ -220,7 +260,7 @@ def raw_catalog(engine):
         barcode = str(row.get("barcode") or "").strip()
         catalog[code] = {"code": code, "name": row["name"], "sku": set(),
                          "barcode": {barcode} if barcode else set(), "spec": set(), "origin": set(),
-                         "text": set(), "source_kind": "catalog", "catalog_record": row}
+                         "text": set(), "source_kind": "catalog", "barcode_kind":str(row.get("barcode_type") or "").strip(),"catalog_record": row}
     for row in manual_reference.records(engine):
         source = row["snapshot"]
         catalog[row["code"]] = _manual_catalog_item(source)
@@ -228,8 +268,11 @@ def raw_catalog(engine):
 
 
 def _manual_catalog_item(source):
+    from barcode_rule_authoring import dynamic_literal
+    rule=source.get("web_barcode_rule")
     item = {"code": source["code"], "name": source["name"], "sku": set(),
-            "barcode": set(source.get("barcode_values", [])), "spec": set(), "origin": set(),
+            "barcode": {value for value in source.get("barcode_values", []) if not rule or not dynamic_literal(rule,value)}, "spec": set(), "origin": set(),
+            "barcode_kind":str((source.get("barcode_config") or {}).get("kind","")).strip(),
             "text": set(), "text_by_kind": {}, "source_kind": "manual"}
     for line in source.get("lines", []):
         value = line["text"]
@@ -306,6 +349,58 @@ def _resolution(status, reason, catalog=None, codes=(), source=None):
     return result
 
 
+def _explicit_conflict(source,reliable,catalog):
+    """Reject evidence for a different known product, not ordinary print typos."""
+    fields=extract_fields(reliable)
+    product=fields.get("product",{})
+    selected_name=_identity_text(source["name"])
+    observed=product.get("value","") if not product.get("ambiguous") else ""
+    targets={code for code,item in catalog.items() if observed and _identity_text(item["name"])==_identity_text(observed)}
+    name_rows=_name_observations(reliable,fields)
+    if observed and not any(_identity_text(row["value"])==_identity_text(observed) for row in name_rows):
+        observed="";targets=set()
+    if not observed:
+        # Short bare names can be deliberately absent from generic field
+        # extraction. The same exact known-name evidence used by auto mode is
+        # still usable here; never use fuzzy/substrings to override selection.
+        known=[row for row in name_rows if any(_identity_text(item["name"])==_identity_text(row["value"]) for item in catalog.values())]
+        names={_identity_text(row["value"]) for row in known}
+        if len(names)==1:
+            observed=known[0]["value"]
+            product={"line_ids":list(dict.fromkeys(identifier for row in known for identifier in row["line_ids"]))}
+            targets={code for code,item in catalog.items() if _identity_text(item["name"])==_identity_text(observed)}
+    evidence=[];candidates=set()
+    if targets and _identity_text(observed)!=selected_name:
+        candidates=targets
+        evidence=[{"field":"product","actual":observed,"expected":source["name"],"line_ids":product.get("line_ids",[])}]
+    else:
+        # One wrong SKU/number may be a label defect. A same-name variant needs
+        # at least two independent contradictions, including SKU or barcode,
+        # that affirmatively identify the same different known source.
+        selected=_manual_catalog_item(source)
+        peers={code:item for code,item in catalog.items() if code!=source["code"] and _identity_text(item["name"])==selected_name}
+        for code,item in peers.items():
+            proof={}
+            for key in ("spec","origin"):
+                field=fields.get(key,{})
+                value=_identity_text(field.get("value",""))
+                if value and not field.get("ambiguous") and selected[key] and value not in selected[key] and value in item.get(key,set()):
+                    proof[key]={"field":key,"actual":field["value"],"expected":" / ".join(sorted(selected[key])),"line_ids":field.get("line_ids",[])}
+            for line in reliable:
+                for value in _identifiers(line["text"],_SKU_LABEL):
+                    if selected["sku"] and value not in selected["sku"] and value in item.get("sku",set()):
+                        proof["sku"]={"field":"sku","actual":value,"expected":" / ".join(sorted(selected["sku"])),"line_ids":[line["id"]]}
+                if selected["barcode"] and not _barcode_matches(selected,line["text"]) and _barcode_matches(item,line["text"]):
+                    proof["barcode"]={"field":"barcode","actual":line["text"],"expected":" / ".join(sorted(selected["barcode"])),"line_ids":[line["id"]]}
+            if len(proof)>=2 and {"sku","barcode"}&proof.keys():
+                candidates.add(code);evidence.extend(proof.values())
+    if not candidates:return None
+    result=_resolution("source_conflict",f"照片辨識到的商品資料與指定標準「{source['name']}」不同，請先確認並重新選擇比對標準；未自動改選其他來源。",catalog,sorted(candidates))
+    result["selected_source"]={key:source.get(key,"") for key in ("code","name","source_kind")}
+    result["identity_evidence"]=evidence
+    return result
+
+
 def resolve(engine, ocr_lines, source_code=""):
     """Resolve one current label; never merge fields from different database labels."""
     try:
@@ -316,6 +411,10 @@ def resolve(engine, ocr_lines, source_code=""):
             source = draft(engine, explicit)
             if source is None:
                 return _resolution("unmatched", "指定的標籤編號不存在，請重新選擇；未改用其他標籤。")
+            reliable=_reliable_lines(ocr_lines)
+            if reliable:
+                conflict=_explicit_conflict(source,reliable,_catalog(engine))
+                if conflict:return conflict
             return _resolution("matched", "使用指定標籤的最新資料核對。",
                                {explicit: source}, [explicit], source)
         catalog = _catalog(engine)
@@ -326,18 +425,10 @@ def resolve(engine, ocr_lines, source_code=""):
         for code, name in normalized_names.items():
             name_index.setdefault(name, set()).add(code)
         # Low-confidence OCR can suggest candidates, but cannot silently select one.
-        reliable = [line for line in ocr_lines if not line.get("human_uncertain") and
-                    (line.get("human_verified") is True or (float(line.get("score", 0)) >= .65 and not line.get("ambiguous")))]
+        reliable = _reliable_lines(ocr_lines)
         fields = extract_fields(reliable)
         product = fields.get("product", {})
-        names = set()
-        if product.get("value") and not product.get("ambiguous"):
-            names.add(_identity_text(product["value"]))
-        # An exact complete standalone name can still be found when the generic field
-        # extractor picked another heading. No substring or fuzzy acceptance is used.
-        for line in reliable:
-            value = re.sub(r"^(?:產品名稱|商品名稱|產品品名|品名)\s*[:：]?\s*", "", line["text"])
-            names.add(_identity_text(value))
+        names={_identity_text(row["value"]) for row in _name_observations(reliable,fields)}
         sku_values, barcode_values = set(), set()
         for line in reliable:
             sku_values.update(_identifiers(line["text"], _SKU_LABEL))
@@ -353,7 +444,7 @@ def resolve(engine, ocr_lines, source_code=""):
         name_candidates = set.intersection(*signals) if signals else set()
         for key, values in (("sku", sku_values), ("barcode", barcode_values)):
             for value in values:
-                matched = {code for code, item in catalog.items() if value in item[key]}
+                matched = {code for code, item in catalog.items() if (_barcode_matches(item,value) if key=="barcode" else value in item[key])}
                 if matched:
                     if key == "barcode" and matched & name_candidates:
                         # A same-name list with an unknown barcode is not proof of
@@ -401,6 +492,10 @@ def resolve(engine, ocr_lines, source_code=""):
                 for line in reliable:
                     if _fixed_barcodes(line["text"]):
                         continue
+                    if _kind(line["text"]) in {"company","address","phone","storage"}:
+                        # Shared contact/storage text does not identify a SKU,
+                        # especially when another reference omits the footer.
+                        continue
                     observed = normalize_text(line["text"])
                     matches = {code for code in original_candidates if observed in catalog[code]["text"]}
                     if not matches:
@@ -419,6 +514,19 @@ def resolve(engine, ocr_lines, source_code=""):
                     if not candidates:
                         return _resolution("ambiguous", "同張照片的差異文字指向不同款式，無法確認單一來源。",
                                            catalog, sorted(original_candidates))
+                if len(candidates)==1:
+                    selected=next(iter(candidates))
+                    for line in reliable:
+                        if _kind(line["text"])!="storage":continue
+                        observed=normalize_text(line["text"])
+                        known=catalog[selected].get("text_by_kind",{}).get("storage",set())
+                        alternatives={code for code in original_candidates if observed in catalog[code].get("text_by_kind",{}).get("storage",set())}
+                        # Storage cannot choose a product by itself, but a
+                        # contrary known storage variant must not be ignored
+                        # after other specific text has narrowed the choices.
+                        if known and observed not in known and alternatives and selected not in alternatives:
+                            return _resolution("ambiguous","同張照片的差異文字與保存條件指向不同款式，請確認來源。",
+                                               catalog,sorted(original_candidates))
             equivalent = []
             if len(candidates) > 1:
                 keys = {reference_catalog.equivalence_key(catalog[code]) for code in candidates}
@@ -441,7 +549,7 @@ def resolve(engine, ocr_lines, source_code=""):
             if equivalent:
                 source["equivalent_sources"] = equivalent
             reason = ("多筆清單的品名、條碼與保存天數完全相同，使用等價清單資料核對。" if equivalent
-                      else "依完整相符的品名、貨號、條碼及可用差異文字，對應同一款來源。")
+                      else "依可讀的商品識別資料及可用差異文字，對應同一款來源；各項印字仍須分別核對。")
             return _resolution("matched", reason,
                                catalog, [code], source)
         # Suggestions are deliberately separate from source selection and validation.
