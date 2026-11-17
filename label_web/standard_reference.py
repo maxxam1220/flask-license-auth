@@ -333,6 +333,9 @@ def _inspection_draft_barcodes(rows, source, ocr):
         found = value(row.get("text", ""))
         config=source.get("barcode_config") or {}
         composed=bool(config.get("barcode") or config.get("solar") or config.get("front") or config.get("back"))
+        if source.get("web_barcode_rule"):
+            from barcode_rule_authoring import dynamic_literal
+            composed=composed or dynamic_literal(source["web_barcode_rule"],row.get("text",""))
         if found and (composed or found not in approved):
             excluded.append(dict(row, value=found,
                 reason="條碼可能含批次資料，未自動寫入固定文字；原始辨識與條碼檢查仍保留。"))

@@ -10,7 +10,7 @@ from label_geometry import (analyze_label_scope, scope_review_result, date_obser
 from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.13"
+RULE_VERSION = "1.14"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -188,16 +188,18 @@ def _compatible(expected, actual):
 
 
 def _source_rows(source):
+    from barcode_rule_authoring import dynamic_literal
+    rule=(source or {}).get("web_barcode_rule")
     rows, seen = [], set()
     for index, row in enumerate((source or {}).get("lines", [])):
         identifier = row.get("id", index)
-        if identifier in seen or not str(row.get("text", "")).strip():
+        if identifier in seen or not str(row.get("text", "")).strip() or (rule and dynamic_literal(rule,row.get("text",""))):
             continue
         seen.add(identifier)
         rows.append(dict(row, id=identifier, text=str(row["text"]), score=1.))
     for index, entry in enumerate((source or {}).get("barcode_values", []) or []):
         value = str(entry.get("value", "") if isinstance(entry, dict) else entry)
-        if value:
+        if value and not (rule and dynamic_literal(rule,value)):
             existing = next((row for row in rows if row["text"].strip() == value.strip()), None)
             heading = False
             if existing is None:
@@ -607,6 +609,9 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
     date_checks, date_fields, notes = _date_checks(date_lines, source, batch_date, arrival_date, base_date, literal_ids)
     fields.update(date_fields)
     checks.extend(date_checks)
+    if (source or {}).get("web_barcode_rule"):
+        from barcode_rule_authoring import evaluate_rule
+        checks.append(evaluate_rule(lines,source["web_barcode_rule"],base_date))
     unsupported = (ocr_capabilities or {}).get("unsupported_symbols", [])
     weak = (ocr_capabilities or {}).get("known_weak_symbols", [])
     for check in checks:

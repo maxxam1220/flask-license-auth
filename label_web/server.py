@@ -30,6 +30,7 @@ from label_geometry import analyze_label_scope
 import label_source
 import corrections
 import standard_reference
+import barcode_rule_authoring
 import history_cleanup
 import photo_regions
 import recognition_samples
@@ -954,6 +955,20 @@ def create_app(config=None, ocr=None):
                      "copied_from":copied_from}, db.now())
                 conn.execute(insert(db.corrections).values(**revision))
         return jsonify(inspection_id=new_id, manual_revision=1 if copied_from else 0, copied_from=copied_from), 201
+
+    @app.get("/api/inspections/<identifier>/barcode-rule")
+    def get_barcode_rule(identifier):
+        return jsonify(barcode_rule_authoring.suggest(engine, identifier))
+
+    @app.post("/api/inspections/<identifier>/barcode-rule/preview")
+    def preview_barcode_rule(identifier):
+        access.require_admin()
+        return jsonify(barcode_rule_authoring.preview(engine, identifier, request.get_json(silent=True)))
+
+    @app.post("/api/inspections/<identifier>/barcode-rule")
+    def save_barcode_rule(identifier):
+        access.require_admin()
+        return jsonify(barcode_rule_authoring.save(engine, identifier, request.get_json(silent=True))), 201
 
     standard_reference.register_routes(app, engine)
     history_cleanup.register_routes(app, engine, access.require_admin)

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-result-sections">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-barcode-rule">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261117-result-sections" defer></script>
+  <script src="/static/app.js?v=20261117-barcode-rule" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -164,6 +164,24 @@
   <div class="edit-actions"><button id="draft-scope-preview-button" class="button primary" type="button" disabled>預覽保留與排除文字</button><button id="draft-scope-reset" class="button secondary" type="button" disabled>選取整張照片</button></div>
   <section id="draft-scope-preview" class="standard-preview" hidden><h3 id="draft-scope-summary"></h3><p class="help">跨越框線、沒有可信位置、已手動修改或新增的文字會保守保留，請另行對照。日期規則不會變更。</p><details id="draft-scope-removed-details" open><summary>將排除的文字</summary><div id="draft-scope-removed"></div></details><details id="draft-scope-uncertain-details"><summary>保留但需確認位置</summary><div id="draft-scope-uncertain"></div></details><details><summary>查看保留文字</summary><div id="draft-scope-kept"></div></details><label class="check-label"><input id="draft-scope-confirm" type="checkbox"><span>已確認排除內容不屬於這張標籤，只套用到目前草稿，之後再預覽及儲存標準。</span></label><button id="draft-scope-apply" class="button primary" type="button" disabled>套用到草稿（尚未儲存）</button></section>
   <p id="draft-scope-error" class="upload-error" role="alert" hidden></p>
+</dialog>
+<dialog id="barcode-rule-dialog" class="barcode-rule-dialog" aria-labelledby="barcode-rule-title">
+  <div class="edit-heading"><h2 id="barcode-rule-title">條碼推算與規則確認</h2><button id="barcode-rule-close" class="button secondary" type="button">關閉</button></div>
+  <p id="barcode-rule-source" class="barcode-rule-source"></p><p id="barcode-rule-notice" class="help"></p>
+  <p id="barcode-rule-error" class="upload-error" role="alert" hidden></p><button id="barcode-rule-reload" class="button secondary" type="button" hidden>重新載入最新依據</button>
+  <div id="barcode-rule-basis"><section class="barcode-observation"><h3>本次讀到的依據</h3><div id="barcode-rule-observed"></div></section>
+  <section class="barcode-current"><h3>現行已核准規則</h3><div id="barcode-rule-current"></div></section>
+  <div id="barcode-rule-warnings"></div>
+  <p id="barcode-rule-write-note" class="help"></p></div>
+  <form id="barcode-rule-form" hidden>
+    <div id="barcode-rule-selection"><fieldset class="barcode-candidates-fieldset"><legend>候選推算（尚未核准）</legend><p class="help">候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。</p><div id="barcode-rule-candidates"></div></fieldset>
+    <label id="barcode-rule-fill-label" class="check-label" hidden><input id="barcode-rule-fill-days" type="checkbox"><span id="barcode-rule-fill-text"></span></label><p id="barcode-rule-days-note" class="help"></p>
+    <button id="barcode-rule-preview-button" class="button primary" type="button">預覽自動帶入的規則</button></div>
+    <button id="barcode-rule-adjust" class="button secondary" type="button" hidden>返回調整候選</button>
+    <section id="barcode-rule-preview" class="barcode-rule-preview" aria-label="條碼規則修改前後預覽" hidden></section>
+    <section id="barcode-rule-approval" hidden><div class="form-grid"><label>確認人員<input id="barcode-rule-reviewer" maxlength="100" autocomplete="name" required></label><label>確認原因<textarea id="barcode-rule-note" maxlength="2000" rows="2" required></textarea></label></div><label class="check-label confirm-check"><input id="barcode-rule-confirm" type="checkbox"><span>我已核對推算依據與假設，核准這份條碼規則套用到之後同款標籤。</span></label><button id="barcode-rule-save" class="button primary" type="submit" disabled>確認寫入標準</button></section>
+  </form>
+  <div id="barcode-rule-saved" role="status" hidden></div><button id="barcode-rule-recheck" class="button primary" type="button" hidden>用新規則重新核對</button>
 </dialog>
 <dialog id="result-image-dialog" class="result-image-dialog" aria-labelledby="result-image-title"><div class="edit-heading"><h2 id="result-image-title">放大標籤照片</h2><button id="result-image-close" type="button" class="button secondary">關閉</button></div><div class="result-image-scroll"><canvas id="result-image-canvas" role="img" aria-label="原照片局部放大"></canvas></div><p id="result-image-note" class="help"></p><a id="result-image-link" target="_blank" rel="noopener">開啟完整原圖</a></dialog>
 <dialog id="correction-dialog" class="edit-dialog" aria-labelledby="correction-title">

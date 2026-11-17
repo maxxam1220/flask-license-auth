@@ -21,6 +21,7 @@ function isAdminPath(path) {
     || /^\/api\/reference-photos(?:[/?]|$)/.test(path) || /^\/api\/inspections\/[^/]+\/(?:standard|manual-standard|reference-photo)(?:[/?]|$)/.test(path);
 }
 function purgeAdminData() {
+  closeBarcodeRule(true);
   closeDraftScopeDialog();closeLibraryCategory(true);closeLibraryDetail(true);state.libraryCategoryRequest++;state.libraryCategories=[];populateLibraryCategories();
   state.standardEdit = null; manualStandard = null; cleanupContext = null;
   state.referencePhoto=null;if($("#reference-photo-dialog").open)$("#reference-photo-dialog").close();$("#reference-photo-form").reset();$("#reference-photo-list").replaceChildren();$("#reference-photo-source").textContent="";$("#reference-photo-image").removeAttribute("src");$("#reference-photo-error").textContent="";
@@ -258,7 +259,7 @@ async function retryFailedJob(item,engineOverride="") {
 }
 async function api(path, options = {}) {
   const epoch=state.authEpoch;
-  if(isAdminPath(path) && !allowed(path.startsWith("/api/admin/history") ? "cleanup_history" : "manage_standards")){
+  if((isAdminPath(path) || (options.method && options.method!=="GET" && /^\/api\/inspections\/[^/]+\/barcode-rule(?:\/preview)?$/.test(path))) && !allowed(path.startsWith("/api/admin/history") ? "cleanup_history" : "manage_standards")){
     const error=new Error("此功能需要管理員權限，請先解鎖管理功能。");error.status=403;error.code="admin_required";throw error;
   }
   const headers = {...options.headers};
@@ -312,7 +313,7 @@ function setBusy(busy, kind = "") {
   for(const prefix of ["","reference-","crop-"])for(const key of ["recognition-engine","label-scope"])$("#"+prefix+key).disabled=busy;
   if(state.crop?.manualScope)$("#crop-label-scope").disabled=true;
   if ($("#recheck-button")) $("#recheck-button").disabled = busy;
-  $$("[data-correct-line], [data-edit-standard], [data-toggle-original], [data-recognition-action]").forEach(button => { button.disabled = busy; });
+  $$("[data-correct-line], [data-edit-standard], [data-toggle-original], [data-recognition-action], [data-barcode-rule]").forEach(button => { button.disabled = busy; });
   $$("[data-retry-job]").forEach(button => { button.disabled = busy || retryIsPending(button.dataset.retryJob); });
   for (const slot of ["inspect", "reference"]) for(const suffix of ["retry-button","retry-local"]) $(`#${slot}-${suffix}`).disabled = busy || retryIsPending(state.retryJobs[slot]?.id);
   $$("[data-action='new-standard']").forEach(x => { x.disabled = busy; });
@@ -1714,14 +1715,126 @@ function renderResultHero(inspection,result,area){
 function barcodeDisplayValues(values){
   const seen=new Set();return values.filter(value=>{if(typeof value!=="string" || !value.trim())return false;const key=/^\s*[0-9][0-9\s]*$/.test(value) ? `numeric:${value.replace(/\s/g,"")}` : `text:${value}`;if(seen.has(key))return false;seen.add(key);return true;});
 }
-function renderBarcodeCard(model,result,area){
+function renderBarcodeCard(model,result,area,inspection=state.inspection){
   if(!model.barcodeChecks.length)return;
   const checks=model.barcodeChecks,status=resultRowStatus(checks),referenced=checks.some(check=>check.status==="pass" && check.source==="database" && check.expected),card=element("section",`result-barcode-card ${status}`);card.id="result-barcode-card";
   card.append(element("h3","","條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 僅辨識",pass:referenced ? "✓ 已核對相符" : "✓ 基本檢查通過"}[status]));
   const values=barcodeDisplayValues([result.fields?.barcode?.display_value || result.fields?.barcode?.value,...checks.map(check=>check.display_actual || check.actual)]);for(const value of values.slice(0,3))card.append(element("p","barcode-observed",value));
   const problems=checks.filter(check=>["fail","review"].includes(check.status)),reasons=[...new Set(problems.map(check=>check.reason).filter(Boolean))];reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
   if(!referenced)card.append(element("p","help","格式或解碼檢查不代表已確認商品或批次條碼。"));
-  const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}card.append(detail);area.append(card);
+  const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}card.append(detail);
+  if(inspection?.id){const button=element("button","button secondary barcode-rule-entry",allowed() ? "查看推算／補上條碼規則" : "查看條碼推算");button.id="result-barcode-rule-open";button.type="button";button.dataset.barcodeRule="true";button.disabled=state.busy;button.onclick=()=>openBarcodeRule(inspection.id);card.append(button);}
+  area.append(card);
+}
+const barcodeDateLabels={base_date:"本批基準日",manufacture:"製造日期",expiry:"有效日期",arrival:"到店日"};
+function barcodeRuleDescription(rule){
+  if(!rule || typeof rule!=="object")return "未設定已核准的條碼推算規則";
+  return `${rule.symbology || "條碼"}：前綴 ${rule.prefix ?? "未設定"} ＋ ${barcodeDateLabels[rule.day_source] || "未指定日期"}的 ${rule.day_width ?? "?"} 位太陽日 ＋ 尾碼 ${rule.suffix==="" ? "無" : rule.suffix ?? "未設定"} ＋ 檢查碼`;
+}
+function barcodeRuleRows(area,parts){
+  const list=element("dl","barcode-rule-parts");for(const part of Array.isArray(parts) ? parts : []){if(!part || typeof part!=="object")continue;const row=element("div");row.append(element("dt","",String(part.label || "項目")),element("dd","",String(part.value ?? "未提供")));list.append(row);}area.append(list);
+}
+function barcodeWarnings(area,warnings,compact=false){
+  const values=[...new Set((Array.isArray(warnings) ? warnings : []).filter(warning=>typeof warning==="string" && warning.trim()).map(warning=>warning.trim()))];
+  if(compact && values.length)area.append(element("p","barcode-rule-warning",values.map(value=>value.replace(/[。.!！]+$/g,"")).join("；")+"。"));
+  else values.forEach(warning=>area.append(element("p","barcode-rule-warning",warning)));
+}
+function barcodeRuleContextCurrent(context){return state.barcodeRule===context && context.epoch===state.authEpoch && state.authenticated && state.inspection?.id===context.inspectionId;}
+function closeBarcodeRule(force=false){
+  const context=state.barcodeRule;if(context?.saving && !force)return;
+  state.barcodeRule=null;if($("#barcode-rule-dialog").open)$("#barcode-rule-dialog").close();
+  for(const id of ["barcode-rule-source","barcode-rule-notice","barcode-rule-observed","barcode-rule-current","barcode-rule-candidates","barcode-rule-preview","barcode-rule-warnings","barcode-rule-error","barcode-rule-saved","barcode-rule-write-note","barcode-rule-days-note"])$("#"+id).replaceChildren();
+  $("#barcode-rule-form").reset();$("#barcode-rule-confirm").checked=false;$("#barcode-rule-reviewer").value="";$("#barcode-rule-note").value="";$("#barcode-rule-preview").hidden=true;$("#barcode-rule-approval").hidden=true;$("#barcode-rule-recheck").hidden=true;$("#barcode-rule-reload").hidden=true;
+}
+function barcodeRuleBusy(busy){
+  const context=state.barcodeRule;
+  for(const id of ["barcode-rule-preview-button","barcode-rule-save","barcode-rule-close","barcode-rule-reload","barcode-rule-adjust"])$("#"+id).disabled=busy;
+  $$("#barcode-rule-form input, #barcode-rule-form textarea").forEach(input=>{input.disabled=busy;});
+  if(!busy && context)updateBarcodeRuleControls();
+}
+function updateBarcodeRuleControls(){
+  const context=state.barcodeRule,data=context?.data,editable=!!(allowed() && data?.can_write && !context?.conflict && !context?.saved && !state.resultDirty && state.inspection?.id===context?.inspectionId);
+  $("#barcode-rule-form").hidden=!!context?.saved;
+  const reviewing=!!context?.preview && !context?.conflict,done=!!context?.saved;
+  for(const id of ["barcode-rule-basis","barcode-rule-selection","barcode-rule-notice"])$("#"+id).hidden=reviewing || done;
+  $("#barcode-rule-adjust").hidden=!reviewing || done;
+  $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "這些是尚未核准的候選。一般使用者可查看推算，寫入標準需由管理員確認。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : !data?.can_write ? data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對日期來源與尾碼假設後再確認。";
+  $("#barcode-rule-preview-button").hidden=!allowed() || !data?.can_write;
+  $("#barcode-rule-preview-button").disabled=!editable || !context?.candidateId || !!context?.previewLoading;
+  for(const input of context?.candidateInputs || [])input.disabled=!editable;
+  const canFill=data?.keep_days?.current===null && data?.keep_days?.can_fill===true;
+  $("#barcode-rule-fill-label").hidden=!canFill;$("#barcode-rule-fill-days").disabled=!editable || !canFill;
+  $("#barcode-rule-save").disabled=!editable || !context?.preview || !$("#barcode-rule-confirm").checked;
+  $("#barcode-rule-recheck").disabled=state.busy;
+}
+function invalidateBarcodeRulePreview(){
+  const context=state.barcodeRule;if(!context)return;context.preview=null;context.previewNonce=(context.previewNonce || 0)+1;
+  $("#barcode-rule-preview").replaceChildren();$("#barcode-rule-preview").hidden=true;$("#barcode-rule-approval").hidden=true;$("#barcode-rule-confirm").checked=false;updateBarcodeRuleControls();
+}
+function renderBarcodeRule(data,context){
+  const source=data.source;$("#barcode-rule-source").textContent=source?.code ? `${sourceKindLabel(source)} ${sourceCodeLabel(source)} · ${source.name || "未命名標準"}` : "尚未確定要套用的標準";
+  $("#barcode-rule-notice").textContent=data.reason || "本次推算依據如下；只有明確核准儲存才會影響後續同款條碼檢查。";
+  const observed=$("#barcode-rule-observed");observed.replaceChildren();const values=data.observed || {},parts=[];
+  for(const value of Array.isArray(values.decoded) ? values.decoded : [])parts.push({label:`條碼解碼${value.format ? `（${value.format}）` : ""}`,value:value.text || "未讀到"});
+  for(const value of Array.isArray(values.ocr) ? values.ocr : [])parts.push({label:`文字辨識${value.uncertain ? "（需確認）" : ""}`,value:value.text || value.value || "未讀到"});
+  for(const date of Array.isArray(values.dates) ? values.dates : [])parts.push({label:`${date.label || barcodeDateLabels[date.kind] || "日期"}${date.uncertain ? "（需確認）" : ""}`,value:`${date.value || "未讀到"}${Number.isInteger(date.day_of_year) ? ` · 太陽日 ${date.day_of_year}` : ""}`});
+  if(values.base_date)parts.push({label:"本批基準日",value:values.base_date});
+  parts.push({label:"現行保存天數",value:data.keep_days?.current===null || data.keep_days?.current===undefined ? "未設定" : `${data.keep_days.current} 天`});barcodeRuleRows(observed,parts);
+  if(!parts.length)observed.append(element("p","help","沒有足夠的條碼或日期讀值。"));
+  $("#barcode-rule-current").replaceChildren(element("p","",barcodeRuleDescription(data.current_rule)));
+  const candidates=$("#barcode-rule-candidates");candidates.replaceChildren();context.candidateInputs=[];context.candidates=(Array.isArray(data.candidates) ? data.candidates : []).filter(item=>item && typeof item.id==="string" && item.id);
+  context.candidateId=context.candidates.length===1 ? context.candidates[0].id : "";
+  for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status","候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
+  if(!context.candidates.length)candidates.append(element("p","help","目前沒有足夠依據可提出規則候選。請先核對條碼、日期與對應標準。"));
+  else if(context.candidates.length>1)candidates.prepend?.(element("p","help","有多個候選，本次相同數字不能證明哪個公式正確；請確認後選擇。"));
+  $("#barcode-rule-warnings").replaceChildren();barcodeWarnings($("#barcode-rule-warnings"),data.warnings);
+  const days=data.keep_days || {};$("#barcode-rule-fill-days").checked=days.current===null && days.can_fill===true && Number.isInteger(days.suggested);$("#barcode-rule-fill-text").textContent=`將補入 ${days.suggested ?? "未提供"} 天（本張日期差推算，待確認；可取消）`;
+  $("#barcode-rule-days-note").textContent=days.reason || "既有保存天數不會被候選覆寫。";
+  updateBarcodeRuleControls();
+}
+async function openBarcodeRule(inspectionId=state.inspection?.id){
+  if(state.busy || !inspectionId || !state.authenticated)return;
+  const previous=state.barcodeRule?.inspectionId===inspectionId ? {reviewer:$("#barcode-rule-reviewer").value,note:$("#barcode-rule-note").value} : null;closeBarcodeRule(true);
+  const context={inspectionId,epoch:state.authEpoch,loading:true,previewNonce:0};state.barcodeRule=context;
+  $("#barcode-rule-source").textContent="正在取得條碼推算依據…";$("#barcode-rule-notice").textContent="";$("#barcode-rule-form").hidden=true;$("#barcode-rule-reload").hidden=true;$("#barcode-rule-saved").hidden=true;setDialogError("#barcode-rule-error");$("#barcode-rule-dialog").showModal();
+  $("#barcode-rule-reviewer").value=previous?.reviewer || sessionStorage.getItem("labelcheck-operator") || "";$("#barcode-rule-note").value=previous?.note || "依照片與日期推算核對，補充同款條碼規則";
+  try{const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/barcode-rule`);if(!barcodeRuleContextCurrent(context)){if(state.barcodeRule===context)closeBarcodeRule(true);return;}context.data=data;context.loading=false;renderBarcodeRule(data,context);}
+  catch(error){if(state.barcodeRule===context){context.loading=false;setDialogError("#barcode-rule-error",error.message);$("#barcode-rule-reload").hidden=false;}}
+}
+function barcodeRuleBody(context=state.barcodeRule){
+  if(!context?.data || !context.data.can_write || !context.data.source?.code)throw new Error("目前來源或證據不足，不能寫入條碼規則。");
+  if(state.resultDirty || state.inspection?.id!==context.inspectionId)throw new Error("檢查紀錄或比對設定已變更，請重新核對後再預覽規則。");
+  if(!context.candidates.some(item=>item.id===context.candidateId))throw new Error("請先選擇一個已核對的候選推算。");
+  const data=context.data;if(!Number.isInteger(data.base_revision) || typeof data.source_revision!=="string" || !data.source_revision || !Number.isInteger(data.manual_revision))throw new Error("缺少標準或辨識訂正版本，請重新載入。");
+  return {base_revision:data.base_revision,source_revision:data.source_revision,manual_revision:data.manual_revision,candidate_id:context.candidateId,fill_keep_days:data.keep_days?.current===null && data.keep_days?.can_fill===true && !!$("#barcode-rule-fill-days").checked};
+}
+function barcodeRuleError(error,context){
+  if(!barcodeRuleContextCurrent(context)){if(state.barcodeRule===context)closeBarcodeRule(true);return;}if(error.status===409){context.conflict=true;context.preview=null;$("#barcode-rule-reload").hidden=false;$("#barcode-rule-confirm").checked=false;setDialogError("#barcode-rule-error",`${error.message} 這次尚未確認儲存；人員與原因仍保留，請重新載入最新資料核對。`);}else setDialogError("#barcode-rule-error",error.message);
+  updateBarcodeRuleControls();
+}
+async function previewBarcodeRule(){
+  const context=state.barcodeRule;if(!requireAdmin() || state.busy || !context || context.conflict || context.saved)return;
+  let body;try{body=barcodeRuleBody(context);}catch(error){setDialogError("#barcode-rule-error",error.message);return;}
+  invalidateBarcodeRulePreview();const nonce=context.previewNonce,signature=JSON.stringify(body);context.previewLoading=true;setDialogError("#barcode-rule-error");$("#barcode-rule-preview-button").disabled=true;
+  try{const data=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/barcode-rule/preview`,{method:"POST",body});if(!barcodeRuleContextCurrent(context)){if(state.barcodeRule===context)closeBarcodeRule(true);return;}if(nonce!==context.previewNonce || !allowed())return;if(JSON.stringify(barcodeRuleBody(context))!==signature)return;
+    if(data.base_revision!==body.base_revision || data.source_revision!==body.source_revision || data.manual_revision!==body.manual_revision || !data.preview_hash){const error=new Error("預覽版本已變更或缺少確認憑證，請重新載入。");error.status=409;throw error;}
+    context.preview={signature,hash:data.preview_hash};const area=$("#barcode-rule-preview");area.replaceChildren(element("h3","","預覽要寫入的規則"),element("p","help","尚未儲存。核准後會套用到之後同款標籤的條碼檢查。"));
+    const before=element("section","barcode-rule-before"),after=element("section","barcode-rule-after");before.append(element("h4","","目前設定"),element("p","",barcodeRuleDescription(data.before?.rule)),element("p","",`保存天數：${data.before?.keep_days ?? "未設定"}`));after.append(element("h4","","確認後設定"),element("p","",barcodeRuleDescription(data.after?.rule)),element("p","",`保存天數：${data.after?.keep_days ?? "未設定"}`));area.append(before,after);barcodeRuleRows(area,data.candidate?.parts);barcodeWarnings(area,[...(data.warnings || []),...(data.candidate?.warnings || [])],true);
+    area.hidden=false;$("#barcode-rule-approval").hidden=false;$("#barcode-rule-confirm").checked=false;area.scrollIntoView({block:"start",behavior:"instant"});
+  }catch(error){barcodeRuleError(error,context);}finally{if(state.barcodeRule===context){context.previewLoading=false;updateBarcodeRuleControls();}}
+}
+async function saveBarcodeRule(event){
+  event?.preventDefault();const context=state.barcodeRule;if(!requireAdmin() || state.busy || !context || context.conflict || context.saved)return;
+  let body;try{body=barcodeRuleBody(context);}catch(error){setDialogError("#barcode-rule-error",error.message);return;}
+  if(!context.preview || context.preview.signature!==JSON.stringify(body)){invalidateBarcodeRulePreview();setDialogError("#barcode-rule-error","候選或設定已變更，請重新預覽後再確認。");return;}
+  const reviewer=$("#barcode-rule-reviewer").value.trim(),note=$("#barcode-rule-note").value.trim();if(!reviewer || !note || !$("#barcode-rule-confirm").checked){setDialogError("#barcode-rule-error","請填寫確認人員與原因，並勾選核准套用到之後同款標籤。");return;}
+  context.saving=true;setBusy(true);barcodeRuleBusy(true);setDialogError("#barcode-rule-error");
+  try{const saved=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/barcode-rule`,{method:"POST",body:{...body,preview_hash:context.preview.hash,reviewer,note,confirmed:true}});if(!barcodeRuleContextCurrent(context)){if(state.barcodeRule===context)closeBarcodeRule(true);return;}if(!allowed())return;if(saved.source_code!==context.data.source.code){const error=new Error("儲存回應來源不一致，請重新載入確認最新標準。");error.status=409;throw error;}context.saved=saved;sessionStorage.setItem("labelcheck-operator",reviewer);$("#barcode-rule-saved").replaceChildren(element("strong","","條碼規則已儲存"),element("p","",barcodeRuleDescription(saved.rule)),element("p","",`保存天數：${saved.keep_days ?? "未設定"}`),element("p","help","本筆原判定仍保留，重新核對後才會依新規則顯示結果。"));$("#barcode-rule-saved").hidden=false;$("#barcode-rule-recheck").hidden=false;$("#barcode-rule-form").hidden=true;standardSavedNotice();}
+  catch(error){barcodeRuleError(error,context);}finally{context.saving=false;setBusy(false);if(state.barcodeRule===context)barcodeRuleBusy(false);}
+}
+async function recheckBarcodeRule(){
+  const context=state.barcodeRule;if(!context?.saved || state.busy || state.inspection?.id!==context.inspectionId)return;
+  closeBarcodeRule();return recheckInspection();
 }
 function appendRowCorrection(actions,row,inspection){
   const ids=[...new Set(row.line_ids || [])].filter(id=>(inspection.ocr?.lines || []).some(line=>line.id===id));if(!ids.length)return;
@@ -1771,7 +1884,7 @@ function renderInspection(inspection) {
   const recovery = recoveryMessage(inspection.ocr);
   if (recovery) { const notice = element("p", "result-notes", recovery); notice.setAttribute("role", "status"); area.append(notice); }
   renderResultHero(visible,result,area);
-  const logicCards=element("div","result-quick-checks");if(coverage.matched && model.dateChecks.length)renderUnmatchedDates(inspection,result,logicCards,true);renderBarcodeCard(model,result,logicCards);if(logicCards.children.length)area.append(logicCards);
+  const logicCards=element("div","result-quick-checks");if(coverage.matched && model.dateChecks.length)renderUnmatchedDates(inspection,result,logicCards,true);renderBarcodeCard(model,result,logicCards,inspection);if(logicCards.children.length)area.append(logicCards);
   renderPendingStandardOffer(inspection,result,area);
   const textDetails=element("div","result-text-details");textDetails.id="result-text-details";const sections=element("div","result-sections");sections.id="result-lines";renderResultZone("content",model.content,[],inspection,manual,sections);renderResultZone("nutrition",model.nutrition,model.nutritionChecks,inspection,manual,sections);textDetails.append(sections);area.append(textDetails);
   const other=element("details","result-other-operations");other.id="result-other-operations";other.open=!!state.resultDirty;other.append(element("summary","","其他操作與原始資料"));renderSourceMatch(result.source_match,other,result.inputs?.base_date);renderRecheckControls(other);
@@ -2276,6 +2389,15 @@ $("#correction-revoke").onclick=()=>saveCorrection("revoke");
 $("#correction-close").onclick=()=>{if(!state.busy)$("#correction-dialog").close();};
 $("#correction-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();});
 $("#correction-reload").onclick=async()=>{const context=state.correction;if(!context || state.busy)return;try{state.inspection=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}`);renderInspection(state.inspection);openCorrectionDialog(context.lineId);}catch(error){setDialogError("#correction-error",error.message);}};
+$("#barcode-rule-close").onclick=()=>closeBarcodeRule();
+$("#barcode-rule-dialog").addEventListener("cancel",event=>{if(state.barcodeRule?.saving){event.preventDefault();return;}closeBarcodeRule();});
+$("#barcode-rule-reload").onclick=()=>openBarcodeRule(state.barcodeRule?.inspectionId);
+$("#barcode-rule-adjust").onclick=()=>{invalidateBarcodeRulePreview();$("#barcode-rule-selection").scrollIntoView({block:"start",behavior:"instant"});};
+$("#barcode-rule-fill-days").onchange=invalidateBarcodeRulePreview;
+$("#barcode-rule-preview-button").onclick=previewBarcodeRule;
+$("#barcode-rule-confirm").onchange=updateBarcodeRuleControls;
+$("#barcode-rule-form").onsubmit=saveBarcodeRule;
+$("#barcode-rule-recheck").onclick=recheckBarcodeRule;
 $("#result-image-close").onclick=()=>$("#result-image-dialog").close();
 $("#standard-edit-form").onsubmit=saveStandardEdit;
 $("#standard-edit-form").addEventListener("input",event=>{if(!["standard-edit-confirm","standard-edit-reviewer","standard-edit-note"].includes(event.target.id))invalidateStandardPreview();});
