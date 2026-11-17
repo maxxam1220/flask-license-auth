@@ -156,6 +156,62 @@ def _known_prefixes(base,effective):
     return sorted({str(value) for value in values if re.fullmatch(r"[0-9]{1,10}",str(value or ""))})
 
 
+def auto_hypotheses(entry,current_rule=None,known_candidates=()):
+    """Bounded observed-date splits; a match is a proposal, never approval."""
+    value=entry.get("observed_value","")
+    if not entry.get("available") or not isinstance(value,str) or not re.fullmatch(r"[0-9]{13}",value) or gtin_valid(value) is not True:
+        return [],None
+    dates={}
+    for kind in ("manufacture","expiry","arrival"):
+        found=[item for item in entry.get("dates",[]) if item.get("kind")==kind]
+        if len(found)!=1 or found[0].get("uncertain"):continue
+        try:dates[kind]=date.fromisoformat(found[0].get("iso"))
+        except (ValueError,TypeError):continue
+    try:dates["base_date"]=date.fromisoformat(entry.get("base_date"))
+    except (ValueError,TypeError):pass
+    try:approved=validate_rule(current_rule)
+    except ValueError:approved=None
+    candidates=[];seen=set();payload=value[:12]
+    for width in (3,2):
+        for kind,day in dates.items():
+            token=f"{day.timetuple().tm_yday:03d}" if width==3 else f"{day.timetuple().tm_yday%100:02d}"
+            # At least one observed digit precedes the date. Never pad, repair
+            # or silently omit a digit; every candidate reproduces all 13.
+            for position in range(1,len(payload)-width+1):
+                if payload[position:position+width]!=token:continue
+                rule={"version":1,"symbology":"EAN13","prefix":payload[:position],"day_source":kind,
+                    "day_width":width,"suffix":payload[position+width:]}
+                if compose(rule,day)!=value:continue
+                marker=_digest(rule)
+                if marker in seen:continue
+                seen.add(marker)
+                evidence={"kind":"observed_hypothesis","method":"date_token_match","date_value":day.isoformat(),
+                    "day_token":token,"insertion_position":position+1,"components_inferred":True}
+                known=next((item for item in known_candidates if item.get("rule")==rule and
+                    (item.get("evidence") or {}).get("kind")=="catalog_structure"),None)
+                if known:evidence={**deepcopy(known["evidence"]),"date_value":day.isoformat(),"day_token":token,"insertion_position":position+1}
+                if rule==approved:evidence={"kind":"approved_rule","method":"current_approved_rule",
+                    "date_value":day.isoformat(),"day_token":token,"insertion_position":position+1,"components_inferred":False}
+                warnings=["依本張完整條碼與日期找到的分段試算；前綴與尾碼尚未證實是商品碼或固定資料。",
+                    "同一條碼可能同時符合三位、兩位太陽日或其他公式；試算相符不代表唯一或已核准。"]
+                if evidence["kind"]=="approved_rule":warnings=["沿用目前已核准的公式，並以本張日期試算；原日期檢查仍分開保留。"]
+                elif known:warnings=deepcopy(known["warnings"])
+                if entry.get("fixed_barcode_reference") and evidence["kind"]!="approved_rule":
+                    warnings.append("此標準已有相同的固定完整條碼，日期數字可能只是巧合；不自動推薦改為動態公式。")
+                candidates.append({"id":_digest({"rule":rule,"observed_value":value,"evidence":evidence}),"rule":rule,
+                    "summary":f"前綴{rule['prefix']}＋{DAY_LABELS[kind]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
+                    "parts":[{"label":"待核准固定前綴","value":rule["prefix"]},{"label":DAY_LABELS[kind],"value":day.isoformat()},
+                        {"label":f"{width}位太陽日","value":token},{"label":"待核准固定尾碼","value":rule["suffix"]},
+                        {"label":"EAN13檢查碼","value":value[-1]}],"composed_value":value,"evidence":evidence,"warnings":warnings})
+    preferred=[item for item in candidates if item["evidence"]["kind"]=="approved_rule"]
+    # An existing approved formula may be exposing a real printing error.
+    # Keep alternatives visible, but never recommend replacing it just to fit.
+    if not preferred and approved is None and not entry.get("fixed_barcode_reference"):
+        known=[item for item in candidates if item["evidence"]["kind"]=="catalog_structure"]
+        preferred=known if known else [item for item in candidates if item["rule"]["day_width"]==3]
+    return candidates,preferred[0]["id"] if len(preferred)==1 else None
+
+
 def _load(engine,identifier,conn=None):
     original=standards._inspection(engine,identifier)
     if conn is None:
@@ -212,9 +268,22 @@ def _load(engine,identifier,conn=None):
         manual_reason="此來源已指定其他條碼種類，不能以手動確認覆蓋為 EAN13。"
     elif not manual_reason and not dates:
         manual_reason="尚未取得可信的完整日期或本批基準日，無法試算日期條碼。"
+    decoded=observation["decoded"]
+    decoded_ean13=(len(decoded)==1 and str(decoded[0].get("format") or "").replace("-","").upper()=="EAN13"
+        and str(decoded[0].get("text") or "")==value and len(value)==13 and gtin_valid(value) is True)
+    type_verification="source_config" if kind=="1" else "decoded" if decoded_ean13 else "assumed"
     manual_entry={"available":not bool(manual_reason),"reason":manual_reason,"observed_value":value,
         "dates":deepcopy(observation["dates"]),"base_date":observation["base_date"],
-        "requires_ean13_confirmation":not bool(kind)}
+        "type_verification":type_verification,"requires_ean13_confirmation":type_verification=="assumed"}
+    fixed_values=[]
+    # Explicit fixed barcode fields are declarations. Text-only historical HRI
+    # (including spaced print) remains evidence, not a permanent-code promise.
+    for stored in (base or {},effective):
+        fixed_values.extend(stored.get("barcode_values") or [])
+        config=stored.get("barcode_config") or {}
+        if str(config.get("solar","")) not in {"2","3"} and not any(config.get(key) for key in ("front","back")) and str(config.get("price_len",""))!="4":
+            fixed_values.append(config.get("barcode",""))
+    manual_entry["fixed_barcode_reference"]=bool(value) and any(literal_value(item.get("value","") if isinstance(item,dict) else item)==value for item in fixed_values)
     if not reason and not kind and not observation["decoded"]:
         reason="來源尚未確認條碼種類，只有數字印字不足以認定 EAN13；請取得明確 EAN13 條紋解碼後再建立候選。"
     if not reason and not prefixes:reason="這份來源沒有已知數字前綴，不能只從完整條碼猜商品前綴。"
@@ -243,6 +312,7 @@ def _load(engine,identifier,conn=None):
                     if structure_evidence:candidate["evidence"]=deepcopy(structure_evidence)
                     candidates.append(candidate)
     if not reason and not candidates:reason="已知前綴與本次可信日期無法組成相同條碼；未猜補日期或尾碼。"
+    manual_entry["auto_candidates"],manual_entry["recommended_id"]=auto_hypotheses(manual_entry,effective.get("web_barcode_rule"),candidates)
     payload={"source":{key:effective.get(key) for key in ("code","name","source_kind")},
         "base_revision":version["revision"] if version else 0,"source_revision":str((base or {}).get("revision","")),
         "manual_revision":current["revision"] if current else 0,"current_rule":effective.get("web_barcode_rule"),
@@ -262,7 +332,7 @@ def _manual_candidate(payload,body):
     if not entry["available"]:abort(409,description=entry["reason"])
     acknowledgement=body.get("confirmed_ean13")
     if type(acknowledgement) is not bool or (entry["requires_ean13_confirmation"] and not acknowledgement):
-        abort(400,description="目前來源未指定條碼種類，請先明確確認實物是 EAN13 條碼。")
+        abort(400,description="請先同意採用 EAN13 日期組碼方式試算，正式採用仍須確認。")
     try:rule=validate_rule(body.get("manual_rule"))
     except ValueError as error:abort(400,description=str(error))
     if rule["day_source"]=="base_date":
@@ -276,16 +346,21 @@ def _manual_candidate(payload,body):
     if expected!=entry["observed_value"]:
         abort(400,description=f"這份公式試算為 {expected}，與本張完整條碼 {entry['observed_value']} 不同，請確認各段與日期來源。")
     width=rule["day_width"];day=chosen.timetuple().tm_yday
-    return {"id":"manual","rule":rule,"summary":f"人工輸入前綴{rule['prefix']}＋{DAY_LABELS[rule['day_source']]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
-        "parts":[{"label":"人工輸入固定前綴","value":rule["prefix"]},
+    hypothesis=next((item for item in entry.get("auto_candidates",[]) if item["rule"]==rule),None)
+    evidence={"kind":"manual_entry","ean13_assumption_accepted":acknowledgement if entry["type_verification"]=="assumed" else False,
+        "type_verification":entry["type_verification"],
+        "observed_value":entry["observed_value"],"submitted_rule":deepcopy(rule)}
+    if hypothesis:
+        evidence["photo_date_hypothesis" if hypothesis["evidence"]["kind"]=="observed_hypothesis" else "reference_evidence"]=deepcopy(hypothesis["evidence"])
+    return {"id":"manual","rule":rule,"summary":f"前綴{rule['prefix']}＋{DAY_LABELS[rule['day_source']]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
+        "parts":[{"label":"待核准固定前綴","value":rule["prefix"]},
             {"label":DAY_LABELS[rule["day_source"]],"value":chosen.isoformat()},
             {"label":f"{width}位太陽日","value":f"{day%100:02d}" if width==2 else f"{day:03d}"},
-            {"label":"人工輸入固定尾碼","value":rule["suffix"]},{"label":"EAN13檢查碼","value":expected[-1]}],
+            {"label":"待核准固定尾碼","value":rule["suffix"]},{"label":"EAN13檢查碼","value":expected[-1]}],
         "keep_days_suggestion":payload["keep_days"]["suggested"],
-        "warnings":["前綴、太陽日位數及尾碼由人員輸入，並非系統由完整條碼自動猜取。",
-            "本次試算相符仍可能有其他組成方式；確認後此規則將用於這份人工標準的後續標籤，日期排程仍獨立檢查。"],
-        "evidence":{"kind":"manual_entry","confirmed_ean13":acknowledgement,
-            "observed_value":entry["observed_value"],"entered_rule":deepcopy(rule)}}
+        "warnings":["前綴、太陽日位數及尾碼可能來自本張日期的分段試算，尚不代表已證實的商品組碼設定。",
+            "本次試算相符仍可能有其他組成方式；確認後此規則將用於這份人工標準的後續標籤，日期排程仍獨立檢查。"]+
+            (hypothesis["warnings"] if hypothesis else []),"evidence":evidence}
 
 
 def _selection(payload,body):

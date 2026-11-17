@@ -1768,6 +1768,7 @@ function closeBarcodeRule(force=false){
   $("#barcode-rule-form").reset();$("#barcode-rule-confirm").checked=false;$("#barcode-rule-reviewer").value="";$("#barcode-rule-note").value="";$("#barcode-rule-preview").hidden=true;$("#barcode-rule-approval").hidden=true;$("#barcode-rule-recheck").hidden=true;$("#barcode-rule-reload").hidden=true;
   for(const id of ["barcode-rule-prefix","barcode-rule-suffix","barcode-rule-day-source","barcode-rule-day-width"])$("#"+id).value="";
   $("#barcode-rule-ean13").checked=false;$("#barcode-rule-unlock").hidden=true;$("#barcode-rule-manual").hidden=true;
+  $("#barcode-rule-auto-summary").replaceChildren();$("#barcode-rule-auto-choice").replaceChildren();$("#barcode-rule-auto").hidden=true;$("#barcode-rule-manual-fields").open=false;
 }
 function unlockBarcodeRule(){
   const context=state.barcodeRule;if(state.busy || !context || !barcodeRuleContextCurrent(context) || allowed())return;
@@ -1790,8 +1791,37 @@ function barcodeManualRule(context){
   if(!barcodeManualDates(context.data).some(date=>date.kind===daySource))throw new Error("請選擇本張有可靠依據的日期來源。");
   if(![2,3].includes(dayWidth))throw new Error("請選擇太陽日為 2 位或 3 位。");
   if(prefix.length+dayWidth+suffix.length!==12)throw new Error("前綴、太陽日與尾碼合計需為 12 位；第 13 位檢查碼由系統計算。");
-  if(context.data.manual_entry.requires_ean13_confirmation===true && !$("#barcode-rule-ean13").checked)throw new Error("請先核對實際條碼種類，並勾選確認為 EAN13。");
+  if(context.data.manual_entry.requires_ean13_confirmation===true && !$("#barcode-rule-ean13").checked)throw new Error(context.autoSelected ? "請先勾選同意依上方 EAN13 日期組碼方式試算；正式採用仍需下一步確認。" : "請先核對實際條碼種類，並勾選確認為 EAN13。");
   return {version:1,symbology:"EAN13",prefix,day_source:daySource,day_width:dayWidth,suffix};
+}
+function setBarcodeManualFields(rule){
+  $("#barcode-rule-prefix").value=rule?.prefix || "";$("#barcode-rule-suffix").value=rule?.suffix || "";$("#barcode-rule-day-width").value=rule ? String(rule.day_width) : "";
+  $("#barcode-rule-day-source").value=barcodeManualDates(state.barcodeRule?.data).some(date=>date.kind===rule?.day_source) ? rule.day_source : "";
+}
+function renderBarcodeAutoSummary(context){
+  const area=$("#barcode-rule-auto-summary"),current=context.autoSelected==="approved",candidate=context.autoCandidates?.find(item=>item.id===context.autoSelected);area.replaceChildren();
+  $("#barcode-rule-manual-heading").textContent=current ? "現行已核准規則" : candidate ? "已帶入推算候選，確認後才生效" : context.manualEdited ? "已調整組碼設定，請重新試算" : context.autoCandidates?.length ? "請選擇一種推算方式" : "手動設定並試算";
+  $("#barcode-rule-manual-note").textContent=current ? "已帶入原本核准的設定。需要更改時可展開進階欄位；任何修改仍需預覽與核准。" : candidate ? "不用逐格填寫。請核對下方日期拆解，確認條碼種類後按預覽。" : context.manualEdited ? "保留你填寫的內容；不會自動改回候選。可試算預覽，或主動選擇另一個候選帶入。" : context.autoCandidates?.length ? "這張照片有多種可能的組碼方式，尚未自動選擇。請依實際印製規則選一種，再預覽。" : "尚無可帶入的候選。可依實際印製規則，在進階欄位填寫後試算。";
+  if(context.data.manual_entry?.requires_ean13_confirmation)$("#barcode-rule-ean13-text").textContent=current || candidate ? "我同意依上方 EAN13 日期組碼方式試算；正式採用仍需下一步確認。" : "我確認這是 EAN13 條碼（13 碼、最後一碼為檢查碼）。不確定種類時先不勾選。";
+  if(current || candidate || context.manualEdited || context.autoCandidates?.length)$("#barcode-rule-notice").textContent=current ? "現行規則已帶入，可修改後重新試算；再次確認前不會變更已核准規則。" : candidate ? "已帶入本張照片的日期組碼候選，請核對並預覽；確認前不會寫入。" : context.manualEdited ? "已保留手動調整的內容，請重新試算預覽；確認前不會寫入。" : "找到日期組碼假設，尚未替你選定。請選擇後預覽，確認前不會寫入。";
+  if(current){area.append(element("p","",barcodeRuleDescription(context.data.current_rule)),element("p","help","標準照片中的條碼只作參考；核准公式會依當張日期計算，不必每天修改整串條碼。"));return;}
+  if(!candidate)return;
+  $("#barcode-rule-manual-note").textContent="不用逐格填寫。核對日期拆解後，勾選同意試算，再按預覽；尚未正式採用。";
+  area.append(element("strong","barcode-hypothesis-warning","由照片日期推算，尚未證實印製規則"));
+  if(typeof candidate.composed_value==="string" && candidate.composed_value)area.append(element("p","barcode-auto-composed",`候選試算相符：${candidate.composed_value}`));
+  area.append(element("p","help","這是依 EAN13 格式作的日期組碼假設；前綴與尾碼由本張數字反推，不代表已確認實際印製規則。"));
+  barcodeRuleRows(area,candidate.parts);
+  barcodeWarnings(area,candidate.warnings,true);
+}
+function chooseBarcodeAutoCandidate(id,initial=false){
+  const context=state.barcodeRule;if(!context || (!initial && (!allowed() || state.busy || context.conflict || context.saved || !barcodeRuleContextCurrent(context))))return;
+  const candidate=context.autoCandidates?.find(item=>item.id===id),current=id==="approved" && context.data.current_rule?.symbology==="EAN13";
+  if(!candidate && !current){if(!id && !initial){context.autoSelected="";context.manualEdited=false;setBarcodeManualFields(null);$("#barcode-rule-ean13").checked=false;renderBarcodeAutoSummary(context);invalidateBarcodeRulePreview();}return;}
+  context.autoSelected=id;context.manualEdited=false;$("#barcode-rule-auto-choice").value=id;setBarcodeManualFields(current ? context.data.current_rule : candidate.rule);$("#barcode-rule-ean13").checked=false;
+  $("#barcode-rule-manual-fields").open=false;renderBarcodeAutoSummary(context);if(!initial)invalidateBarcodeRulePreview();
+}
+function barcodeManualFieldsChanged(){
+  const context=state.barcodeRule;if(!context)return;context.autoSelected="";context.manualEdited=true;$("#barcode-rule-auto-choice").value="";$("#barcode-rule-ean13").checked=false;renderBarcodeAutoSummary(context);invalidateBarcodeRulePreview();
 }
 function barcodeRuleBusy(busy){
   const context=state.barcodeRule;
@@ -1806,14 +1836,15 @@ function updateBarcodeRuleControls(){
   const reviewing=!!context?.preview && !context?.conflict,done=!!context?.saved;
   for(const id of ["barcode-rule-basis","barcode-rule-selection","barcode-rule-notice"])$("#"+id).hidden=reviewing || done;
   $("#barcode-rule-adjust").hidden=!reviewing || done;$("#barcode-rule-adjust").textContent=manual ? "返回調整手動設定" : "返回調整候選";
-  $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "一般使用者可查看推算；請切換管理員，才能補充設定、預覽並確認寫入標準。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : manual && canManual ? "這筆可手動補充組碼設定。請依實際印製規則填寫下方欄位，再試算預覽；目前尚未寫入。" : !canWrite ? data?.manual_entry?.reason || data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對各段來源與尚未確認的日期設定後再確認。";
+  $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "一般使用者可查看推算；請切換管理員，才能補充設定、預覽並確認寫入標準。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : manual && canManual ? context.autoCandidates?.length || data.current_rule ? "請核對下方帶入內容；候選尚未生效，只有預覽後明確確認才會寫入。" : "這筆可手動補充組碼設定。請依實際印製規則填寫下方欄位，再試算預覽；目前尚未寫入。" : !canWrite ? data?.manual_entry?.reason || data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對各段來源與尚未確認的日期設定後再確認。";
   $("#barcode-rule-unlock").hidden=allowed() || !data || done;$("#barcode-rule-unlock").disabled=state.busy;
   $("#barcode-rule-mode-label").hidden=!canManual || !(context?.candidates?.length);$("#barcode-rule-mode").disabled=!allowed() || !!context?.conflict || state.busy;
   $("#barcode-rule-candidate-fields").hidden=manual;$("#barcode-rule-manual").hidden=!manual || !canManual;
   for(const id of ["barcode-rule-prefix","barcode-rule-suffix","barcode-rule-day-source","barcode-rule-day-width","barcode-rule-ean13"])$("#"+id).disabled=!editable || !!context?.previewLoading;
-  $("#barcode-rule-preview-button").textContent=manual ? "試算並預覽要寫入的規則" : "預覽自動帶入的規則";
+  $("#barcode-rule-auto-choice").disabled=!editable || !!context?.previewLoading;
+  $("#barcode-rule-preview-button").textContent=manual ? context.autoSelected && context.autoSelected!=="approved" ? "預覽已帶入的規則" : "試算並預覽要寫入的規則" : "預覽自動帶入的規則";
   $("#barcode-rule-preview-button").hidden=!allowed() || !canWrite;
-  $("#barcode-rule-preview-button").disabled=!editable || (!manual && !context?.candidateId) || !!context?.previewLoading;
+  $("#barcode-rule-preview-button").disabled=!editable || (!manual && !context?.candidateId) || (manual && context.autoCandidates?.length>0 && !context.autoSelected && !context.manualEdited) || !!context?.previewLoading;
   for(const input of context?.candidateInputs || [])input.disabled=!editable;
   const canFill=data?.keep_days?.current===null && data?.keep_days?.can_fill===true;
   $("#barcode-rule-fill-label").hidden=!canFill;$("#barcode-rule-fill-days").disabled=!editable || !canFill;
@@ -1843,14 +1874,19 @@ function renderBarcodeRule(data,context){
   $("#barcode-rule-current").replaceChildren(element("p","",barcodeRuleDescription(data.current_rule)));
   const candidates=$("#barcode-rule-candidates");candidates.replaceChildren();context.candidateInputs=[];context.candidates=(Array.isArray(data.candidates) ? data.candidates : []).filter(item=>item && typeof item.id==="string" && item.id);
   context.candidateId=context.candidates.length===1 ? context.candidates[0].id : "";
-  context.mode=data.manual_entry?.available && !data.can_write ? "manual" : "candidate";$("#barcode-rule-mode").value=context.mode;
+  context.autoCandidates=data.manual_entry?.available && Array.isArray(data.manual_entry.auto_candidates) ? data.manual_entry.auto_candidates.filter(item=>item && typeof item.id==="string" && item.id && item.rule?.symbology==="EAN13" && typeof item.rule.prefix==="string" && typeof item.rule.suffix==="string" && [2,3].includes(item.rule.day_width)) : [];
+  context.autoSelected="";context.manualEdited=false;
+  context.mode=data.manual_entry?.available && (!data.can_write || data.current_rule) ? "manual" : "candidate";$("#barcode-rule-mode").value=context.mode;
   const current=data.current_rule?.symbology==="EAN13" ? data.current_rule : null;
+  $("#barcode-rule-basis-details").open=!current && !context.autoCandidates.length;
   $("#barcode-rule-prefix").value=current?.prefix || "";$("#barcode-rule-suffix").value=current?.suffix || "";$("#barcode-rule-day-width").value=current ? String(current.day_width) : "";$("#barcode-rule-ean13").checked=false;
   const dateSelect=$("#barcode-rule-day-source");dateSelect.replaceChildren(new Option("請選擇日期來源",""));
   const availableDates=barcodeManualDates(data);for(const date of availableDates)dateSelect.append(new Option(`${date.label || barcodeDateLabels[date.kind]} · ${date.value}${Number.isInteger(date.day_of_year) ? `（太陽日 ${date.day_of_year}）` : ""}`,date.kind));dateSelect.value=availableDates.some(date=>date.kind===current?.day_source) ? current.day_source : "";
   $("#barcode-rule-manual-observed").textContent=`本張完整條碼：${data.manual_entry?.observed_value || "未取得可用讀值"}`;
-  $("#barcode-rule-manual-note").textContent=current ? "下方帶入現行已核准規則；任何修改都需重新試算預覽與核准。" : "此標準缺少組碼設定，請填寫下方欄位。條碼本身讀到完整數字，不代表已知它如何組成。";
-  $("#barcode-rule-ean13-text").textContent=data.manual_entry?.requires_ean13_confirmation ? "我已確認實際條碼種類為 EAN13，不只依數字長度推定。（必須確認）" : "此來源已有 EAN13 類型依據；我也已對照實際條碼確認。（選填）";
+  $("#barcode-rule-ean13-text").textContent=data.manual_entry?.requires_ean13_confirmation ? "我確認這是 EAN13 條碼（13 碼、最後一碼為檢查碼）。不確定種類時先不勾選。" : "此來源已有 EAN13 類型依據；我也已對照實際條碼確認。（選填）";
+  const autoSelect=$("#barcode-rule-auto-choice");autoSelect.replaceChildren(new Option("請選擇一種推算方式",""));if(current)autoSelect.append(new Option("現行已核准規則","approved"));for(const item of context.autoCandidates)autoSelect.append(new Option(item.summary || `${barcodeDateLabels[item.rule.day_source] || "日期"} ${item.rule.day_width} 位太陽日`,item.id));autoSelect.value="";
+  $("#barcode-rule-auto").hidden=!current && !context.autoCandidates.length;$("#barcode-rule-auto-label").hidden=!!current && !context.autoCandidates.length;$("#barcode-rule-manual-fields").open=!current && !context.autoCandidates.length;
+  if(current)chooseBarcodeAutoCandidate("approved",true);else if(context.autoCandidates.some(item=>item.id===data.manual_entry?.recommended_id))chooseBarcodeAutoCandidate(data.manual_entry.recommended_id,true);else renderBarcodeAutoSummary(context);
   const methodNote=$(".barcode-candidates-fieldset > .help");if(methodNote)methodNote.textContent=context.candidates.some(candidate=>candidate.evidence?.kind==="catalog_structure") ? "清單已提供的組碼設定會標明來源；日期來源與其他待確認事項依各候選說明核對。單張吻合不代表整份規則已核准。" : "候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。";
   for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status","候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeCandidateEvidence(item,candidate.evidence);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
   if(!context.candidates.length)candidates.append(element("p","help","目前沒有足夠依據可提出規則候選。請先核對條碼、日期與對應標準。"));
@@ -2464,8 +2500,10 @@ $("#barcode-rule-reload").onclick=()=>openBarcodeRule(state.barcodeRule?.inspect
 $("#barcode-rule-adjust").onclick=()=>{invalidateBarcodeRulePreview();$("#barcode-rule-selection").scrollIntoView({block:"start",behavior:"instant"});};
 $("#barcode-rule-fill-days").onchange=invalidateBarcodeRulePreview;
 $("#barcode-rule-mode").onchange=selectBarcodeRuleMode;
-for(const id of ["barcode-rule-prefix","barcode-rule-suffix"])$("#"+id).oninput=invalidateBarcodeRulePreview;
-for(const id of ["barcode-rule-day-source","barcode-rule-day-width","barcode-rule-ean13"])$("#"+id).onchange=invalidateBarcodeRulePreview;
+for(const id of ["barcode-rule-prefix","barcode-rule-suffix"])$("#"+id).oninput=barcodeManualFieldsChanged;
+for(const id of ["barcode-rule-day-source","barcode-rule-day-width"])$("#"+id).onchange=barcodeManualFieldsChanged;
+$("#barcode-rule-ean13").onchange=invalidateBarcodeRulePreview;
+$("#barcode-rule-auto-choice").onchange=()=>chooseBarcodeAutoCandidate($("#barcode-rule-auto-choice").value);
 $("#barcode-rule-unlock").onclick=unlockBarcodeRule;
 $("#barcode-rule-preview-button").onclick=previewBarcodeRule;
 $("#barcode-rule-confirm").onchange=updateBarcodeRuleControls;

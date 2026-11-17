@@ -97,7 +97,10 @@ class ManualBarcodeRuleTests(unittest.TestCase):
         for key in ("code","lines","fields","barcode_values","barcode_config","reference_image_id","date_settings","keep_days"):
             self.assertEqual(version["snapshot"][key],self.source[key],key)
         self.assertEqual(version["snapshot"]["web_barcode_rule"],RULE)
-        self.assertTrue(version["snapshot"]["web_barcode_rule_evidence"]["manual_entry"]["confirmed_ean13"])
+        evidence=version["snapshot"]["web_barcode_rule_evidence"]["manual_entry"]
+        self.assertEqual(evidence["type_verification"],"assumed")
+        self.assertTrue(evidence["ean13_assumption_accepted"])
+        self.assertNotIn("confirmed_ean13",evidence)
         self.assertEqual(state["category_id"],"fruit")
         self.assertEqual(original,self.original)
         self.assertEqual(master["snapshot"],self.source)
