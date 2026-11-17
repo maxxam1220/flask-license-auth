@@ -178,7 +178,8 @@ def build_draft(snapshot, code):
             value += str(row["CodeName"] or "")
         elif attr != "3":
             if attr in "ABCDEFGHIJKL" and attr:
-                dates.append({"content": value, "format": row["Attr"], "shift_days": row["ShiftDate"]})
+                dates.append({"content": value, "format": row["Attr"], "shift_days": row["ShiftDate"],
+                              "layout_anchor": [float(row["PosY"] or 0) * 4, float(row["PosX"] or 0) * 4]})
             continue
         if attr == "3":
             barcode_values.update(_fixed_barcodes(value))

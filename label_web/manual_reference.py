@@ -376,9 +376,27 @@ def payload(engine, inspection):
         if row["id"] in date_ids:
             excluded.append(row)
     draft_lines=[row for row in draft_lines if row["id"] not in date_ids]
+    # A cloud OCR box can contain both a variable date and fixed storage or
+    # product text. Only observed character spans identify what to omit. Keep
+    # the other printed text in the editable draft instead of dropping the
+    # entire box, and never fill it from the currently selected standard.
+    from label_geometry import without_date_evidence
+    for line in lines:
+        if line.get("id") not in date_ids or line.get("id") in excluded_ids:
+            continue
+        remaining=without_date_evidence(line,fields).strip()
+        if not remaining or remaining==str(line.get("text","" )).strip():
+            continue
+        try:
+            _fixed_manual_text(remaining)
+            if _kind(remaining) not in DATE_LABELS:
+                draft_lines.append({"id":line.get("id"),"text":remaining})
+        except HTTPException:
+            pass  # Unknown date fragments remain excluded for human review.
     from text_rows import group_observed_rows
-    safe_ids = {row["id"] for row in draft_lines}
-    draft_lines = group_observed_rows([line for line in lines if line.get("id") in safe_ids])
+    safe_text = {row["id"]:row["text"] for row in draft_lines}
+    draft_lines = group_observed_rows([dict(line,text=safe_text[line["id"]])
+        for line in lines if line.get("id") in safe_text])
     skus = {value for line in lines if line.get("id") not in excluded_ids
             for value in _identifiers(line.get("text", ""), _SKU_LABEL, normalize=lambda v:v)}
     product = fields.get("product", {})

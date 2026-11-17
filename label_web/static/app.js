@@ -1139,7 +1139,7 @@ function applyRegroupedStandard(){
 async function openStandardEditor(inspectionId = state.inspection?.id, focusLineIds = []) {
   if(!requireAdmin())return;
   if (state.busy || !inspectionId) return;
-  $("#standard-edit-title").textContent="更新比對標準";
+  $("#standard-edit-title").textContent="編輯圖文草稿";
   state.standardEdit={inspectionId,loading:true,operation:"update",focusLineIds:Array.isArray(focusLineIds) ? focusLineIds.map(String) : []};
   $$("#standard-edit-dialog button").forEach(button=>{button.disabled=false;});
   $("#standard-edit-form").reset();$("#standard-edit-form").hidden=true;$("#standard-edit-photo-template").hidden=true;$("#standard-edit-reload").hidden=true;$("#standard-edit-reset").hidden=true;$("#standard-edit-operation").hidden=true;$("#standard-text-workspace").hidden=true;$("#standard-regroup-preview").hidden=true;$("#standard-text-selection").textContent="";
@@ -1151,8 +1151,8 @@ async function openStandardEditor(inspectionId = state.inspection?.id, focusLine
     const data=await api(`/api/inspections/${encodeURIComponent(inspectionId)}/standard`);
     if (state.standardEdit !== context) return;
     Object.assign(context,{data,loading:false,lineControls:[],dateControls:[],conflict:false});
-    $("#standard-edit-title").textContent=data.kind==="catalog" && !(data.source?.web_text_approved || data.source?.comparison_scope==="approved_text") ? "建立完整標準" : "更新比對標準";
-    $("#standard-edit-source").textContent=`${data.kind === "manual" ? "人工文字標準" : data.kind === "catalog" ? "清單" : data.kind === "photo_template" ? "照片標準" : "系統標籤"} ${sourceCodeLabel(data)} · ${data.name || data.source?.name || "未指定"} · ${data.base_revision ? `比對標準第 ${data.base_revision} 版` : "原始來源"}`;
+    $("#standard-edit-title").textContent="編輯圖文草稿";
+    $("#standard-edit-source").textContent=`存入：${data.kind === "manual" ? "人工文字標準" : data.kind === "catalog" ? "清單" : data.kind === "photo_template" ? "照片標準" : "系統標籤"} ${sourceCodeLabel(data)} · ${data.name || data.source?.name || "未指定"} · ${data.base_revision ? `比對標準第 ${data.base_revision} 版` : "原始來源"}`;
     $("#standard-edit-notice").textContent=`${data.stale ? "來源資料已更新，請重新核對目前內容。 " : ""}${data.notice || ""}`;
     const history=$("#standard-edit-history-list");
     for(const item of data.history || []){
@@ -1604,7 +1604,7 @@ function resultStandardAction(inspection,result){
     const problem=model.rows.find(row=>["fail","review"].includes(row.status) && row.line_ids.length);
     return problem ? {action:"correct",label:"查看需訂正的文字",title:"先對照照片確認這處辨識",description:"訂正只影響這筆檢查；已核准的比對標準保持不變。",rowId:problem.id} : null;
   }
-  if(photo || code){const complete=kind==="catalog" && !(source.web_text_approved || source.comparison_scope==="approved_text" || match.comparison_scope==="approved_text");return {action:"update",label:complete ? "建立完整標準" : "更新標準",title:complete ? "這份清單還缺完整標籤文字" : "用本次照片更新這份標準",description:complete ? "目前只知道清單的部分資料。可自動帶入這次文字與照片，對照後核准成完整比對依據。" : "自動帶入本次可用文字與照片，分區確認後存成原標準新版，舊版與舊照片保留。",identity:photo ? inspection.template_snapshot?.name || "本次選用的照片標準" : `${sourceCodeLabel({code})} · ${source.name || match.name || "本次比對來源"}`};}
+  if(photo || code){const complete=kind==="catalog" && !(source.web_text_approved || source.comparison_scope==="approved_text" || match.comparison_scope==="approved_text");return {action:"update",label:"編輯圖文草稿",title:complete ? "這份清單還缺完整標籤文字" : "用本次照片更新這份標準",description:complete ? "目前只知道清單的部分資料。可自動帶入這次文字與照片，對照後核准成完整比對依據。" : "自動帶入本次可用文字與照片，分區確認後存成原標準新版，舊版與舊照片保留。",identity:photo ? inspection.template_snapshot?.name || "本次選用的照片標準" : `${sourceCodeLabel({code})} · ${source.name || match.name || "本次比對來源"}`};}
   if(match.status!=="unmatched" || eligibility?.eligible!==true || state.inspectSource?.code || !(inspection.ocr?.lines || []).length)return null;
   return {action:"create",label:"新建標準",title:"這張標籤尚無比對依據",description:eligibility.needs_review ? "已存檢查紀錄，仍有文字需要確認。可開啟自動分區草稿，只修正讀錯處；核准前不會成為正式依據。" : "文字與照片已備妥，可直接開啟分區草稿；核准前不會成為正式依據。"};
 }
@@ -1622,11 +1622,25 @@ function performResultStandardAction(action,inspection){
   if(action==="photo"){$("#template-options").open=true;$("#template-select").focus();$("#template-select").scrollIntoView({block:"center",behavior:"instant"});return;}
   if(action==="source"){$("#template-options").open=true;$("#inspect-source-query").focus();$("#inspect-source-search").scrollIntoView({block:"center",behavior:"instant"});}
 }
+function resultStandardDraftAction(inspection,result,primary=resultStandardAction(inspection,result)){
+  if(!allowed() || result.source_match?.status==="source_conflict" || (primary && primary.action!=="correct"))return null;
+  const source=inspection.template_snapshot?.source || {},match=result.source_match || {},code=source.code || (match.status==="matched" ? match.code : "");
+  if(!inspection.template_id && !code)return null;
+  return {action:"standard-draft",label:"編輯圖文草稿",title:"照片與辨識文字可直接帶入草稿",description:"對照本次照片確認文字，再預覽並存入標準標籤庫。確認存檔後才會更新標準；日期與條碼規則保留。",identity:inspection.template_id ? inspection.template_snapshot?.name || "本次選用的照片標準" : `${sourceCodeLabel({code})} · ${source.name || match.name || "本次比對來源"}`};
+}
+function performResultStandardDraft(inspection){
+  if(!requireAdmin() || state.busy || state.inspection?.id!==inspection.id)return;
+  const current=state.inspection,result=state.manualView && current.manual_revision ? current.manual_revision.result : current.result;
+  if(!resultStandardDraftAction(current,result))return;
+  return openStandardEditor(current.id);
+}
 function renderPendingStandardOffer(inspection,result,area){
-  const action=resultStandardAction(inspection,result);if(!action)return;
+  const primary=resultStandardAction(inspection,result),draft=resultStandardDraftAction(inspection,result,primary),action=primary || draft;if(!action)return;
   const offer=element("section",`result-standard-offer${action.action==="create" ? " pending-standard-offer" : ""}${action.blocked ? " blocked" : ""}`);offer.id="result-standard-action";offer.setAttribute("aria-label","標準建立與更新");
-  const copy=element("div","result-standard-copy");if(action.title)copy.append(element("strong","",action.title));if(action.identity)copy.append(element("p","standard-action-identity",action.identity));const text=element("p",action.invalid ? "help draft-ineligible-note" : "help",action.description || action.blocked);if(action.invalid)text.id="draft-ineligible-note";copy.append(text);
-  const button=element("button","button primary",action.label);button.id=action.action==="create" ? "confirm-standard-draft" : "result-standard-primary";button.type="button";button.disabled=state.busy;button.dataset.editStandard=action.action;button.onclick=()=>performResultStandardAction(action.action,inspection);offer.append(copy,button);area.append(offer);
+  const copy=element("div","result-standard-copy");if(action.title)copy.append(element("strong","",action.title));const identity=action.identity || draft?.identity;if(identity)copy.append(element("p","standard-action-identity",`存入目標：${identity}`));const text=element("p",action.invalid ? "help draft-ineligible-note" : "help",action.description || action.blocked);if(action.invalid)text.id="draft-ineligible-note";copy.append(text);
+  const button=element("button",`button ${action.action==="standard-draft" ? "secondary" : "primary"}`,action.label);button.id=action.action==="create" ? "confirm-standard-draft" : "result-standard-primary";button.type="button";button.disabled=state.busy;button.dataset.editStandard=action.action;button.onclick=()=>action.action==="standard-draft" ? performResultStandardDraft(inspection) : performResultStandardAction(action.action,inspection);offer.append(copy,button);
+  if(primary && draft){const edit=element("button","button secondary",draft.label);edit.id="result-standard-draft";edit.type="button";edit.disabled=state.busy;edit.dataset.editStandard=draft.action;edit.onclick=()=>performResultStandardDraft(inspection);offer.append(edit);copy.append(element("p","help","標準本身需要調整時，可開啟圖文草稿；自動帶入本次辨識與照片，確認存檔才會更新。"));}
+  area.append(offer);
 }
 function refreshResultStandardOffer(){
   if(!state.inspection)return;

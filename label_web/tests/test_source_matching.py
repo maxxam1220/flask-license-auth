@@ -208,7 +208,8 @@ class SourceMatchingTests(unittest.TestCase):
                          "master_barcode": "0000000211239", "front": "02", "back": "99",
                          "solar": "3", "solar_pos": 7, "price_len": "4", "sale_price": 89.})
         self.assertEqual(source["fields"]["product"], "美國櫻桃1.3kg/盒")
-        self.assertEqual(source["date_settings"][0], {"content": "有效日期：", "format": "B", "shift_days": 1})
+        self.assertEqual(source["date_settings"][0], {"content": "有效日期：", "format": "B", "shift_days": 1,
+                                                    "layout_anchor": [0., 36.]})
         self.assertEqual(source["barcode_values"], [])
 
     def test_zero_source_save_days_and_master_price_are_not_overwritten(self):

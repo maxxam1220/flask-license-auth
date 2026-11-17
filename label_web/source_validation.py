@@ -1,6 +1,7 @@
 """Compare OCR with one selected database label, without global fixed-text rules."""
 from datetime import date, timedelta
 from difflib import SequenceMatcher
+import math
 import re
 import unicodedata
 
@@ -11,7 +12,7 @@ from label_geometry import (analyze_label_scope, scope_review_result, date_obser
 from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.15"
+RULE_VERSION = "1.16"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -188,6 +189,59 @@ def _compatible(expected, actual):
     return True
 
 
+def _desktop_arrival_annotation_ids(source, rows):
+    """Associate bare circles with dynamic desktop arrival fields by layout.
+
+    Dynamic date text is deliberately absent from source.lines. Its saved
+    origin still identifies an appended annotation without generating an
+    expected date or interpreting a circle as a date digit. OCR replacements
+    use photo coordinates, so desktop coordinates cannot be applied to them.
+    """
+    if (source or {}).get("source_kind") != "desktop" or source.get("web_text_approved"):
+        return set()
+    anchors = []
+    for item in source.get("date_settings", []):
+        anchor = item.get("layout_anchor")
+        if (not isinstance(anchor, (list, tuple)) or len(anchor) != 2 or
+                any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in anchor)):
+            continue
+        anchors.append((_heading(item.get("content", "")), *anchor))
+    associations = []
+    for kind, x, y in anchors:
+        if kind != "arrival":
+            continue
+        candidates = []
+        for row in rows:
+            if str(row.get("text", "")).strip() not in CIRCLED_NUMBERS:
+                continue
+            area = _bounds(row)
+            if not area:
+                continue
+            left, top, _, bottom = area
+            height = max(bottom - top, 1)
+            # Desktop boxes are conservative text estimates rather than
+            # measured glyph widths. Require the same baseline, a bounded
+            # right-hand gap, and no other field between date and annotation.
+            if not (0 < left - x <= height * 20 and abs(top - y) <= height * .35):
+                continue
+            if any(other != (kind, x, y) and x <= other[1] < left and abs(other[2] - y) <= height * .35
+                   for other in anchors):
+                continue
+            blocked = False
+            for other in rows:
+                if other is row or str(other.get("text", "")).strip() in CIRCLED_NUMBERS:
+                    continue
+                bounds = _bounds(other)
+                if bounds and x <= bounds[0] < left and abs(bounds[1] - y) <= height * .35:
+                    blocked = True
+                    break
+            if not blocked:
+                candidates.append(row["id"])
+        if len(candidates) == 1:
+            associations.append(candidates[0])
+    return {identifier for identifier in associations if associations.count(identifier) == 1}
+
+
 def _source_rows(source):
     from barcode_rule_authoring import dynamic_literal
     rule=(source or {}).get("web_barcode_rule")
@@ -216,6 +270,7 @@ def _source_rows(source):
     # reference retained it as its own OCR box. Unrelated circles stay literal.
     annotation_ids = {line["id"] for observed in date_observations(rows) if observed["kind"] == "arrival"
                       for line in observed["lines"] if str(line["text"]).strip() in CIRCLED_NUMBERS}
+    annotation_ids.update(_desktop_arrival_annotation_ids(source, rows))
     return [row for row in rows if row["id"] not in annotation_ids and
             (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)]
 
