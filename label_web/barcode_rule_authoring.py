@@ -190,7 +190,18 @@ def _load(engine,identifier,conn=None):
         checks,_,_=_date_checks(ocr.get("lines",[]),effective,inputs.get("batch_date",""),inputs.get("arrival_date",""),inputs.get("base_date",""))
         if 0<=delta<=3660 and not any(check["status"] in {"fail","review"} for check in checks):
             suggested=delta;days_reason="依本張製造與有效日期相差天數提供候選，確認前不寫入。"
-    prefixes=_known_prefixes(base or {},effective)
+    structure=None;structure_evidence=None
+    if base and "catalog_barcode_config" in base:
+        from reference_catalog import barcode_structure
+        try:
+            structure=barcode_structure(base)
+            structure_evidence={"kind":"catalog_structure","revision":base["catalog_barcode_reference_revision"],
+                "config":deepcopy(base["catalog_barcode_config"]),
+                "provenance":{key:(base.get("provenance") or {}).get(key) for key in ("file","sheet","row","source_date")},
+                "date_source_confirmed":False}
+        except (ValueError,KeyError) as error:
+            if not reason:reason=str(error) if isinstance(error,ValueError) else "清單組碼證據缺少版本，請重新載入清單。"
+    prefixes=[structure["prefix"]] if structure else _known_prefixes(base or {},effective)
     kind=str(((base or {}).get("barcode_config") or {}).get("kind","")).strip()
     if not reason and not kind and not observation["decoded"]:
         reason="來源尚未確認條碼種類，只有數字印字不足以認定 EAN13；請取得明確 EAN13 條紋解碼後再建立候選。"
@@ -200,19 +211,25 @@ def _load(engine,identifier,conn=None):
         for prefix in prefixes:
             if not value.startswith(prefix):continue
             for day_source,day in dates.items():
-                for width in (2,3):
+                for width in (structure["day_width"],) if structure else (2,3):
                     if len(prefix)+width>12:continue
                     rule={"version":1,"symbology":"EAN13","prefix":prefix,"day_source":day_source,
-                        "day_width":width,"suffix":value[len(prefix)+width:12]}
+                        "day_width":width,"suffix":structure["suffix"] if structure else value[len(prefix)+width:12]}
                     if compose(rule,day)!=value:continue
                     day_text=f"{day.timetuple().tm_yday%100:02d}" if width==2 else f"{day.timetuple().tm_yday:03d}"
                     warnings=["候選只是本次試算相符，尚未核准；同一條碼可能有不同組成方式。",
                         "尾碼僅是本次觀察的固定值假設，沒有推定它代表時刻、價格或其他資料。"]
-                    candidates.append({"id":_digest(rule),"summary":f"前綴{prefix}＋{DAY_LABELS[day_source]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
+                    if structure:
+                        warnings=["組碼位置、位數與前後碼來自清單；採用哪個日期仍需管理員明確核准，不能由清單假定。",
+                            "本次條碼試算相符尚不代表日期排程正確；原日期檢查仍分開保留。"]
+                    candidate={"id":_digest({"rule":rule,"evidence":structure_evidence}) if structure else _digest(rule),"summary":f"前綴{prefix}＋{DAY_LABELS[day_source]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
                         "parts":[{"label":"固定前綴","value":prefix},{"label":DAY_LABELS[day_source],"value":day.isoformat()},
-                            {"label":f"{width}位太陽日","value":day_text},{"label":"尾碼（本次觀察假設）","value":rule["suffix"]},
+                            {"label":f"清單{width}位太陽日" if structure else f"{width}位太陽日","value":day_text},
+                            {"label":"清單固定尾碼" if structure else "尾碼（本次觀察假設）","value":rule["suffix"]},
                             {"label":"EAN13檢查碼","value":value[-1]}],
-                        "rule":rule,"keep_days_suggestion":suggested,"warnings":warnings})
+                        "rule":rule,"keep_days_suggestion":suggested,"warnings":warnings}
+                    if structure_evidence:candidate["evidence"]=deepcopy(structure_evidence)
+                    candidates.append(candidate)
     if not reason and not candidates:reason="已知前綴與本次可信日期無法組成相同條碼；未猜補日期或尾碼。"
     payload={"source":{key:effective.get(key) for key in ("code","name","source_kind")},
         "base_revision":version["revision"] if version else 0,"source_revision":str((base or {}).get("revision","")),
@@ -247,7 +264,7 @@ def _preview(payload,body,inspection_id):
     before={"rule":payload["current_rule"],"keep_days":payload["keep_days"]["current"]}
     after={"rule":candidate["rule"],"keep_days":days}
     signature={"inspection_id":inspection_id,"choice":{key:body[key] for key in CHOICE_KEYS},
-        "observed":payload["observed"],"before":before,"after":after}
+        "observed":payload["observed"],"before":before,"after":after,"candidate_evidence":candidate.get("evidence")}
     return {**{key:payload[key] for key in ("base_revision","source_revision","manual_revision")},
         "preview_hash":_digest(signature),"candidate":candidate,"before":before,"after":after,
         "warnings":candidate["warnings"]+payload["warnings"]}
@@ -286,6 +303,8 @@ def save(engine,inspection_id,body):
                 snapshot.update(keep_days=reviewed["after"]["keep_days"],keep_days_source="confirmed_date_difference")
             evidence={"inspection_id":inspection_id,"manual_revision":payload["manual_revision"],
                 "candidate_id":body["candidate_id"],"preview_hash":body["preview_hash"],"observed":payload["observed"]}
+            if reviewed["candidate"].get("evidence"):
+                evidence["catalog_structure"]=deepcopy(reviewed["candidate"]["evidence"])
             snapshot["web_barcode_rule_evidence"]=evidence
             new_revision=revision+1;created=db.now()
             conn.execute(insert(standards.versions).values(id=db.uid(),code=code,revision=new_revision,

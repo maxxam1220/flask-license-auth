@@ -8,9 +8,38 @@ import configparser
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from sqlalchemy import create_engine, insert, select, text, update
 import database as db
+
+
+def barcode_configuration(record):
+    """Keep explicit Excel composition evidence separate from a date basis."""
+    fields=record.get("fields") or {}
+    if not all(key in fields for key in ("FrontCode","BehindCode","SunDay","SunPos")):
+        return None
+    def literal(value):
+        if value is None:return ""
+        if isinstance(value,bool) or not isinstance(value,(str,int,float)):
+            raise ValueError("Invalid barcode configuration value")
+        if isinstance(value,float):
+            if not value.is_integer():raise ValueError("Fractional barcode configuration value")
+            value=int(value)
+        return str(value).strip()
+    position=literal(fields["SunPos"])
+    return {"version":1,"origin":"excel_fields","kind":literal(record.get("TypesOfBarcode")),
+        "barcode":literal(record.get("Barcode")),"front":literal(fields["FrontCode"]),
+        "back":literal(fields["BehindCode"]),"solar":literal(fields["SunDay"]),
+        "solar_pos":int(position) if re.fullmatch(r"[0-9]+",position) else position,
+        "price_len":literal(fields.get("PriceLen"))}
+
+
+def identity_revision(row):
+    # Additional composition evidence must not invalidate already approved
+    # text snapshots. Its own reference revision is calculated at read time.
+    identity=dict(row,provenance={key:value for key,value in row["provenance"].items() if key!="barcode_config"})
+    return hashlib.sha256(json.dumps(identity,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
 
 def prepare_rows(records, selected_codes):
@@ -33,7 +62,9 @@ def prepare_rows(records, selected_codes):
                               "row": record["source_row"], "source_date": record["source_date"]}}
         if not row["name"] or not code or len(code) > 80:
             raise ValueError("Invalid catalog identity")
-        row["revision"] = hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        config=barcode_configuration(record)
+        if config is not None:row["provenance"]["barcode_config"]=config
+        row["revision"] = identity_revision(row)
         rows.append(row)
     if len(rows) != len(selected_codes) or len({row["code"] for row in rows}) != len(rows):
         raise ValueError("Missing or duplicate current list records")
@@ -48,6 +79,25 @@ def write_rows(connection, rows):
         if previous and all(previous[key] == value for key, value in row.items()):
             counts["unchanged"] += 1
             continue
+        if previous:
+            prior_provenance=previous.get("provenance") or {}
+            old_date=str(prior_provenance.get("source_date") or "")
+            new_date=str(row["provenance"].get("source_date") or "")
+            if old_date and (not re.fullmatch(r"[0-9]{8}",new_date) or new_date<old_date):
+                raise ValueError("Older Excel data cannot overwrite the current catalog")
+            fields=("name","barcode","barcode_type","keep_days","active")
+            if old_date and new_date==old_date and any(previous[key]!=row[key] for key in fields):
+                raise ValueError("Conflicting same-date catalog data requires explicit review")
+            # A metadata-only enrichment retains the original identity guard,
+            # even when an older import used a different hash implementation.
+            if all(previous[key]==row[key] for key in fields) and all(
+                    prior_provenance.get(key)==row["provenance"].get(key) for key in ("file","sheet","row","source_date")):
+                row=dict(row,revision=previous["revision"])
+                if "barcode_config" not in row["provenance"] and "barcode_config" in prior_provenance:
+                    row["provenance"]={**row["provenance"],"barcode_config":prior_provenance["barcode_config"]}
+            if all(previous[key]==value for key,value in row.items()):
+                counts["unchanged"]+=1
+                continue
         values = dict(row, updated_at=db.now())
         if previous:
             connection.execute(update(db.catalog).where(db.catalog.c.code == row["code"]).values(**values))

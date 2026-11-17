@@ -1734,6 +1734,16 @@ function barcodeRuleDescription(rule){
 function barcodeRuleRows(area,parts){
   const list=element("dl","barcode-rule-parts");for(const part of Array.isArray(parts) ? parts : []){if(!part || typeof part!=="object")continue;const row=element("div");row.append(element("dt","",String(part.label || "項目")),element("dd","",String(part.value ?? "未提供")));list.append(row);}area.append(list);
 }
+function barcodeCandidateEvidence(area,evidence){
+  if(evidence?.kind!=="catalog_structure")return;
+  const block=element("div","barcode-catalog-evidence"),provenance=evidence.provenance || {},location=[];
+  block.append(element("strong","","清單已有組碼設定"));
+  if(typeof provenance.file==="string" && provenance.file)location.push(provenance.file);
+  if(typeof provenance.sheet==="string" && provenance.sheet)location.push(`工作表：${provenance.sheet}`);
+  if((typeof provenance.row==="number" || typeof provenance.row==="string") && String(provenance.row))location.push(`第 ${provenance.row} 列`);
+  block.append(element("p","help",location.length ? `來源：${location.join(" · ")}` : "來源位置未附檔名或列號，請核對清單資料。"));
+  block.append(element("p","help",evidence.date_source_confirmed===true ? "這份依據已確認採用的日期來源。" : "清單提供組碼設定；採用製造日、有效日或其他日期，仍需明確核准。"));area.append(block);
+}
 function barcodeWarnings(area,warnings,compact=false){
   const values=[...new Set((Array.isArray(warnings) ? warnings : []).filter(warning=>typeof warning==="string" && warning.trim()).map(warning=>warning.trim()))];
   if(compact && values.length)area.append(element("p","barcode-rule-warning",values.map(value=>value.replace(/[。.!！]+$/g,"")).join("；")+"。"));
@@ -1758,7 +1768,7 @@ function updateBarcodeRuleControls(){
   const reviewing=!!context?.preview && !context?.conflict,done=!!context?.saved;
   for(const id of ["barcode-rule-basis","barcode-rule-selection","barcode-rule-notice"])$("#"+id).hidden=reviewing || done;
   $("#barcode-rule-adjust").hidden=!reviewing || done;
-  $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "這些是尚未核准的候選。一般使用者可查看推算，寫入標準需由管理員確認。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : !data?.can_write ? data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對日期來源與尾碼假設後再確認。";
+  $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "這些是尚未核准的候選。一般使用者可查看推算，寫入標準需由管理員確認。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : !data?.can_write ? data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對各段來源與尚未確認的日期設定後再確認。";
   $("#barcode-rule-preview-button").hidden=!allowed() || !data?.can_write;
   $("#barcode-rule-preview-button").disabled=!editable || !context?.candidateId || !!context?.previewLoading;
   for(const input of context?.candidateInputs || [])input.disabled=!editable;
@@ -1784,7 +1794,8 @@ function renderBarcodeRule(data,context){
   $("#barcode-rule-current").replaceChildren(element("p","",barcodeRuleDescription(data.current_rule)));
   const candidates=$("#barcode-rule-candidates");candidates.replaceChildren();context.candidateInputs=[];context.candidates=(Array.isArray(data.candidates) ? data.candidates : []).filter(item=>item && typeof item.id==="string" && item.id);
   context.candidateId=context.candidates.length===1 ? context.candidates[0].id : "";
-  for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status","候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
+  const methodNote=$(".barcode-candidates-fieldset > .help");if(methodNote)methodNote.textContent=context.candidates.some(candidate=>candidate.evidence?.kind==="catalog_structure") ? "清單已提供的組碼設定會標明來源；日期來源與其他待確認事項依各候選說明核對。單張吻合不代表整份規則已核准。" : "候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。";
+  for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status","候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeCandidateEvidence(item,candidate.evidence);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
   if(!context.candidates.length)candidates.append(element("p","help","目前沒有足夠依據可提出規則候選。請先核對條碼、日期與對應標準。"));
   else if(context.candidates.length>1)candidates.prepend?.(element("p","help","有多個候選，本次相同數字不能證明哪個公式正確；請確認後選擇。"));
   $("#barcode-rule-warnings").replaceChildren();barcodeWarnings($("#barcode-rule-warnings"),data.warnings);
@@ -1819,7 +1830,7 @@ async function previewBarcodeRule(){
   try{const data=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/barcode-rule/preview`,{method:"POST",body});if(!barcodeRuleContextCurrent(context)){if(state.barcodeRule===context)closeBarcodeRule(true);return;}if(nonce!==context.previewNonce || !allowed())return;if(JSON.stringify(barcodeRuleBody(context))!==signature)return;
     if(data.base_revision!==body.base_revision || data.source_revision!==body.source_revision || data.manual_revision!==body.manual_revision || !data.preview_hash){const error=new Error("預覽版本已變更或缺少確認憑證，請重新載入。");error.status=409;throw error;}
     context.preview={signature,hash:data.preview_hash};const area=$("#barcode-rule-preview");area.replaceChildren(element("h3","","預覽要寫入的規則"),element("p","help","尚未儲存。核准後會套用到之後同款標籤的條碼檢查。"));
-    const before=element("section","barcode-rule-before"),after=element("section","barcode-rule-after");before.append(element("h4","","目前設定"),element("p","",barcodeRuleDescription(data.before?.rule)),element("p","",`保存天數：${data.before?.keep_days ?? "未設定"}`));after.append(element("h4","","確認後設定"),element("p","",barcodeRuleDescription(data.after?.rule)),element("p","",`保存天數：${data.after?.keep_days ?? "未設定"}`));area.append(before,after);barcodeRuleRows(area,data.candidate?.parts);barcodeWarnings(area,[...(data.warnings || []),...(data.candidate?.warnings || [])],true);
+    const before=element("section","barcode-rule-before"),after=element("section","barcode-rule-after");before.append(element("h4","","目前設定"),element("p","",barcodeRuleDescription(data.before?.rule)),element("p","",`保存天數：${data.before?.keep_days ?? "未設定"}`));after.append(element("h4","","確認後設定"),element("p","",barcodeRuleDescription(data.after?.rule)),element("p","",`保存天數：${data.after?.keep_days ?? "未設定"}`));area.append(before,after);barcodeRuleRows(area,data.candidate?.parts);barcodeCandidateEvidence(area,data.candidate?.evidence);barcodeWarnings(area,[...(data.warnings || []),...(data.candidate?.warnings || [])],true);
     area.hidden=false;$("#barcode-rule-approval").hidden=false;$("#barcode-rule-confirm").checked=false;area.scrollIntoView({block:"start",behavior:"instant"});
   }catch(error){barcodeRuleError(error,context);}finally{if(state.barcodeRule===context){context.previewLoading=false;updateBarcodeRuleControls();}}
 }
