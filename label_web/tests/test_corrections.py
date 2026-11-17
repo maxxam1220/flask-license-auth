@@ -190,6 +190,42 @@ class CorrectionAPITests(unittest.TestCase):
         self.assertEqual(updated["status"],"pass")
         self.assertEqual(original["ocr"]["lines"][0]["score"],.3)
 
+    def test_cloud_storage_correction_clears_only_its_own_doubt_not_unrelated_barcode_review(self):
+        standard=source("品名：測試蘋果","保存條件:7℃以下冷藏")
+        standard.update(source_kind="catalog",comparison_scope="approved_text",web_text_approved=True,
+                        barcode_values=["28039938"],barcode_config={"kind":"1"})
+        lines=[line(0,"品名：測試蘋果"),dict(line(1,"保存收件:7°C以下冷藏",score=0),
+            score_kind="uncertainty_gate",uncertain=False,ambiguous=True,suspected_typo=True,
+            ambiguity_reason="cloud_suspected_typo",typo_candidates=["保存條件:7°C以下冷藏"]),
+            line(2,"2 803993 832539")]
+        self.identifier=self.seed(lines,standard)
+        before=self.read()
+        response=self.post(line_id=1,text="保存條件:7°C以下冷藏")
+        self.assertEqual(response.status_code,201,response.json)
+        corrected=response.json["manual_revision"]
+        related=[check for check in corrected["result"]["checks"] if 1 in check.get("line_ids",[])]
+        self.assertEqual([(check["key"],check["status"]) for check in related],[("storage","pass")])
+        self.assertTrue(related[0]["human_assessment"])
+        self.assertFalse(any(check["key"].startswith("cloud_word_") for check in corrected["result"]["checks"]))
+        self.assertTrue(any(check["label"]=="條碼" and check["status"]=="review" for check in corrected["result"]["checks"]))
+        self.assertEqual(corrected["status"],"review")
+        self.assertEqual(corrected["ocr"]["lines"][1]["score"],0)
+        for key in ("ocr","result","template_snapshot","status"):
+            self.assertEqual(response.json[key],before[key])
+        # A fresh scan still uses observed model output. No learned replacement
+        # or standard mutation is introduced by saving this one correction.
+        again=evaluate_source(lines,standard,base_date="2026-11-11")
+        self.assertEqual(next(check["status"] for check in again["checks"] if check["key"]=="storage"),"review")
+
+    def test_confirmed_unknown_text_remains_read_without_comparison_evidence(self):
+        self.identifier=self.seed([line(0,"品名：測試蘋果"),line(1,"採收批號：ABX",score=.3)],source("品名：測試蘋果"))
+        response=self.post(line_id=1,text="採收批號：ABC")
+        self.assertEqual(response.status_code,201,response.json)
+        checks=[check for check in response.json["manual_revision"]["result"]["checks"] if 1 in check.get("line_ids",[])]
+        self.assertTrue(checks)
+        self.assertTrue(all(check["status"]=="read" and check["source"]=="ocr" for check in checks))
+        self.assertTrue(all(check["human_assessment"] for check in checks))
+
 
 if __name__ == "__main__":
     unittest.main()
