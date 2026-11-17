@@ -332,7 +332,7 @@ def _photo_changes(current,changes):
             if expiry["date"]<manufacture["date"] or (keep is not None and (expiry["date"]-manufacture["date"]).days!=keep):raise ValueError()
             if expiry["date"]==manufacture["date"] and manufacture["hour"] is not None and expiry["hour"] is not None and (expiry["hour"],expiry["minute"])<(manufacture["hour"],manufacture["minute"]):raise ValueError()
         if rules.get("arrival") and not rules.get("source"):
-            arrival=parse_date(result["reference_dates"].get("arrival",""))
+            arrival=parse_date(result["reference_dates"].get("arrival",""),kind="arrival")
             if rules.get("dates") and not manufacture["date"]<=arrival["date"]<=expiry["date"]:raise ValueError()
     except (ValueError,TypeError):abort(400,description="照片參考日期不合法、前後矛盾或不符合保存天數。")
     return result

@@ -54,13 +54,14 @@ def create_app(config=None, ocr=None):
     app.config.update(DATA_DIR=data_dir, DATABASE_URL=os.environ.get("LABELCHECK_DATABASE_URL", ""),
         APP_PASSWORD=os.environ.get("LABELCHECK_PASSWORD", ""),
         ADMIN_PASSWORD=os.environ.get("LABELCHECK_ADMIN_PASSWORD", ""),
-        CLOUD_TRIAL_LIMIT=max(0,min(1000,int(os.environ.get("LABELCHECK_CLOUD_TRIAL_LIMIT","20")))),
+        CLOUD_TRIAL_LIMIT=cloud_budget.configured_limit(os.environ.get("LABELCHECK_CLOUD_TRIAL_LIMIT","20")),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024, MAX_FORM_MEMORY_SIZE=128 * 1024,
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
         SESSION_COOKIE_SECURE=os.environ.get("LABELCHECK_HTTPS", "") == "1",
         PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
     if config:
         app.config.update(config)
+    app.config["CLOUD_TRIAL_LIMIT"] = cloud_budget.configured_limit(app.config["CLOUD_TRIAL_LIMIT"])
     data_dir = Path(app.config["DATA_DIR"])
     data_dir.mkdir(parents=True, exist_ok=True)
     key_file = data_dir / ".session-key"
@@ -173,9 +174,10 @@ def create_app(config=None, ocr=None):
         if selected not in ("local","cloud") or scope not in ("sticker","full"):
             abort(400,description="辨識方式或照片範圍不正確。")
         if selected=="cloud" and check_available:
-            if not os.environ.get("OPENAI_API_KEY") and not app.config.get("CLOUD_OCR"):
+            if not os.environ.get("OPENAI_API_KEY", "").strip() and not app.config.get("CLOUD_OCR"):
                 abort(409,description="尚未設定雲端辨識金鑰，請使用本機辨識。")
-            if cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])<=0:
+            remaining=cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])
+            if remaining is not None and remaining<=0:
                 abort(429,description="雲端試用次數已用完，請改用本機辨識。")
         return {"recognition_engine":selected,"label_scope":scope}
 
@@ -267,11 +269,12 @@ def create_app(config=None, ocr=None):
     @app.get("/api/scan-config")
     def scan_config():
         remaining=cloud_budget.remaining(engine,app.config["CLOUD_TRIAL_LIMIT"])
-        cloud_available=bool(os.environ.get("OPENAI_API_KEY", "").strip() or app.config.get("CLOUD_OCR")) and remaining>0
+        unlimited=app.config["CLOUD_TRIAL_LIMIT"] == -1
+        cloud_available=bool(os.environ.get("OPENAI_API_KEY", "").strip() or app.config.get("CLOUD_OCR")) and (unlimited or remaining>0)
         return jsonify(standards=[], version=RULE_VERSION, mode="system_label", today=taiwan_today(),recognition={
             "cloud_available":cloud_available,
             "default_engine":"cloud" if cloud_available else "local", "cloud_model":os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),
-            "cloud_limit":app.config["CLOUD_TRIAL_LIMIT"],"cloud_remaining":remaining})
+            "cloud_unlimited":unlimited,"cloud_limit":None if unlimited else app.config["CLOUD_TRIAL_LIMIT"],"cloud_remaining":remaining})
 
     def active_jobs():
         with engine.connect() as conn:
@@ -377,7 +380,7 @@ def create_app(config=None, ocr=None):
                 abort(400, description="標準照片的日期不完整、前後矛盾或不符合保存天數，請核對。")
         if rules.get("arrival", False) and not source:
             try:
-                arrival = parse_date(reference_dates.get("arrival", ""))
+                arrival = parse_date(reference_dates.get("arrival", ""),kind="arrival")
                 if rules["dates"] and not m["date"] <= arrival["date"] <= e["date"]:
                     raise ValueError()
             except (ValueError, TypeError):

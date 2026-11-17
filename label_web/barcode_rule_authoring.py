@@ -107,7 +107,7 @@ def read_observations(ocr,base_date):
     dates=[];parsed={}
     for key,field in fields.items():
         uncertain=bool(field.get("ambiguous") or not field.get("confidence_ok",field.get("score",0)>=.65))
-        try:value=parse_date(field["value"])["date"]
+        try:value=parse_date(field["value"],kind=key)["date"]
         except (ValueError,TypeError,KeyError):value=None;uncertain=True
         dates.append({"kind":key,"label":DAY_LABELS[key],"value":field.get("value",""),
             "iso":value.isoformat() if value else None,"day_of_year":value.timetuple().tm_yday if value else None,

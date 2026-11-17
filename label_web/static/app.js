@@ -421,11 +421,11 @@ async function loadScanConfig() {
   configureRecognition(config.recognition || {});
 }
 function configureRecognition(config){
-  state.recognition={...config,cloud_available:config.cloud_available===true,default_engine:config.default_engine==="cloud" ? "cloud" : "local"};
+  state.recognition={...config,cloud_available:config.cloud_available===true,cloud_unlimited:config.cloud_unlimited===true,default_engine:config.default_engine==="cloud" ? "cloud" : "local"};
   for(const prefix of ["","reference-","crop-"]){
     const input=$("#"+prefix+"recognition-engine"),previous=input.value;
     const selected=input.dataset.recognitionInitialized==="true" && ["local","cloud"].includes(previous) ? previous : state.recognition.default_engine==="cloud" && state.recognition.cloud_available ? "cloud" : "local";
-    input.replaceChildren(new Option("一般辨識", "local"),new Option(config.cloud_available ? "雲端辨識（付費）" : "雲端辨識（暫不可用）","cloud"));
+    input.replaceChildren(new Option("一般辨識", "local"),new Option(state.recognition.cloud_available ? "雲端辨識（付費）" : "雲端辨識（暫不可用）","cloud"));
     if(input.options?.[1])input.options[1].disabled=!state.recognition.cloud_available;
     input.value=selected;input.dataset.recognitionInitialized="true";
     if(!["sticker","full"].includes($("#"+prefix+"label-scope").value))$("#"+prefix+"label-scope").value="sticker";
@@ -440,8 +440,7 @@ function recognitionSettings(prefix=""){
 }
 function recognitionChoiceNote(prefix=""){
   const cloud=$("#"+prefix+"recognition-engine").value==="cloud",config=state.recognition;
-  const quota=Number.isInteger(config.cloud_remaining) ? `目前剩餘 ${config.cloud_remaining}${Number.isInteger(config.cloud_limit) ? `／${config.cloud_limit}` : ""} 次試用。` : "";
-  $("#"+prefix+"recognition-choice-note").textContent=cloud ? config.cloud_available ? `這次送出會使用雲端付費辨識。${quota}照片將交由雲端服務讀取，仍需核對文字。` : `雲端辨識目前未開放或額度已用完。${quota}已保留雲端選擇，不會自動改用一般辨識；請自行選擇一般辨識，或待雲端恢復可用後再送出。` : `使用本站一般辨識，不呼叫付費雲端服務。${config.cloud_available ? quota : "雲端辨識目前未開放或額度已用完。"}`;
+  $("#"+prefix+"recognition-choice-note").textContent=cloud ? config.cloud_available ? "雲端辨識已開放，依 API 帳戶可用額度計費。" : "雲端辨識暫時無法使用。" : "使用一般辨識。";
   if(prefix==="crop-"){if(state.crop && !state.crop.manualScope)state.crop.wholeScope=$("#crop-label-scope").value || "sticker";invalidateCropPreview();}
 }
 function renderInspectSource() {

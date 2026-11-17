@@ -1,4 +1,4 @@
-"""Durable small-trial call cap; failed/uncertain requests still count conservatively."""
+"""Durable cloud usage accounting with an optional cumulative call cap."""
 from sqlalchemy import Table, Column, String, Integer, JSON, select, insert, update
 from sqlalchemy.exc import IntegrityError
 import database as db
@@ -12,6 +12,12 @@ calls = Table("labelcheck_cloud_calls", db.metadata,
 KEY="cloud-trial-v1"
 
 
+def configured_limit(value):
+    """Only an explicit -1 opens usage; other negative values fail closed."""
+    value=int(value)
+    return -1 if value==-1 else max(0,min(1000,value))
+
+
 def initialize(engine):
     try:
         with engine.begin() as conn:
@@ -22,6 +28,8 @@ def initialize(engine):
 
 
 def remaining(engine, limit):
+    if limit == -1:
+        return None  # Unlimited here means no website cap, not free provider usage.
     with engine.connect() as conn:
         used=conn.execute(select(counter.c.calls).where(counter.c.id==KEY)).scalar_one()
     return max(0,limit-used)
@@ -30,7 +38,10 @@ def remaining(engine, limit):
 def reserve(engine, job_id, model, limit):
     with engine.begin() as conn:
         # The conditional update serializes reservation across threads/processes.
-        changed=conn.execute(update(counter).where(counter.c.id==KEY,counter.c.calls<limit).values(calls=counter.c.calls+1))
+        conditions=[counter.c.id==KEY]
+        if limit != -1:
+            conditions.append(counter.c.calls<limit)
+        changed=conn.execute(update(counter).where(*conditions).values(calls=counter.c.calls+1))
         if changed.rowcount != 1:
             raise RuntimeError("雲端試用次數已用完，請改用本機辨識或由管理員調整試用上限。")
         conn.execute(insert(calls).values(job_id=job_id,model=model,state="reserved",usage={},created_at=db.now()))

@@ -6,11 +6,12 @@ import unicodedata
 
 from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
-                            date_evidence_overlaps, without_date_evidence)
+                            date_evidence_overlaps, without_date_evidence,
+                            date_value_for_parsing, split_arrival_marker, CIRCLED_NUMBERS)
 from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.14"
+RULE_VERSION = "1.15"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -211,7 +212,12 @@ def _source_rows(source):
             else:
                 rows.append({"id": f"barcode_{index}", "text": value, "score": 1., "box": [],
                              "_kind": "barcode", "_barcode_kind": kind})
-    return [row for row in rows if row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS]
+    # A geometrically attached arrival annotation is variable even when an old
+    # reference retained it as its own OCR box. Unrelated circles stay literal.
+    annotation_ids = {line["id"] for observed in date_observations(rows) if observed["kind"] == "arrival"
+                      for line in observed["lines"] if str(line["text"]).strip() in CIRCLED_NUMBERS}
+    return [row for row in rows if row["id"] not in annotation_ids and
+            (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)]
 
 
 def _text_checks(lines, source):
@@ -437,8 +443,9 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         short = bool(setting.get("format")) and setting["format"] in "EFGHIJKL"
         status, reason = "pass", "完整年月日格式可辨識；格式正確不代表符合本批排程。"
         try:
+            date_value = date_value_for_parsing(value, key)
             if short:
-                normal = unicodedata.normalize("NFKC", re.sub(r"\s+", "", value))
+                normal = unicodedata.normalize("NFKC", re.sub(r"\s+", "", date_value))
                 code = setting["format"]
                 pattern = r"\d{2}\.\d{2}" if code in "EF" else r"\d{2}/\d{2}" if code in "GH" else r"\d{4}" if code in "IJ" else r"\d{8}"
                 if not re.fullmatch(pattern, normal):
@@ -451,7 +458,9 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                     parsed[key] = {"date": setting["expected_date"], "hour": None, "minute": 0}
                 reason = "依資料庫的短日期格式檢查；照片未印出的年份不會當成辨識結果。"
             else:
-                parsed[key] = parse_date(value)
+                parsed[key] = parse_date(value, kind=key)
+            if key == "arrival" and split_arrival_marker(value)[1]:
+                reason += "到店日尾端圈數視為可變附記，不當作日期或時間數字。"
         except (ValueError, TypeError):
             status, reason = "fail", "日期不完整、不合法或格式不符，請確認印字與辨識原文。"
         if not value or _field_uncertain(field):
@@ -460,7 +469,7 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
             uncertain.add(key)
         add(key, FIELD_NAMES[key] + "格式", status, reason, "資料庫指定的短日期格式" if short else "完整且合法的年月日", value, ids, confidence)
         if setting.get("expected_text"):
-            same = (unicodedata.normalize("NFKC", re.sub(r"\s+", "", value)) == setting["expected_text"] if short
+            same = (status == "pass" and normal == setting["expected_text"] if short
                     else key in parsed and parsed[key]["date"] == setting["expected_date"])
             checked_status = "review" if status == "review" or setting.get("ambiguous") else "pass" if same else "fail"
             schedule_reason = (f"應為 {setting['expected_text']}，辨識為 {value or '未辨識到'}，與本批排程不同。" if checked_status == "fail"

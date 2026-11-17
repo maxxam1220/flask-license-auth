@@ -15,6 +15,36 @@ ANCHORS = {
     "phone": ("電話", r"^(?:免付費(?:服務)?[電电][話话]|客服[電电][話话]|服務[電电][話话]|聯絡[電电][話话]|客服專線|服務專線|[電电][話话])"),
 }
 DATE_KINDS = {"manufacture", "expiry", "arrival"}
+# These are single circled-number glyphs, not arbitrary suffixes or digits.
+# Inspect them before NFKC, which would turn e.g. ⑤ into an ordinary 5.
+CIRCLED_NUMBERS = frozenset(chr(value) for start, end in (
+    (0x2460, 0x2473), (0x24EA, 0x24F4), (0x24FF, 0x24FF),
+    (0x2776, 0x2793), (0x3251, 0x325F), (0x32B1, 0x32BF),
+) for value in range(start, end + 1))
+
+
+def split_arrival_marker(text):
+    """Separate one observed circled-number annotation, without changing its date."""
+    value = str(text or "").strip()
+    core = value[:-1].rstrip()
+    if value and value[-1] in CIRCLED_NUMBERS and core and (core[-1].isdecimal() or core[-1] in "日時时分"):
+        return core, value[-1]
+    return value, ""
+
+
+def date_value_for_parsing(text, kind=None):
+    value = split_arrival_marker(text)[0] if kind == "arrival" else str(text or "").strip()
+    if any(character in CIRCLED_NUMBERS for character in value):
+        raise ValueError("圈數只能是到店日最後的附記，不能代替日期或時間數字。")
+    return value
+
+
+def _complete_date_shape(value):
+    """Shape only; calendar, year and time validity still belong to the validators."""
+    if any(character in CIRCLED_NUMBERS for character in value):
+        return False
+    return bool(re.fullmatch(r"(?:民國)?[0-9]{3,4}[./年-][0-9]{1,2}[./月-][0-9]{1,2}日?"
+                             r"(?:[0-9]{1,2}(?:[時时](?:[0-9]{1,2}分?)?|:[0-9]{1,2}))?", compact(value)))
 
 
 def date_segments(line):
@@ -32,6 +62,13 @@ def date_segments(line):
     segments = []
     for position, (start, heading_end, kind) in enumerate(headings):
         end = headings[position + 1][0] if position + 1 < len(headings) else len(text)
+        # A second, explicitly delimited field remains independent evidence.
+        # In particular, a circled arrival annotation must not swallow storage
+        # text when OCR emits both fields in one box.
+        nondate = re.search(r"(?:保存條件|保存条件|保存方式|儲存條件|貯存條件|儲存方式|品名|規格|规格|產地|产地|地址|電話|电话|內容物|内容物)\s*[：:]",
+                            text[heading_end:end])
+        if nondate:
+            end = heading_end + nondate.start()
         value_start, value_end = heading_end, end
         while value_start < value_end and (text[value_start].isspace() or text[value_start] in ":："):
             value_start += 1
@@ -51,7 +88,7 @@ def date_observations(lines):
         # one shared box. Do not borrow a nearby value for either sub-heading.
         shared_empty = len(segments) > 1 and any(not segment["value"] for segment in segments)
         for segment in segments:
-            observed = (date_evidence(line, segment["value"], lines) if len(segments) == 1
+            observed = (date_evidence(line, segment["value"], lines, kind=segment["kind"]) if len(segments) == 1
                         else {"value": segment["value"], "lines": [line], "ambiguous": shared_empty})
             observed["kind"] = segment["kind"]
             observed["evidence_spans"] = [{"line_id": line["id"], "start": segment["start"], "end": segment["end"]}]
@@ -265,13 +302,17 @@ def _blocked_between(first, candidate, lines, horizontal):
     return False
 
 
-def date_evidence(heading, value, lines):
+def date_evidence(heading, value, lines, kind=None):
     """Find one close, unobstructed date value/continuation; never use expected data."""
     evidence, conflicts, ambiguous = [heading], [], False
     for _ in range(3):
+        if any(character in CIRCLED_NUMBERS for character in value):
+            break  # Preserve an observed marker/invalid enclosed digit; never repair it.
         normalized = compact(value)
         time_only = bool(re.fullmatch(r"(?:民國)?[0-9]{3,4}[./年-][0-9]{1,2}[./月-][0-9]{1,2}日?",normalized))
-        if normalized and not time_only and not re.fullmatch(r"(?:民國)?[0-9０-９OoIl]{3,4}[./年-](?:[0-9０-９OoIl]{1,2}[./月-]?)?", normalized):
+        complete = _complete_date_shape(value)
+        marker_only = kind == "arrival" and complete and not time_only
+        if normalized and not time_only and not marker_only and not re.fullmatch(r"(?:民國)?[0-9０-９OoIl]{3,4}[./年-](?:[0-9０-９OoIl]{1,2}[./月-]?)?", normalized):
             break  # A complete/invalid observed value is never replaced with another date.
         first = evidence[-1]
         area = bounds(first)
@@ -282,10 +323,24 @@ def date_evidence(heading, value, lines):
         for other in lines:
             if other["id"] in {item["id"] for item in evidence} or anchor_kind(other.get("text","")) or not bounds(other):
                 continue
-            text = compact(other["text"])
-            if time_only and not re.fullmatch(r"[0-9]{1,2}(?:[時时](?:[0-9]{1,2}分?)?|:[0-9]{2})",text):
+            raw = str(other["text"]).strip()
+            is_marker = len(raw) == 1 and raw in CIRCLED_NUMBERS
+            if is_marker:
+                if kind != "arrival" or not complete:
+                    continue
+                text = raw
+            else:
+                core, marker = split_arrival_marker(raw)
+                if marker and (kind != "arrival" or not _complete_date_shape(value + core)):
+                    continue
+                if any(character in CIRCLED_NUMBERS for character in core):
+                    continue
+                text = compact(core)
+            if marker_only and not is_marker:
                 continue
-            if not re.fullmatch(r"(?:民國)?[0-9OoIl][0-9OoIl年年月日./:時时分-]{0,23}", text):
+            if not is_marker and time_only and not re.fullmatch(r"[0-9]{1,2}(?:[時时](?:[0-9]{1,2}分?)?|:[0-9]{2})",text):
+                continue
+            if not is_marker and not re.fullmatch(r"(?:民國)?[0-9OoIl][0-9OoIl年年月日./:時时分-]{0,23}", text):
                 continue
             nx,ny,nr,nb = bounds(other);height=max(b-y,nb-ny,1)
             row_overlap=max(0,min(b,nb)-max(y,ny))
@@ -293,6 +348,8 @@ def date_evidence(heading, value, lines):
             overlap=max(0,min(r,nr)-max(x,nx))
             vertical=(overlap>=min(r-x,nr-nx)*.55 and abs(nx-x)<=height*1.5 and
                       ny>=b-height*.2 and ny-b<=height*1.5)
+            if is_marker and not (horizontal and nx-r <= height*1.5):
+                continue  # A loose circle elsewhere is not a date annotation.
             if not (horizontal or vertical) or _blocked_between(first,other,lines,horizontal):
                 continue
             candidates.append(((0,nx-r) if horizontal else (1,max(0,ny-b)),other))

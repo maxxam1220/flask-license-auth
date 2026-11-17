@@ -6,9 +6,10 @@ import re
 import unicodedata
 from opencc import OpenCC
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
-                            date_evidence_overlaps, without_date_evidence, DATE_KINDS)
+                            date_evidence_overlaps, without_date_evidence, DATE_KINDS,
+                            date_value_for_parsing, split_arrival_marker)
 
-RULE_VERSION = "1.5"
+RULE_VERSION = "1.6"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
@@ -50,8 +51,8 @@ def traditional_display(text):
     return _traditional_converter().convert(str(text or "")).replace("臺灣", "台灣")
 
 
-def parse_date(text):
-    value = unicodedata.normalize("NFKC", str(text or "")).strip()
+def parse_date(text, *, kind=None):
+    value = unicodedata.normalize("NFKC", date_value_for_parsing(text, kind)).strip()
     roc = value.startswith("民國")
     value = re.sub(r"^民國\s*", "", value)
     match = re.fullmatch(r"(\d{3,4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*(?:時|时|:)(?:(\d{1,2})\s*分?)?)?", value)
@@ -572,7 +573,9 @@ def evaluate(lines, template, batch_date="", arrival_date="", *, base_date=""):
         value = field.get("value", "")
         status, reason = "pass", "年月日格式可辨識。"
         try:
-            parsed["arrival"] = parse_date(value)
+            parsed["arrival"] = parse_date(value, kind="arrival")
+            if split_arrival_marker(value)[1]:
+                reason += "到店日尾端圈數視為可變附記，不當作日期或時間數字。"
         except (ValueError, TypeError):
             status, reason = "review", "到店日未讀完整或日期不合法，請查看原圖。"
         if field.get("ambiguous") or not field.get("confidence_ok", field.get("score", 0) >= threshold):
