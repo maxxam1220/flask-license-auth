@@ -1,4 +1,28 @@
 {
+  "正在重試，請稍候…": {
+    "id": "Mencoba lagi, harap tunggu…",
+    "vi": "Đang thử lại, vui lòng chờ…"
+  },
+  "正在處理本筆紀錄，送出後最多等 {seconds} 秒": {
+    "id": "Memproses catatan ini. Waktu tunggu setelah dikirim hingga {seconds} detik",
+    "vi": "Đang xử lý bản ghi này. Sau khi gửi, thời gian chờ tối đa là {seconds} giây"
+  },
+  "此頁在前景時，恢復連線會自動補傳可重試的紀錄。每次檢查連線最多等 5 秒，上傳依照片大小最多等 30 秒至 3 分鐘。連線暫時失敗會再試一次，未確認的紀錄仍保留。": {
+    "id": "Saat halaman ini aktif dan koneksi pulih, catatan yang dapat dikirim ulang akan disinkronkan otomatis. Pemeriksaan koneksi menunggu hingga 5 detik per percobaan. Batas waktu tiap unggahan berkisar antara 30 detik dan 3 menit sesuai ukuran foto. Jika koneksi gagal sementara, sistem mencoba sekali lagi. Catatan yang belum dikonfirmasi tetap tersimpan.",
+    "vi": "Khi đang mở trang này, các bản ghi có thể gửi lại sẽ tự đồng bộ khi có mạng trở lại. Mỗi lần kiểm tra kết nối chờ tối đa 5 giây. Thời hạn mỗi lần tải lên từ 30 giây đến 3 phút tùy kích thước ảnh. Nếu kết nối tạm thời gặp lỗi, hệ thống sẽ thử lại một lần. Các bản ghi chưa được xác nhận vẫn được giữ."
+  },
+  "新照片已存到此手機。{reason}": {
+    "id": "Foto baru sudah disimpan di ponsel ini. {reason}",
+    "vi": "Ảnh mới đã được lưu trên điện thoại này. {reason}"
+  },
+  "正在確認收件並讀取新照片…": {
+    "id": "Memeriksa bukti penerimaan dan membaca foto baru…",
+    "vi": "Đang kiểm tra biên nhận và đọc ảnh mới…"
+  },
+  "為 {code} 更換 {count} 張照片並立即補傳這筆巡檢？\n原巡檢時間、備註、異常及點檢內容都會保留。若已有收據，會直接顯示結果。": {
+    "id": "Ganti foto untuk {code} dengan {count} foto yang dipilih dan segera kirim inspeksi ini?\nWaktu inspeksi, catatan, laporan masalah, dan daftar pemeriksaan tetap tersimpan. Jika bukti penerimaan sudah ada, hasilnya akan langsung ditampilkan.",
+    "vi": "Thay ảnh của {code} bằng {count} ảnh đã chọn và gửi ngay lượt kiểm tra này?\nThời gian kiểm tra, ghi chú, thông tin bất thường và các mục đã kiểm tra sẽ được giữ lại. Nếu đã có biên nhận, kết quả sẽ hiển thị ngay."
+  },
   "登入帳號": {
     "id": "Login",
     "vi": "Đăng nhập"

@@ -23,6 +23,8 @@ function fixture(t, stage = 'inspect') {
       fetch: async (url, init) => {
         if (url.endsWith('/prepare')) return response(state.manifest);
         if (url.endsWith('/status')) return response({ ok: true, owner: state.manifest.owner, csrf_token: 'fresh' });
+        if (url.startsWith('/api/offline/receipt/')) return response({ ok: true, owner: state.manifest.owner,
+          client_id: new URL(url, 'https://local.test').pathname.split('/').pop(), status: 'not_received' });
         const entry = JSON.parse(init.body.get('entry')); state.uploads.push({ entry, photos: init.body.getAll('photos') });
         return state.reply ? state.reply(entry) : response({ ok: true, client_id: entry.client_id, status: 'saved' });
       } });

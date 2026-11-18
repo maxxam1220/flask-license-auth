@@ -47,6 +47,10 @@ async function setup(t, options = {}) {
     if (url === '/api/offline/prepare') return response(manifest);
     if (url === '/api/offline/status') return response({ ok: true, owner: manifest.owner, csrf_token: 'fresh' });
     if (url === '/api/ui-preferences') return response({ ok: true, ui_language: 'vi' });
+    if (url.startsWith('/api/offline/receipt/')) {
+      const id = new URL(url, win.location.origin).pathname.split('/').pop();
+      return response({ ok: true, status: 'not_received', owner: manifest.owner, client_id: id });
+    }
     assert.equal(url, '/api/offline/sync'); const entry = JSON.parse(init.body.get('entry')); uploads.push(entry); events.push(['upload']);
     if (options.holdUpload) await (options.abortableUpload ? new Promise((resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new win.DOMException('Cancelled', 'AbortError')), { once: true });

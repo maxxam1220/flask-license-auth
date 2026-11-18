@@ -53,6 +53,10 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         result = dict(ok=False, code=code, message=t(message), message_source=message, retryable=retryable)
         if reason:
             result["reason"] = reason
+        elif request.endpoint == "offline_sync":
+            # Only internal error codes and the signed point ID belong in logs.
+            app.logger.warning("offline_sync_rejected point_id=%s reason=%s http=%s",
+                               g.get("offline_point_id"), code, status)
         return jsonify(result), status
 
     def owner(user, binding):
@@ -404,6 +408,7 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             point_id = grant["settings"]["id"]
         except (BadData, ValueError, KeyError, TypeError, OverflowError):
             return fail("invalid_grant", "離線準備資料無效；這筆暫存未送出，請聯絡管理員。", 400)
+        g.offline_point_id = point_id
         instant = now()
         if instant >= sync_until:
             return fail("expired", "已超過隔日結束前的補傳期限，暫存仍保留，請聯絡管理員。")

@@ -103,7 +103,7 @@
         const item = photos[index], blob = saved ? item?.blob : item;
         const message = saved ? `第 ${index + 1} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。` :
           `第 ${index + 1} 張照片無法完整讀取，尚未暫存；請重新選擇照片後再按 OK。`;
-        let timeout, reader, expired = false;
+        let timeout, fallback, reader, finished = false;
         try {
           if (!blob || !Number.isInteger(blob.size) || blob.size <= 0 || blob.size > 8 * 1024 * 1024 ||
               (saved && blob.size !== item.size)) throw new Error('Invalid stored photo size');
@@ -115,29 +115,37 @@
               reader.readAsArrayBuffer(blob);
             }));
           if (typeof env.Response === 'function') readers.push(() => new env.Response(blob).arrayBuffer());
-          // Some phone browsers expose arrayBuffer but fail on a camera File.
-          // Try another reader without multiplying the per-photo deadline.
-          const read = async () => {
-            for (const attempt of readers) {
-              if (expired) break;
-              try {
-                const bytes = await attempt();
-                if (Object.prototype.toString.call(bytes) === '[object ArrayBuffer]' && bytes.byteLength === blob.size) return bytes;
-              } catch (_) { /* Try the next native reader with the same bytes. */ }
-            }
-            throw new Error('Photo reading unavailable');
-          };
-          const buffer = await Promise.race([read(), new Promise((_, reject) => {
-            timeout = timers.setTimeout(() => { expired = true; reject(new Error('Photo read timed out')); try { reader?.abort(); } catch (_) {} }, photoReadTimeout);
-          })]);
-          if (Object.prototype.toString.call(buffer) !== '[object ArrayBuffer]' || buffer.byteLength !== blob.size) throw new Error('Incomplete photo bytes');
+          // A camera reader can hang without rejecting. Start the next reader
+          // within the same deadline and accept the first complete byte copy.
+          const buffer = await new Promise((resolve, reject) => {
+            if (!readers.length) return reject(new Error('Photo reading unavailable'));
+            let next = 0, failed = 0;
+            const startNext = () => {
+              if (finished || next === readers.length) return;
+              timers.clearTimeout(fallback);
+              const attempt = readers[next++];
+              if (next < readers.length) fallback = timers.setTimeout(startNext, Math.ceil(photoReadTimeout / readers.length));
+              Promise.resolve().then(attempt).then(bytes => {
+                if (Object.prototype.toString.call(bytes) !== '[object ArrayBuffer]' || bytes.byteLength !== blob.size) throw new Error('Incomplete photo bytes');
+                resolve(bytes);
+              }).catch(() => {
+                if (++failed === readers.length) reject(new Error('Photo reading unavailable'));
+                else startNext();
+              });
+            };
+            timeout = timers.setTimeout(() => reject(new Error('Photo read timed out')), photoReadTimeout);
+            startNext();
+          });
           // Materialize phone camera Files before clearing the form. A File's
           // advertised size alone does not prove its backing bytes can be read.
           const copied = new env.Blob([buffer], { type: blob.type || item.type || '' });
           if (copied.size !== blob.size) throw new Error('Incomplete photo copy');
           copies.push({ blob: copied, name: item.name || 'photo.jpg', type: copied.type, size: copied.size });
         } catch (_) { throw fault('photo_read', message); }
-        finally { if (timeout !== undefined) timers.clearTimeout(timeout); }
+        finally {
+          finished = true; timers.clearTimeout(timeout); timers.clearTimeout(fallback);
+          try { if (reader?.readyState === 1) reader.abort(); } catch (_) {}
+        }
       }
       return copies;
     }
@@ -197,12 +205,44 @@
         try { work(tx, done, fail); } catch (error) { fail(error); }
       });
     }
+    const photoSyncKey = id => 'photo-sync:' + id;
+    const storedAttempts = Symbol('storedAttempts');
+    const photoRevision = row => row?.photo_revision || 0;
+    function applyPhotoSyncState(tx, data) {
+      const photos = new Map();
+      for (const row of data.queue) if (row.photos?.length) {
+        row[storedAttempts] = row.attempts || 0;
+        photos.set(photoSyncKey(row.client_id), row);
+      }
+      for (const saved of data.meta) if (typeof saved.key === 'string' && saved.key.startsWith('photo-sync:')) {
+        const row = photos.get(saved.key);
+        if (row && saved.progress && saved.owner === row.owner && saved.photo_revision === photoRevision(row) && saved.base_attempts === row[storedAttempts]) {
+          const { status, error, retryable, attempts } = saved.progress;
+          Object.assign(row, { status, error, retryable, attempts });
+        } else if (tx.mode === 'readwrite') {
+          // Older tabs may already have removed the row or replaced its photos.
+          tx.objectStore('meta').delete(saved.key);
+        }
+      }
+    }
+    function saveSyncState(tx, row) {
+      if (!row.photos?.length) { tx.objectStore('queue').put(row); return; }
+      // WebKit can invalidate a persisted Blob when a metadata-only update
+      // puts the same IndexedDB record back. Leave its evidence untouched.
+      const { status, error, retryable, attempts } = row;
+      tx.objectStore('meta').put({ key: photoSyncKey(row.client_id), owner: row.owner,
+        photo_revision: photoRevision(row), base_attempts: row[storedAttempts], progress: { status, error, retryable, attempts } });
+    }
+    function deleteQueuedEntry(tx, id) {
+      tx.objectStore('queue').delete(id);
+      tx.objectStore('meta').delete(photoSyncKey(id));
+    }
     function readAll(tx, callback) {
       const result = {}, names = STORES; let remaining = names.length;
       for (const name of names) {
         const request = tx.objectStore(name).getAll();
         request.onsuccess = () => { result[name] = request.result; if (!--remaining) {
-          try { callback(result); } catch (_) { tx.abort(); }
+          try { applyPhotoSyncState(tx, result); callback(result); } catch (_) { tx.abort(); }
         } };
       }
     }
@@ -270,19 +310,37 @@
       if (navigator.onLine === false) throw fault('offline', '目前沒有網路，資料仍保留在此手機。');
       const aborter = new env.AbortController(), isSync = url !== '/api/offline/prepare';
       requests.add(aborter); if (isSync) syncController = aborter;
-      const timer = timers.setTimeout(() => aborter.abort(), timeout);
-      try {
+      let timer, abortTimer, stopWaiting;
+      const readResponse = async () => {
         const response = await fetcher(url, { ...init, signal: aborter.signal, credentials: 'same-origin', cache: 'no-store', redirect: 'error' });
         let json;
         try { json = await response.json(); } catch (error) {
           if (error.name === 'AbortError') throw error;
+          if (!response.ok) return { response, json: null };
           throw fault('response', '伺服器回應無法確認，資料仍保留，請重試。');
         }
         return { response, json };
+      };
+      try {
+        // Some mobile requests or response readers do not settle on abort.
+        // Release the UI at the deadline; any late commit retains the same UUID.
+        const deadline = new Promise((_, reject) => {
+          const end = () => reject(fault('timeout', '連線逾時，資料仍保留，請重試。'));
+          // Accept a complete ACK already being delivered on this event loop turn.
+          // A reader that ignores cancellation cannot keep the queue busy.
+          stopWaiting = () => { abortTimer = timers.setTimeout(end, 0); };
+          aborter.signal.addEventListener('abort', stopWaiting, { once: true });
+          timer = timers.setTimeout(() => { aborter.abort(); end(); }, timeout);
+        });
+        return await Promise.race([readResponse(), deadline]);
       } catch (error) {
-        if (error.name === 'AbortError') throw fault(isSync && cancelled ? 'cancelled' : 'timeout', isSync && cancelled ? '已停止補傳，尚未確認的資料仍保留。' : '連線逾時，資料仍保留，請重試。');
+        if (aborter.signal.aborted || error.name === 'AbortError') throw fault(isSync && cancelled ? 'cancelled' : 'timeout', isSync && cancelled ? '已停止補傳，尚未確認的資料仍保留。' : '連線逾時，資料仍保留，請重試。');
+        if (error.name === 'TypeError') throw fault('network', '無法連線，待補傳資料仍保留。');
         throw error;
-      } finally { timers.clearTimeout(timer); requests.delete(aborter); if (syncController === aborter) syncController = null; }
+      } finally {
+        timers.clearTimeout(timer); timers.clearTimeout(abortTimer); aborter.signal.removeEventListener('abort', stopWaiting);
+        requests.delete(aborter); if (syncController === aborter) syncController = null;
+      }
     }
     function validManifest(value) {
       return value?.ok === true && value.version === 1 && checklistCapable(value) && typeof value.owner === 'string' && value.owner.length <= 300 && value.identity &&
@@ -415,17 +473,17 @@
         const lease = data.meta.find(item => item.key === 'sync');
         if (lease?.until > now()) return fail(fault('busy', '其他分頁正在補傳，請稍後再刪除。'));
         if (!manifest || !row || (row.owner !== manifest.owner && row.user_id !== manifest.identity.id)) return fail(fault('owner', '無法操作其他帳號的本機資料。'));
-        tx.objectStore('queue').delete(client_id); done(true);
+        deleteQueuedEntry(tx, client_id); done(true);
       }));
       setMessage('已刪除這筆尚未確認的本機資料。'); syncState = {}; broadcast(); return refresh();
     }
-    async function lease(owner, release = false) {
+    async function lease(owner, release = false, requestTimeout = uploadTimeout) {
       return transaction(['meta'], 'readwrite', (tx, done, fail) => {
         const store = tx.objectStore('meta'), request = store.get('sync');
         request.onsuccess = () => { try {
           const previous = request.result;
           if (release) { if (previous?.tab === tabId) store.delete('sync'); done(true); }
-          else if (!previous || previous.until < now() || previous.tab === tabId) { store.put({ key: 'sync', tab: tabId, owner, until: now() + uploadTimeout + 15000 }); done(true); }
+          else if (!previous || previous.until < now() || previous.tab === tabId) { store.put({ key: 'sync', tab: tabId, owner, until: now() + requestTimeout + 15000 }); done(true); }
           else done(false);
         } catch (error) { fail(error); } };
       });
@@ -440,7 +498,6 @@
         if (mutation) mutation(tx, row); done(row);
       }));
     }
-    const photoRevision = row => row?.photo_revision || 0;
     const EXISTING_PHOTO_RECEIPT = '伺服器已有這筆紀錄，已確認收件；新選的照片未覆蓋原紀錄。';
     async function inspectReceipt(client_id, owner, revision) {
       const { response, json } = await network('/api/offline/receipt/' + encodeURIComponent(client_id) + '?owner=' + encodeURIComponent(owner));
@@ -464,7 +521,7 @@
         tx.objectStore('receipts').put({ client_id: row.client_id, owner, token: row.token, slot: row.slot, day: row.day,
           code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, observed_at: row.observed_at,
           ack: json, received_ms: now(), ...savedChecklist(row) });
-        tx.objectStore('queue').delete(row.client_id); done(true);
+        deleteQueuedEntry(tx, row.client_id); done(true);
       }));
     }
     async function repairPhotos(client_id, files, confirmation) {
@@ -520,7 +577,7 @@
           // Only an explicit, server-checked photo reselection changes bytes.
           item.photos = copies; item.photo_revision = photoRevision(item) + 1;
           item.status = 'pending'; item.error = ''; item.retryable = true;
-          tx.objectStore('queue').put(item); done(true);
+          tx.objectStore('queue').put(item); tx.objectStore('meta').delete(photoSyncKey(client_id)); done(true);
         }));
         setMessage('照片已重新保存，原巡檢時間、備註與異常內容保留；請按「同步待傳紀錄」。',
           { kind: 'photo-repair', client_id, photo_revision: photoRevision(row) + 1 });
@@ -538,17 +595,40 @@
       // Claim synchronously: two clicks can otherwise both pass the guard
       // while their first IndexedDB reads are still in flight.
       syncing = true; cancelled = false; const started = now();
-      let owner, revision, leaseHeld = false; const startEpoch = epoch;
+      let owner, revision, firstFailure, leaseHeld = false; const startEpoch = epoch;
       syncState = { total: state.pending, processed: 0, saved: 0, failed: 0, elapsed: 0, current: '', phase: 'checking', cancelled: false };
+      const checkActive = () => {
+        if (epoch !== startEpoch) throw fault('owner', '帳號已變更，已停止補傳。');
+        if (cancelled) throw fault('cancelled', '已停止補傳，尚未確認的資料仍保留。');
+      };
+      const retryTransient = async (request, retry) => {
+        try {
+          const result = await request();
+          if (!result || ![408, 500, 502, 503, 504].includes(result.response.status) || result.json?.retryable === false) return result;
+        } catch (error) {
+          if (!['network', 'timeout', 'response'].includes(error.code)) throw error;
+        }
+        checkActive();
+        syncState.phase = 'retrying'; await refresh();
+        const delay = options.retryDelay ?? 750;
+        if (delay) await new Promise(resolve => timers.setTimeout(resolve, delay));
+        checkActive();
+        return retry();
+      };
       const ticker = timers.setInterval(() => { syncState.elapsed = Math.floor((now() - started) / 1000); state = { ...state, sync: { ...syncState, current: state.locked ? '' : syncState.current, running: syncing } }; announce(); }, 1000);
       try {
         await refresh();
         owner = state.owner; revision = state.revision;
+        if (selection.expectedOwner && selection.expectedOwner !== owner) return state;
         if (!owner || state.locked) throw fault('locked', '請先連線登入原帳號，再補傳。');
         leaseHeld = await lease(owner);
         if (!leaseHeld) throw fault('busy', '另一個分頁正在補傳，請稍候。');
         if (cancelled || epoch !== startEpoch) throw fault('cancelled', '已停止補傳，尚未確認的資料仍保留。');
-        const status = await network('/api/offline/status');
+        const checkServer = () => network('/api/offline/status');
+        const status = await retryTransient(checkServer, async () => {
+          syncState.phase = 'checking'; await refresh(); checkActive();
+          return checkServer();
+        });
         if (!status.response.ok || status.json?.ok !== true || status.json.owner !== owner || typeof status.json.csrf_token !== 'string') {
           if ([401, 403].includes(status.response.status) || (status.response.ok && status.json?.ok === true && status.json.owner !== owner)) {
             await lock('登入或手機綁定已變更，請用原帳號重新登入後補傳。', { owner, revision });
@@ -556,32 +636,39 @@
           }
           throw fault('response', '目前無法確認伺服器連線，暫存與離線準備仍保留；請稍後重試。');
         }
-        const ids = state.queue.filter(row => !row.stale_owner && (!selection.client_id || row.client_id === selection.client_id)).map(row => row.client_id);
+        const eligible = row => !selection.retryableOnly || (row.status !== 'blocked' && row.retryable !== false);
+        const ids = state.queue.filter(row => !row.stale_owner && eligible(row) && (!selection.client_id || row.client_id === selection.client_id)).map(row => row.client_id);
         syncState.total = ids.length;
         for (const id of ids) {
           if (cancelled || epoch !== startEpoch) break;
-          if (!await lease(owner)) break;
-          const row = await ownedEntry(id, owner, (tx, item) => { item.status = 'pending'; item.attempts++; tx.objectStore('queue').put(item); });
-          if (!row) { syncState.processed++; continue; }
-          syncState.current = row.code; syncState.phase = 'uploading'; await refresh();
+          if (!await lease(owner)) throw fault('busy', '另一個分頁正在補傳，請稍候。');
+          const row = await ownedEntry(id, owner, (tx, item) => {
+            if (!eligible(item)) return;
+            item.status = 'pending'; item.attempts = (item.attempts || 0) + 1; saveSyncState(tx, item);
+          });
+          if (!row || !eligible(row)) { syncState.processed++; continue; }
+          // Allow larger camera payloads time to transfer over a weak connection.
+          const bytes = (row.photos || []).reduce((sum, photo) => sum + (Number(photo?.size) || 0), 0);
+          const rowTimeout = options.uploadTimeout || Math.min(180000, uploadTimeout + Math.floor(bytes / 131072) * 1000);
+          syncState.current = row.code; syncState.uploadTimeoutSeconds = Math.ceil(rowTimeout / 1000);
+          syncState.phase = 'uploading'; await refresh();
           if (cancelled || epoch !== startEpoch) break;
           try {
-            if (photoRevision(row)) {
+            // A previous upload may have committed while the phone lost the
+            // response. Verify that UUID before touching its original photos.
+            const reconcile = async (beforeUpload) => {
               const known = await inspectReceipt(id, owner, revision);
-              if (cancelled || epoch !== startEpoch) break;
-              if (known.status === 'already_synced') {
-                await settleKnownReceipt(row, owner, known, startEpoch, revision);
-                syncState.saved++; syncState.processed++; syncState.existingPhotoReceipt = true;
-                broadcast(); await refresh(); continue;
-              }
+              checkActive();
+              if (known.status === 'not_received') return false;
+              await settleKnownReceipt(row, owner, known, startEpoch, revision);
+              syncState.saved++;
+              if (beforeUpload && photoRevision(row)) syncState.existingPhotoReceipt = true;
+              return true;
+            };
+            if ((photoRevision(row) || row.attempts > 1) && await reconcile(true)) {
+              syncState.processed++; broadcast(); await refresh(); continue;
             }
             const photos = await copyPhotos(row.photos, true);
-            if (cancelled || epoch !== startEpoch) break;
-            // Reading a large camera image may outlast a lease in a suspended
-            // tab. Check ownership again before uploading the immutable bytes.
-            if (!await lease(owner)) break;
-            const latestRow = await ownedEntry(id, owner);
-            if (!latestRow || photoRevision(latestRow) !== photoRevision(row)) { syncState.processed++; continue; }
             if (cancelled || epoch !== startEpoch) break;
             const Form = options.FormData || env.FormData, body = new Form();
             const entry = { client_id: row.client_id, owner: row.owner, token: row.token, grant: row.grant, slot: row.slot,
@@ -593,18 +680,29 @@
               try { body.append('photos', photo.blob, photo.name); }
               catch (_) { throw fault('photo_read', `第 ${index + 1} 張暫存照片無法完整讀取；資料仍保留，請稍後重試或聯絡管理員，請勿清除瀏覽器資料。`); }
             }
-            const { response, json } = await network('/api/offline/sync', { method: 'POST', headers: { 'X-CSRF-Token': status.json.csrf_token }, body }, uploadTimeout);
+            // Recheck after every asynchronous read or receipt query. A
+            // suspended tab may resume after another rewrote a photo or signed out.
+            const upload = async () => {
+              if (!await lease(owner, false, rowTimeout)) throw fault('busy', '另一個分頁正在補傳，請稍候。');
+              const latestRow = await ownedEntry(id, owner); checkActive();
+              if (!latestRow || photoRevision(latestRow) !== photoRevision(row)) return null;
+              syncState.phase = 'uploading';
+              return network('/api/offline/sync', { method: 'POST', headers: { 'X-CSRF-Token': status.json.csrf_token }, body }, rowTimeout);
+            };
+            const result = await retryTransient(upload, async () => await reconcile(false) ? null : upload());
+            if (!result) { syncState.processed++; broadcast(); await refresh(); continue; }
+            const { response, json } = result;
             const acknowledged = response.ok && json?.ok === true && ['saved', 'already_synced'].includes(json.status) && json.client_id === id;
             if (acknowledged) {
               // ACK is durable together with removal. Losing this transaction safely retries the same UUID.
-              const photoChanged = await transaction(['queue', 'receipts'], 'readwrite', (tx, done, fail) => {
+              const photoChanged = await transaction(['queue', 'receipts', 'meta'], 'readwrite', (tx, done, fail) => {
                 const request = tx.objectStore('queue').get(id);
                 request.onsuccess = () => { try {
                   if (request.result?.owner === owner) {
                     tx.objectStore('receipts').put({ client_id: id, owner, token: row.token, slot: row.slot, day: row.day,
                       code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, observed_at: row.observed_at,
                       photo_revision: photoRevision(row), ack: json, received_ms: now(), ...savedChecklist(row) });
-                    tx.objectStore('queue').delete(id);
+                    deleteQueuedEntry(tx, id);
                     return done(photoRevision(request.result) !== photoRevision(row));
                   }
                   done(false);
@@ -622,20 +720,23 @@
               }
               const retryable = response.status >= 500 || json?.retryable !== false || json?.ok === true;
               await ownedEntry(id, owner, (tx, item) => { if (photoRevision(item) !== photoRevision(row)) return;
-                item.status = retryable ? 'retry' : 'blocked'; item.error = reason; item.retryable = retryable; tx.objectStore('queue').put(item); });
+                item.status = retryable ? 'retry' : 'blocked'; item.error = reason; item.retryable = retryable; saveSyncState(tx, item); });
+              if (!firstFailure) firstFailure = reason;
               syncState.failed++;
             }
           } catch (error) {
-            if (epoch !== startEpoch || error.code === 'owner') throw error;
+            if (epoch !== startEpoch || error.code === 'owner' || error.code === 'busy') throw error;
+            const reason = error.message || '連線失敗，資料仍保留。';
             await ownedEntry(id, owner, (tx, item) => { if (photoRevision(item) !== photoRevision(row)) return;
-              item.status = 'retry'; item.error = error.message || '連線失敗，資料仍保留。'; item.retryable = true; tx.objectStore('queue').put(item); });
+              item.status = 'retry'; item.error = reason; item.retryable = true; saveSyncState(tx, item); });
+            if (!firstFailure) firstFailure = reason;
             syncState.failed++;
-            if (['timeout', 'cancelled', 'offline'].includes(error.code) || error instanceof TypeError) { syncState.processed++; break; }
+            if (['timeout', 'cancelled', 'offline', 'network'].includes(error.code)) { syncState.processed++; break; }
           }
           syncState.processed++; broadcast(); await refresh();
         }
         setMessage(cancelled ? '已停止補傳，尚未確認的資料仍保留。' : syncState.existingPhotoReceipt ?
-          EXISTING_PHOTO_RECEIPT :
+          EXISTING_PHOTO_RECEIPT : !syncState.saved && firstFailure ? firstFailure :
           `已確認 ${syncState.saved} 筆；其餘未確認資料仍保留在此手機。`);
       } catch (error) {
         setMessage(error.message || '無法連線，待補傳資料仍保留。');
@@ -734,7 +835,7 @@
       navigationAllowed = false, pageActive = true, pageEpoch = 0, selectedPhotos = [], canEditPhotos = false, latestState, preparing = false, uiSyncing = false, updatingLocale = false,
       checklistUIKey = '', checklistLocale = '';
     let uiRequest = null, uiRequestEpoch = 0, uiSessionKnown = null, localNotice = null, queueSignature = '', lastManifestUIKey = null,
-      photoReselection = null;
+      photoReselection = null, queueNotice = null;
     const savedResultPanels = new Map();
     const uiIdentityKey = state => JSON.stringify([state?.owner, state?.revision, state?.identity?.ui_language, state?.identity?.simple_executor_ui]);
     const uiPreferencesFromIdentity = identity => ({ ui_language: identity.ui_language,
@@ -787,6 +888,39 @@
       one('status')?.focus();
     }
     const reportError = error => showNotice(error.message || '操作未完成，原有資料仍保留。');
+    function syncPhaseText(sync) {
+      if (sync.phase === 'retrying') return t('正在重試，請稍候…');
+      if (sync.phase === 'uploading') return t('正在處理本筆紀錄，送出後最多等 {seconds} 秒', { seconds: sync.uploadTimeoutSeconds || 30 });
+      return t('正在檢查連線（最多 5 秒）');
+    }
+    function updateQueueFeedback(state) {
+      let notice = queueNotice;
+      if (state.locked && !notice?.public) notice = null;
+      if (!state.locked && state.sync?.running) {
+        const repairing = photoReselection?.owner === state.owner;
+        const progressText = repairing ? t('正在確認收件並讀取新照片…') : syncPhaseText(state.sync);
+        notice = { progressText, clientId: repairing ? photoReselection.clientId : notice?.clientId };
+      } else if (notice?.clientId && !uiSyncing && !state.queue.some(row => row.client_id === notice.clientId)) {
+        // A peer can acknowledge or remove a draft after a local failure.
+        queueNotice = notice = state.receipts.some(row => row.client_id === notice.clientId) ? { source: '已同步完成' } : null;
+      } else if (notice?.error && !state.locked && !state.pending) {
+        queueNotice = notice = null;
+      }
+      // Report a card action where it was taken. Once acknowledged, the card
+      // disappears and its result stays next to the queue's sync control.
+      const rows = all('row-feedback'), queue = one('queue-feedback');
+      const row = notice?.clientId && rows.find(el => el.dataset.offlineRowFeedback === notice.clientId);
+      const target = row || queue;
+      let message = notice ? notice.progressText || t(notice.source) : '';
+      if (notice?.savedPhotos) message = t('新照片已存到此手機。{reason}', { reason: message });
+      for (const el of [queue, ...rows]) {
+        if (!el) continue;
+        const value = el === target ? message : '';
+        el.hidden = !value;
+        if (el.textContent !== value) el.textContent = value;
+        el.dataset.state = notice?.error ? 'error' : 'info';
+      }
+    }
     let voiceSequence = 0, scanVoicePending = root.PatrolVoice?.takeScan?.() === true;
     const voice = (kind, id, auto = true) => { try { root.PatrolVoice?.report(kind, { id, auto }); } catch (_) { /* Optional feedback never interrupts capture. */ } };
     const voiceFailure = () => voice('not_saved', `failure:${Date.now()}:${++voiceSequence}`);
@@ -921,7 +1055,7 @@
       const oldIdentity = latestState?.identity;
       if (latestState && latestState.owner !== state.owner) {
         if (latestState.owner) { document.dispatchEvent(new CustomEvent('patrol:voice-owner-changed')); scanVoicePending = false; }
-        localNotice = null;
+        localNotice = null; queueNotice = null;
         if (oldIdentity) uiSessionKnown = null;
       }
       const manifestUIKey = state.identity ? uiIdentityKey(state) : null;
@@ -959,7 +1093,7 @@
       for (const link of all('open')) { if (state.supported === false) link.title = t(state.supportMessage); }
       if (normalProgress && !normalProgress.saving && !normalProgress.result) {
         normalProgress.status.textContent = state.sync?.running ?
-          t('{phase} · 已等 {seconds} 秒', { phase: state.sync.phase === 'uploading' ? t('正在上傳本筆紀錄（最多 30 秒）') : t('正在檢查連線（最多 5 秒）'), seconds: state.sync.elapsed || 0 }) :
+          t('{phase} · 已等 {seconds} 秒', { phase: syncPhaseText(state.sync), seconds: state.sync.elapsed || 0 }) :
           t('已保存在手機，正在開啟收據或待傳紀錄…');
         normalProgress.cancel.disabled = !state.sync?.running;
       }
@@ -1029,7 +1163,7 @@
       const keepPhotoInput = list && photoReselection && list.contains(photoReselection.input) &&
         !state.locked && state.owner === photoReselection.owner;
       if (keepPhotoInput) {
-        for (const action of list.querySelectorAll('button')) action.disabled = Boolean(state.sync?.running);
+        for (const action of list.querySelectorAll('button, input[type=file]')) action.disabled = Boolean(state.sync?.running) && action !== photoReselection.input;
       } else if (list && queueSignature !== nextQueueSignature) {
         queueSignature = nextQueueSignature;
         list.replaceChildren();
@@ -1037,7 +1171,7 @@
           const item = document.createElement('li'); item.className = 'offline-queue-item';
           const heading = document.createElement('strong'); heading.textContent = `${row.code} · ${pointName(row.name, row.name_i18n)}`;
           const info = document.createElement('p'); info.textContent = `${stageText(row.stage)} · ${slotText(row.slot)} · ${timeText(row.observed_at)}`;
-          const status = document.createElement('p'); status.className = row.status === 'blocked' ? 'offline-item-error' : 'offline-item-status';
+          const status = document.createElement('p'); status.className = row.error || row.status === 'blocked' ? 'offline-item-error' : 'offline-item-status';
           status.textContent = t(row.error || (row.checklist_review_required ? '這筆舊版暫存未記錄點檢勾選。可先同步核對是否已有收據；若被拒絕，請核對後明確刪除，再到現場重新掃描。' :
             row.execution_unconfirmed ? pendingExecutionHint : '已暫存此手機，尚未收到伺服器確認。'));
           const details = document.createElement('small'); details.textContent = `${row.is_abnormal ? t('異常回報') + ' · ' : ''}${t('{count} 張照片', { count: row.photo_count })}${row.note ? ' · ' + row.note : ''}`;
@@ -1054,33 +1188,48 @@
           }
           const actions = document.createElement('div'); actions.className = 'offline-queue-actions';
           if (!row.stale_owner && row.stage === 'inspect' && row.photo_count > 0) {
-            const repair = document.createElement('button'); repair.type = 'button'; repair.className = 'button button-small offline-photo-repair';
-            repair.textContent = t('重新選照片'); repair.disabled = Boolean(state.sync?.running);
-            const choose = document.createElement('input'); choose.type = 'file'; choose.multiple = true; choose.hidden = true;
+            const repair = document.createElement('label'); repair.className = 'button button-secondary button-small offline-photo-repair';
+            repair.textContent = t('重新選照片');
+            const choose = document.createElement('input'); choose.type = 'file'; choose.multiple = true; choose.disabled = Boolean(state.sync?.running);
             choose.accept = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
             choose.setAttribute('aria-label', t('為 {code} 重新選照片', { code: row.code }));
-            repair.addEventListener('click', () => choose.click());
+            choose.addEventListener('click', event => { if (photoReselection || uiSyncing || latestState?.sync?.running) event.preventDefault(); });
             choose.addEventListener('change', async () => {
-              if (photoReselection) return;
+              if (photoReselection || uiSyncing || latestState?.sync?.running || latestState?.owner !== state.owner) return;
               const files = Array.from(choose.files || []);
               if (!files.length) return;
+              const repairPageEpoch = pageEpoch;
+              const stillActive = () => pageActive && pageEpoch === repairPageEpoch && !latestState?.locked && latestState?.owner === state.owner;
+              let repaired = false;
               try {
                 validatePhotos(files);
-                if (!confirm(t('為 {code} 改用新選的 {count} 張照片？\n原巡檢時間、備註與異常內容保留。若伺服器已有紀錄，則確認收件，不覆蓋原照片。', { code: row.code, count: files.length }))) return;
-                photoReselection = { input: choose, owner: state.owner };
-                localNotice = null; await core.repairPhotos(row.client_id, files, true);
-              } catch (error) { reportError(error); }
+                if (!confirm(t('為 {code} 更換 {count} 張照片並立即補傳這筆巡檢？\n原巡檢時間、備註、異常及點檢內容都會保留。若已有收據，會直接顯示結果。', { code: row.code, count: files.length }))) return;
+                photoReselection = { input: choose, owner: state.owner, clientId: row.client_id };
+                localNotice = null; queueNotice = null;
+                const result = await core.repairPhotos(row.client_id, files, true);
+                if (stillActive()) {
+                  repaired = result.status === 'repaired';
+                  if (!repaired) queueNotice = { source: latestState.message || '已同步完成' };
+                }
+              } catch (error) {
+                if (stillActive()) queueNotice = { source: error.message || '操作未完成，原有資料仍保留。', clientId: row.client_id, error: true };
+                else if (pageActive && pageEpoch === repairPageEpoch && latestState?.locked) queueNotice = { source: '請先連線登入原帳號，再補傳。', public: true, error: true };
+              }
               finally {
                 choose.value = '';
                 if (photoReselection?.input === choose) photoReselection = null;
                 if (latestState) render(latestState);
               }
+              if (repaired && stillActive()) await syncQueue(row.client_id);
             });
-            actions.append(repair, choose);
+            repair.append(choose); actions.append(repair);
           }
-          actions.append(remove); item.append(actions); list.append(item);
+          const feedback = document.createElement('p'); feedback.className = 'offline-queue-feedback';
+          feedback.dataset.offlineRowFeedback = row.client_id; feedback.setAttribute('role', 'status'); feedback.hidden = true;
+          actions.append(remove); item.append(actions, feedback); list.append(item);
         }
       }
+      updateQueueFeedback(state);
       showPoint().catch(reportError);
     }
     core.subscribe(render);
@@ -1194,24 +1343,60 @@
       try { if (latestState) render(latestState); await core.prepare(); } catch (error) { reportError(error); }
       finally { preparing = false; if (latestState) render(latestState); button.removeAttribute('aria-busy'); button.disabled = !latestState?.online || latestState?.sync?.running; if (!latestState?.prepared) refreshUIPreferences(); }
     });
-    one('sync')?.addEventListener('click', async () => {
+    async function syncQueue(clientId, retryableOnly = false) {
       // Claim before the first await; a second click must not narrate the
       // core's still-running snapshot as a completed synchronization.
       if (uiSyncing || latestState?.sync?.running) return;
-      uiSyncing = true; one('sync').disabled = true;
+      uiSyncing = true; if (one('sync')) one('sync').disabled = true;
+      queueNotice = { source: '正在檢查連線（最多 5 秒）', clientId };
+      if (latestState) updateQueueFeedback(latestState);
       localNotice = null; const owner = latestState?.owner, syncPageEpoch = pageEpoch, before = new Set((latestState?.receipts || []).map(row => row.client_id));
       try {
-        const state = await core.sync();
-        if (state.owner !== owner || state.locked || !pageActive || syncPageEpoch !== pageEpoch) return;
+        const state = await core.sync(retryableOnly ? { retryableOnly: true, expectedOwner: owner } : clientId ? { client_id: clientId } : {});
+        if (!pageActive || syncPageEpoch !== pageEpoch) return;
+        if (state.locked) {
+          queueNotice = { source: state.storageUnavailable ? '手機離線儲存暫時無法使用；已保存的資料不會刪除，請重試。' : '請先連線登入原帳號，再補傳。', error: true, public: true };
+          return;
+        }
+        if (state.owner !== owner || latestState?.owner !== owner) return;
+        const row = clientId && state.queue.find(row => row.client_id === clientId);
+        queueNotice = { source: (state.sync?.failed && row?.error) || state.message || '操作未完成，原有資料仍保留。',
+          clientId: row ? clientId : null, savedPhotos: Boolean(row),
+          error: Boolean(state.sync?.failed || state.sync?.errorCode || state.sync?.cancelled || !state.online || (state.pending && !state.sync?.saved)) };
         const fresh = state.receipts.filter(row => !before.has(row.client_id));
         if (fresh.length) voice(state.pending ? 'sync_partial' : 'sync_confirmed', `sync:${fresh.map(row => row.client_id).join(',').slice(0,145)}`);
-        else if (state.pending) voice(!state.online || state.blocked || state.sync?.cancelled || state.sync?.failed || state.sync?.errorCode ? 'not_saved' : 'offline_stored', `retry:${Date.now()}:${++voiceSequence}`);
+        else if (state.pending && !retryableOnly) voice(!state.online || state.blocked || state.sync?.cancelled || state.sync?.failed || state.sync?.errorCode ? 'not_saved' : 'offline_stored', `retry:${Date.now()}:${++voiceSequence}`);
       } catch (error) {
-        if (pageActive && syncPageEpoch === pageEpoch && latestState?.owner === owner) { reportError(error); voiceFailure(); }
+        if (pageActive && syncPageEpoch === pageEpoch && latestState?.owner === owner) {
+          queueNotice = { source: error.message || '操作未完成，原有資料仍保留。', clientId, savedPhotos: Boolean(clientId), error: true };
+          if (!retryableOnly) voiceFailure();
+        }
       }
-      finally { uiSyncing = false; if (latestState) render(latestState); }
-    });
-    one('cancel-sync')?.addEventListener('click', () => core.cancelSync());
+      finally {
+        uiSyncing = false;
+        if (syncPageEpoch !== pageEpoch) queueNotice = null;
+        if (latestState) render(latestState);
+      }
+    }
+    let reconnectOwner = null, reconnectTimer, reconnectPaused = false;
+    function clearReconnect() {
+      clearTimeout(reconnectTimer);
+      reconnectOwner = null;
+    }
+    function scheduleReconnect() {
+      clearTimeout(reconnectTimer);
+      if (!reconnectOwner || document.visibilityState === 'hidden' || !pageActive) return;
+      reconnectTimer = setTimeout(() => {
+        const owner = reconnectOwner;
+        clearReconnect();
+        if (!owner || reconnectPaused || !pageActive || document.visibilityState === 'hidden' || navigator.onLine === false ||
+            latestState?.owner !== owner || latestState.locked || latestState.sync?.running || uiSyncing ||
+            photoReselection || preparing || hasDraft()) return;
+        if (latestState.queue.some(row => !row.stale_owner && !isBlocked(row))) syncQueue(undefined, true);
+      }, 750);
+    }
+    one('sync')?.addEventListener('click', () => { clearReconnect(); reconnectPaused = false; syncQueue(); });
+    one('cancel-sync')?.addEventListener('click', () => { clearReconnect(); reconnectPaused = true; core.cancelSync(); });
     one('close-point')?.addEventListener('click', () => {
       if (form?.dataset.submitting === 'true') return;
       if (draftPresent(form) && !confirm(t('離開點位會放棄尚未暫存的內容，確定離開？'))) return;
@@ -1374,14 +1559,22 @@
       // instead of replacing that navigation with a delayed receipt redirect.
       normalProgress.abandon?.();
     });
-    window.addEventListener('online', () => { if (localNotice?.tone === 'offline') localNotice = null; core.getState().then(refreshUIPreferences).catch(reportError); });
-    window.addEventListener('offline', () => { uiSessionKnown = null; cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
+    window.addEventListener('online', () => {
+      if (localNotice?.tone === 'offline') localNotice = null;
+      if (shell && !reconnectPaused) {
+        reconnectOwner = latestState?.owner;
+        scheduleReconnect();
+      }
+      core.getState().then(refreshUIPreferences).catch(reportError);
+    });
+    document.addEventListener('visibilitychange', scheduleReconnect);
+    window.addEventListener('offline', () => { clearReconnect(); uiSessionKnown = null; cancelUIPreferences(); core.cancelSync(); core.getState().catch(reportError); });
     window.addEventListener('pageshow', event => {
       pageActive = true; navigationAllowed = false; renderPhotos();
       core.getState().then(() => { if (event.persisted) refreshUIPreferences(); }).catch(() => {});
     });
     window.addEventListener('pagehide', () => {
-      pageActive = false; ++pageEpoch; normalProgress?.abandon?.();
+      clearReconnect(); pageActive = false; ++pageEpoch; normalProgress?.abandon?.();
       uiSessionKnown = null; cancelUIPreferences(); releasePreviews();
     });
     document.addEventListener('patrol:locale-changed', () => { if (!updatingLocale && latestState) { render(latestState); renderPhotos(); } });

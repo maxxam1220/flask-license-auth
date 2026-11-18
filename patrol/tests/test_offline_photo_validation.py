@@ -60,3 +60,20 @@ def test_nonphoto_errors_do_not_blame_photos(application, anytime, field, value,
     rejected = assert_error(sync(anytime.inspector, prepared, item), "invalid_entry", status=400)
     assert rejected["reason"] == reason and "照片" not in rejected["message"]
     assert db.session.query(OfflineSubmission).count() == db.session.query(Inspection).count() == 0
+
+
+def test_photo_decode_and_http_size_failures_explain_recovery(application, anytime, caplog):
+    prepared = prepare(anytime.inspector)
+    item = entry(prepared, anytime.direct, anytime.clock[0], note="private note")
+    name = "private-photo-name.png"
+    with caplog.at_level(logging.WARNING, logger=application.logger.name):
+        invalid = sync(anytime.inspector, prepared, item, photos=[(BytesIO(b"broken image"), name)])
+        assert_error(invalid, "invalid_photos", status=400)
+        assert "reason=invalid_photos" in caplog.text
+        application.config["MAX_CONTENT_LENGTH"] = 1024
+        too_large = sync(anytime.inspector, prepared, item, photos=[(BytesIO(b"x" * 2048), name)])
+        rejected = assert_error(too_large, "request_rejected", status=413)
+    assert "較小的照片" in rejected["message"]
+    assert "reason=request_rejected http=413" in caplog.text
+    assert all(value not in caplog.text for value in (item["note"], item["grant"], item["token"], name))
+    assert db.session.query(OfflineSubmission).count() == db.session.query(Inspection).count() == 0

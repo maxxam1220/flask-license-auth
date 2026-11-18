@@ -18,7 +18,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/patrol-voice.css">
   <script defer src="/static/patrol-voice.js?v=ios-audio-2"></script>
-  <script defer src="{{ url_for('static', filename='offline.js', v='offline-scan-1') }}"></script>
+  <script defer src="{{ url_for('static', filename='offline.js', v='photo-sync-1') }}"></script>
   <script defer src="/static/offline-update.js"></script>
   <script defer src="/static/patrol-scanner.js"></script>
 </head>
@@ -71,7 +71,8 @@
   <section class="offline-panel offline-queue-panel" id="offline-queue" aria-labelledby="offline-queue-title">
     <div class="offline-section-heading"><h2 id="offline-queue-title"><span data-i18n="待傳紀錄">{{ t('待傳紀錄') }}</span></h2><span class="offline-queue-summary" data-offline-queue-summary><span data-i18n="尚無待傳紀錄">{{ t('尚無待傳紀錄') }}</span></span></div>
     <div class="offline-actions offline-sync-actions"><button class="button button-primary" type="button" data-offline-sync disabled>{{ icon('download') }}<span data-i18n="同步待傳紀錄">{{ t('同步待傳紀錄') }}</span></button><button class="button button-secondary" type="button" data-offline-cancel-sync hidden><span data-i18n="取消本輪同步">{{ t('取消本輪同步') }}</span></button></div>
-    <p class="offline-help offline-sync-help"><span data-i18n="連線檢查最多 5 秒，每筆上傳最多 30 秒。逾時或取消後，尚未確認的紀錄仍保留，可稍後重試。">{{ t('連線檢查最多 5 秒，每筆上傳最多 30 秒。逾時或取消後，尚未確認的紀錄仍保留，可稍後重試。') }}</span></p>
+    <p class="offline-queue-feedback" data-offline-queue-feedback role="status" hidden></p>
+    <p class="offline-help offline-sync-help"><span data-i18n="此頁在前景時，恢復連線會自動補傳可重試的紀錄。每次檢查連線最多等 5 秒，上傳依照片大小最多等 30 秒至 3 分鐘。連線暫時失敗會再試一次，未確認的紀錄仍保留。">{{ t('此頁在前景時，恢復連線會自動補傳可重試的紀錄。每次檢查連線最多等 5 秒，上傳依照片大小最多等 30 秒至 3 分鐘。連線暫時失敗會再試一次，未確認的紀錄仍保留。') }}</span></p>
     <div class="offline-empty" data-offline-empty>{{ icon('list') }}<p><span data-i18n="目前沒有待傳紀錄">{{ t('目前沒有待傳紀錄') }}</span></p><span><span data-i18n="掃描現場 QR Code，再確認打卡。">{{ t('掃描現場 QR Code，再確認打卡。') }}</span></span></div>
     <ul class="offline-queue" data-offline-queue aria-label="{{ t('本機待傳打卡紀錄') }}" data-i18n-aria-label="本機待傳打卡紀錄"></ul>
   </section>

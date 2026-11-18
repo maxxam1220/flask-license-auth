@@ -2878,6 +2878,10 @@ def create_app(config=None):
                     ("not_saved" if request.endpoint == "confirm_checkin" and error.code not in (403, 404) else "point_unavailable"))
             voice_result = voice_marker(kind)
         if request.path.startswith("/api/offline/"):
+            if request.endpoint == "offline_sync":
+                app.logger.warning("offline_sync_rejected reason=request_rejected http=%s", error.code)
+                if error.code == 413:
+                    source = "上傳內容太大，這筆仍在手機上。請重新選擇較小的照片，最多 3 張，每張不超過 8 MB。"
             source = source or "同步未完成，暫存仍保留；請重新連線後再試。"
             return {"ok": False, "code": "request_rejected", "message": t(source), "message_source": source,
                     "retryable": error.code in (429,)}, error.code

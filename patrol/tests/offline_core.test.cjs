@@ -18,11 +18,13 @@ function harness(options = {}) {
     state.calls.push(url);
     if (url.endsWith('/prepare')) return state.prepare ? state.prepare(init) : response(state.manifest);
     if (url.endsWith('/status')) return state.status ? state.status(init) : response({ ok: true, owner: state.manifest.owner, csrf_token: 'fresh-csrf', server_time: new Date(state.now).toISOString(), identity: state.manifest.identity });
+    if (url.startsWith('/api/offline/receipt/')) return state.receipt ? state.receipt(url, init) : response({ ok: true, owner: state.manifest.owner,
+      client_id: new URL(url, 'https://local.test').pathname.split('/').pop(), status: 'not_received' });
     assert.equal(url, '/api/offline/sync');
     const entry = JSON.parse(init.body.get('entry')); state.uploads.push({ entry, init });
     return state.sync ? state.sync(entry, init) : response({ ok: true, status: 'saved', client_id: entry.client_id, receipt_url: '/checkins/1', record_id: 1, received_at: new Date(state.now).toISOString(), observed_at: entry.observed_at });
   };
-  const core = createCore({ indexedDB, databaseName: dbName, now: () => state.now, navigator: state.navigator, fetch, broadcast: false, ...options });
+  const core = createCore({ indexedDB, databaseName: dbName, now: () => state.now, navigator: state.navigator, fetch, retryDelay: 0, broadcast: false, ...options });
   return { core, state, dbName, fetch };
 }
 async function rows(dbName, store) {
@@ -108,13 +110,32 @@ test('unknown ACK ID never removes queue or advances local quota', async t => {
   assert.equal((await rows(h.dbName, 'receipts')).length, 0);
   assert.deepEqual((await h.core.getPoint('test-point')).availableSlots, ['pm']);
 });
-test('saved server response lost in transit retries same UUID and accepts already_synced', async t => {
-  const h = await prepared(t); await h.core.enqueue(input); const server = new Set(); let first = true;
-  h.state.sync = entry => { server.add(entry.client_id); if (first) { first = false; throw new TypeError('network lost'); }
-    return response({ ok: true, status: 'already_synced', client_id: entry.client_id, receipt_url: '/checkins/1' }); };
-  await h.core.sync(); assert.equal((await rows(h.dbName, 'queue')).length, 1);
-  await h.core.sync(); assert.equal((await rows(h.dbName, 'queue')).length, 0); assert.equal(server.size, 1);
-  assert.equal(h.state.uploads[0].entry.client_id, h.state.uploads[1].entry.client_id);
+test('lost ACK is confirmed without a second POST or another click', async t => {
+  const h = await prepared(t), entry = await h.core.enqueue(input);
+  h.state.sync = () => { throw new TypeError('network lost after commit'); };
+  h.state.receipt = url => {
+    assert.equal(new URL(url, 'https://local.test').pathname.split('/').pop(), entry.client_id);
+    return response({ ok: true, status: 'already_synced', owner: h.state.manifest.owner, client_id: entry.client_id, receipt_url: '/checkins/1' });
+  };
+  const result = await h.core.sync();
+  assert.equal(result.pending, 0); assert.equal(result.receipts[0].client_id, entry.client_id); assert.equal(h.state.uploads.length, 1);
+  assert.equal(result.sync.saved, 1); assert.equal(result.sync.failed, 0);
+});
+
+test('temporary failure reaching the status service retries once before uploading', async t => {
+  const h = await prepared(t); await h.core.enqueue(input); let checks = 0;
+  h.state.status = () => ++checks === 1 ? response({}, 503) : response({ ok: true, owner: h.state.manifest.owner, csrf_token: 'fresh' });
+  const result = await h.core.sync();
+  assert.equal(checks, 2); assert.equal(result.pending, 0); assert.equal(h.state.uploads.length, 1);
+});
+
+test('cancel during automatic retry prevents a receipt lookup and a second POST', async t => {
+  const h = await prepared(t); const entry = await h.core.enqueue(input);
+  h.state.sync = () => { throw new TypeError('upload interrupted'); };
+  h.core.subscribe(state => { if (state.sync?.phase === 'retrying') h.core.cancelSync(); });
+  const result = await h.core.sync();
+  assert.equal(result.sync.cancelled, true); assert.equal(result.queue[0].client_id, entry.client_id);
+  assert.equal(h.state.uploads.length, 1); assert.equal(h.state.calls.some(url => url.includes('/receipt/')), false);
 });
 test('unknown JSON response preserves photo and note for manual retry', async t => {
   const h = await prepared(t); await h.core.enqueue({ ...input, photos: [new File(['keep'], 'p.jpg', { type: 'image/jpeg' })] });
@@ -252,11 +273,12 @@ test('same-tab rapid sync clicks do not launch overlapping status or upload runs
   assert.equal(h.state.uploads.length, 1); assert.equal((await rows(h.dbName, 'receipts')).length, 1);
 });
 
-test('response body timeout stops this sync round instead of waiting on the next item', async t => {
+test('two response body timeouts stop this sync round without processing the next item', async t => {
   const h = await prepared(t, { uploadTimeout: 15 }); await h.core.enqueue(input); await h.core.enqueue(input);
-  h.state.sync = (_, init) => Promise.resolve({ ok: true, status: 200, json: () => waitAbort(init) });
+  h.state.sync = () => Promise.resolve({ ok: true, status: 200, json: () => new Promise(() => {}) });
   const state = await h.core.sync();
-  assert.equal(h.state.uploads.length, 1); assert.equal(state.pending, 2);
+  assert.equal(h.state.uploads.length, 2); assert.equal(state.pending, 2);
+  assert(h.state.calls.some(url => url.includes('/receipt/')));
   assert.equal(state.queue[0].status, 'retry'); assert.match(state.queue[0].error, /逾時/);
   assert.equal(state.queue[1].attempts, 0); assert.equal(state.sync.running, false);
 });
@@ -425,6 +447,21 @@ test('a matching ACK arriving after cancellation remains authoritative without a
   assert.equal((await rows(h.dbName, 'queue')).length, 0);
   assert.equal((await rows(h.dbName, 'receipts'))[0].client_id, entry.client_id);
   await h.core.sync(); assert.equal(h.state.uploads.length, 1);
+});
+
+test('cancel releases a hung upload that ignores AbortSignal without resending', { timeout: 2500 }, async t => {
+  const h = await prepared(t, { uploadTimeout: 60000 });
+  const draft = await h.core.enqueue(input);
+  let notify;
+  const started = new Promise(resolve => { notify = resolve; });
+  h.state.sync = () => { notify(); return new Promise(() => {}); };
+  const pending = h.core.sync();
+  await started; h.core.cancelSync();
+  const state = await pending;
+  assert.equal(state.sync.running, false);
+  assert.equal(state.sync.cancelled, true);
+  assert.equal(state.queue[0].client_id, draft.client_id);
+  assert.equal(h.state.uploads.length, 1);
 });
 
 test('storage read failures hide private state and never reveal a prior account queue', async t => {

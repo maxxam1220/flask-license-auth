@@ -1,7 +1,7 @@
 /* Recovery changes photo bytes only after an owned, unreceived UUID is verified. */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { indexedDB, IDBFactory } = require('fake-indexeddb');
+const { indexedDB, IDBFactory, IDBObjectStore } = require('fake-indexeddb');
 const { JSDOM, VirtualConsole } = require('jsdom');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -61,7 +61,7 @@ async function harness(t, options = {}, shared) {
     return response({ ok: true, status: 'saved', client_id: entry.client_id });
   };
   const core = createCore({ indexedDB, crypto: globalThis.crypto, databaseName, now: () => server.now,
-    navigator: server.navigator, fetch, broadcast: false, ...options });
+    navigator: server.navigator, fetch, retryDelay: 0, broadcast: false, ...options });
   t.after(() => core.close());
   if (!shared) await core.prepare();
   return { core, server, databaseName };
@@ -132,6 +132,75 @@ test('late acceptance of original upload settles repaired row before new bytes a
   h.server.received.set(draft.client_id, { receipt_url: '/checkins/42', record_id: 42 });
   await h.core.sync(); assert.equal(h.server.uploads.length, 0); assert.equal((await store(h)).length, 0);
   assert.match((await h.core.getState()).message, /新選的照片未覆蓋原紀錄/);
+});
+
+test('retry reconciles a lost ACK even when the original stored photo can no longer be read', async t => {
+  const h = await harness(t), draft = await h.core.enqueue({ ...input, photos: [photo()] });
+  h.server.upload = entry => {
+    h.server.received.set(entry.client_id, { record_id: 42, receipt_url: '/checkins/42' });
+    throw new TypeError('Load failed');
+  };
+  h.server.receipt = () => { throw new TypeError('Network still unavailable'); };
+  const first = await h.core.sync();
+  assert.equal(first.message, '無法連線，待補傳資料仍保留。');
+  assert.equal(first.pending, 1); assert.equal(first.queue[0].error, first.message);
+  await store(h, 'queue', row => { row.photos[0].blob = new Blob([]); });
+  h.server.receipt = null;
+  const retry = await h.core.sync();
+  assert.equal(retry.pending, 0); assert.equal(retry.sync.saved, 1);
+  assert.equal(retry.receipts[0].ack.record_id, 42);
+  assert.deepEqual(h.server.receipts, [draft.client_id, draft.client_id]); assert.equal(h.server.uploads.length, 1);
+  assert.doesNotMatch(retry.message, /新選的照片/);
+});
+
+test('unconfirmed receipt on retry leaves original evidence intact and explains the failure', async t => {
+  const h = await harness(t), draft = await h.core.enqueue({ ...input, photos: [photo()] });
+  h.server.upload = () => { throw new TypeError('Load failed'); };
+  h.server.receipt = () => response({ ok: false, message: '收件查詢暫時無法使用' }, 503);
+  const retry = await h.core.sync(), [row] = await snapshot(h);
+  assert.equal(retry.message, '收件查詢暫時無法使用'); assert.equal(retry.queue[0].error, retry.message);
+  assert.equal(row.client_id, draft.client_id); assert.equal(row.photos[0].blob, 'original');
+  assert.equal(row.observed_at, draft.observed_at);
+  assert.equal(retry.pending, 1); assert.equal(retry.receipts.length, 0); assert.equal(h.server.uploads.length, 1);
+});
+
+test('photo attempt and rejection survive reopening without writing the stored Blob again', async t => {
+  const h = await harness(t), draft = await h.core.enqueue({ ...input, photos: [photo()] });
+  const put = IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put = function (...args) {
+    if (this.name === 'queue') throw new Error('WebKit cannot safely put a persisted Blob back');
+    return put.apply(this, args);
+  };
+  try {
+    h.server.upload = () => response({ ok: false, retryable: false, message: '照片格式錯誤' }, 422);
+    const first = await h.core.sync();
+    assert.equal(first.queue[0].status, 'blocked'); assert.equal(first.queue[0].error, '照片格式錯誤');
+    const reopened = await harness(t, { databaseName: h.databaseName }, h.server);
+    const [row] = (await reopened.core.getState()).queue;
+    assert.equal(row.attempts, 1); assert.equal(row.retryable, false);
+    assert.equal((await snapshot(h))[0].photos[0].blob, 'original');
+    h.server.upload = null;
+    const second = await reopened.core.sync();
+    assert.equal(second.pending, 0); assert.equal(second.receipts[0].client_id, draft.client_id);
+    assert.equal((await store(h, 'meta')).some(item => item.key.includes(draft.client_id)), false);
+  } finally { IDBObjectStore.prototype.put = put; }
+});
+
+test('previous failure metadata cannot block photos replaced by an older tab', async t => {
+  const h = await harness(t), draft = await h.core.enqueue({ ...input, photos: [photo()] });
+  h.server.upload = () => response({ ok: false, retryable: false, message: '照片格式錯誤' }, 422);
+  await h.core.sync();
+  await store(h, 'queue', row => {
+    const blob = photo('older tab replacement');
+    row.photos = [{ blob, name: blob.name, size: blob.size, type: blob.type }];
+    row.photo_revision = 1; row.status = 'pending'; row.error = ''; row.retryable = true;
+  });
+  const [updated] = (await h.core.getState()).queue;
+  assert.equal(updated.status, 'pending'); assert.equal(updated.error, '');
+  h.server.upload = null; await h.core.sync({ retryableOnly: true });
+  assert.equal((await h.core.getState()).receipts[0].client_id, draft.client_id);
+  assert.equal(h.server.uploads[1].photos[0].bytes, 'older tab replacement');
+  assert.equal((await store(h, 'meta')).some(item => item.key.includes(draft.client_id)), false);
 });
 
 test('old in-flight ACK settles revised photos with an explicit non-overwrite notice', async t => {
@@ -224,12 +293,13 @@ test('expired sync lease and concurrent photo repair cannot upload stale bytes',
   } finally { reading.resolve(); Blob.prototype.arrayBuffer = nativeRead; }
 });
 
-for (const first of ['reject', 'incomplete']) test('native reader fallback preserves exact replacement bytes after ' + first, async t => {
+for (const first of ['reject', 'incomplete', 'stall']) test('native reader fallback preserves exact replacement bytes after ' + first, async t => {
   let readerCalls = 0;
   class Reader { readAsArrayBuffer(file) { readerCalls++; nativeRead.call(file).then(value => { this.result = value; this.onload(); }); } }
   const env = Object.create(globalThis); env.FileReader = Reader;
-  const h = await harness(t, { env }), draft = await failed(h), source = photo('fallback bytes');
-  source.arrayBuffer = () => first === 'reject' ? Promise.reject(new Error('Native reader failed')) : Promise.resolve(new ArrayBuffer(1));
+  const h = await harness(t, { env, photoReadTimeout: 300 }), draft = await failed(h), source = photo('fallback bytes');
+  source.arrayBuffer = () => first === 'reject' ? Promise.reject(new Error('Native reader failed')) :
+    first === 'stall' ? new Promise(() => {}) : Promise.resolve(new ArrayBuffer(1));
   await h.core.repairPhotos(draft.client_id, [source], true);
   assert.equal(readerCalls, 1); assert.equal((await snapshot(h))[0].photos[0].blob, 'fallback bytes');
 });
@@ -285,7 +355,8 @@ test('cancelled synchronization leaves a pending draft repairable without changi
     const syncing = h.core.sync(); await begun.promise; h.core.cancelSync(); reading.resolve(); await syncing;
   } finally { reading.resolve(); Blob.prototype.arrayBuffer = nativeRead; }
   const [interrupted] = await snapshot(h);
-  assert.equal(interrupted.status, 'pending'); assert.equal(interrupted.attempts, 1); assert.equal(h.server.uploads.length, 0);
+  const [progress] = (await h.core.getState()).queue;
+  assert.equal(progress.status, 'pending'); assert.equal(progress.attempts, 1); assert.equal(h.server.uploads.length, 0);
   await h.core.repairPhotos(draft.client_id, [photo('replacement after cancellation')], true);
   const [repaired] = await snapshot(h);
   for (const key of ['client_id', 'owner', 'grant', 'observed_at', 'note', 'is_abnormal', 'slot', 'checklist', 'checklist_snapshot']) {
@@ -301,7 +372,7 @@ async function waitFor(read, description) {
 }
 async function repairUI(t, options = {}) {
   const errors = [], console = new VirtualConsole(); console.on('jsdomError', error => errors.push(error));
-  const dom = new JSDOM('<body data-offline-shell><div data-offline-status></div><ul data-offline-queue></ul></body>',
+  const dom = new JSDOM('<body data-offline-shell><div data-offline-status></div><button data-offline-sync>Sync</button><p data-offline-queue-feedback role="status" hidden></p><ul data-offline-queue></ul></body>',
     { url: 'https://local.invalid/offline', runScripts: 'outside-only', virtualConsole: console });
   const win = dom.window, manifest = {
     ok: true, version: 1, checklist_version: 1, owner: 'repair-owner', identity: { id: 1, auth_version: 1, binding_id: 1, role: 'inspector', ui_language: 'zh-Hant' },
@@ -310,20 +381,28 @@ async function repairUI(t, options = {}) {
       period_key: '2026-11-16', slots: ['any'], used_slots: [], executed_slots: [], grant: 'grant', revision: 'r1', checklist: null }]
   };
   if (options.twoRows) manifest.points.push({ ...manifest.points[0], token: 'escape-point', code: '1F-G014', name: '防火巷' });
-  const receiptStarted = deferred(), receiptReady = deferred();
+  const receiptStarted = deferred(), receiptReady = deferred(), uploads = [];
   win.indexedDB = new IDBFactory(); win.isSecureContext = true; win.Date.now = () => stamp;
-  win.Blob = Blob; win.File = File; win.FileReader = undefined; win.Response = undefined;
+  win.Blob = Blob; win.File = File; win.FormData = FormData; win.FileReader = undefined; win.Response = undefined;
   win.confirm = () => true;
   win.PatrolI18n = { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? ''), getLocale: () => 'zh-Hant', setLocale() {}, getPreferences: () => ({}), acceptPreferences: () => false };
   class Channel { constructor() { this.port1 = { close() {} }; this.port2 = { close() {}, postMessage: data => this.port1.onmessage?.({ data }) }; } }
   win.MessageChannel = Channel;
   Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, assetVersion: 1, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 }) } }) } });
-  win.fetch = async url => {
+  win.fetch = async (url, init) => {
     if (url === '/api/offline/prepare') return response(manifest);
     if (url === '/api/ui-preferences') return response({ ok: true });
+    if (url === '/api/offline/status') return options.preflightError ? response({ ok: false }, 503) : response({ ok: true, owner: manifest.owner, csrf_token: 'csrf' });
     if (url.startsWith('/api/offline/receipt/')) {
       receiptStarted.resolve(); await receiptReady.promise;
-      return response({ ok: true, status: 'not_received', owner: manifest.owner, client_id: new URL(url, 'https://local.invalid').pathname.split('/').pop() });
+      return response({ ok: true, status: options.alreadySynced ? 'already_synced' : 'not_received', owner: manifest.owner,
+        client_id: new URL(url, 'https://local.invalid').pathname.split('/').pop(), ...(options.alreadySynced ? { record_id: 1, receipt_url: '/checkins/1' } : {}) });
+    }
+    if (url === '/api/offline/sync') {
+      const entry = JSON.parse(init.body.get('entry')), photo = await init.body.get('photos').text();
+      uploads.push({ entry, photo });
+      return options.uploadError ? response({ ok: false, message_source: '伺服器未確認這筆紀錄，資料仍保留，請重試。' }, 503) :
+        response({ ok: true, status: 'saved', client_id: entry.client_id });
     }
     assert.fail('Unexpected request: ' + url);
   };
@@ -342,11 +421,12 @@ async function repairUI(t, options = {}) {
     } else { row.status = options.twoRows ? 'blocked' : 'retry'; row.error = '照片讀取失敗'; }
   }); await core.getState();
   await waitFor(() => win.document.querySelector('.offline-photo-repair'), 'repair action');
-  return { ...h, win, receiptStarted, receiptReady };
+  return { ...h, win, receiptStarted, receiptReady, uploads };
 }
 
 for (const result of ['success', 'read-failure', 'logout']) test('photo picker stays connected during receipt lookup and byte copying: ' + result, async t => {
   const ui = await repairUI(t), before = await snapshot(ui), input = ui.win.document.querySelector('.offline-queue-actions input[type=file]');
+  assert.equal(input.hidden, false); assert.equal(input.parentElement.tagName, 'LABEL');
   const source = photo('replacement'), reading = deferred(), readStarted = deferred(); let fileValue = 'C:\\fakepath\\現場照片.jpg';
   Object.defineProperty(input, 'files', { configurable: true, value: [source] });
   Object.defineProperty(input, 'value', { configurable: true, get: () => fileValue, set: value => { fileValue = value; } });
@@ -374,13 +454,17 @@ for (const result of ['success', 'read-failure', 'logout']) test('photo picker s
   reading.resolve(); await waitFor(() => fileValue === '', 'picker cleanup only after repair finishes');
   if (result === 'success') {
     assert.equal(input.isConnected, false, 'completed replacement may rebuild the queue');
-    assert.equal((await snapshot(ui))[0].photos[0].blob, 'replacement');
+    await waitFor(() => ui.win.document.querySelector('[data-offline-queue-feedback]').textContent.includes('已確認 1 筆'), 'immediate upload acknowledgement in queue');
+    assert.deepEqual(await snapshot(ui), []);
+    assert.equal(ui.uploads.length, 1); assert.equal(ui.uploads[0].photo, 'replacement');
+    assert.equal(ui.uploads[0].entry.client_id, before[0].client_id);
   } else assert.deepEqual(await snapshot(ui), before);
+  if (result === 'read-failure') assert.match(ui.win.document.querySelector('[data-offline-row-feedback]').textContent, /照片/);
   assert.equal((await ui.core.getState()).sync.running, false);
 });
 
 for (const secondStatus of ['pending', undefined]) test('both G011 blocked and G014 ' + (secondStatus || 'legacy status') + ' show independent repair actions', async t => {
-  const ui = await repairUI(t, { twoRows: true, secondStatus }), before = await snapshot(ui);
+  const ui = await repairUI(t, { twoRows: true, secondStatus, uploadError: true }), before = await snapshot(ui);
   const cards = [...ui.win.document.querySelectorAll('.offline-queue-item')];
   assert.equal(cards.length, 2);
   for (const card of cards) assert(card.querySelector('.offline-photo-repair'), card.querySelector('strong').textContent + ' must offer photo reselection');
@@ -392,11 +476,50 @@ for (const secondStatus of ['pending', undefined]) test('both G011 blocked and G
   assert([...ui.win.document.querySelectorAll('.offline-queue-actions button')].every(button => button.disabled));
   ui.receiptReady.resolve();
   await waitFor(async () => (await snapshot(ui)).find(row => row.token === 'escape-point').photo_revision === 1, 'G014 replacement saved');
-  await waitFor(() => [...ui.win.document.querySelectorAll('.offline-queue-actions button')].every(button => !button.disabled), 'both row actions enabled again');
+  await waitFor(() => [...ui.win.document.querySelectorAll('[data-offline-row-feedback]')].some(el => el.dataset.state === 'error' && el.textContent.includes('新照片已存到此手機。伺服器未確認')), 'upload failure shown on selected card');
+  assert([...ui.win.document.querySelectorAll('.offline-queue-actions button, .offline-queue-actions input')].every(control => !control.disabled));
+  assert.deepEqual(ui.uploads.map(upload => upload.entry.client_id), Array(2).fill(before.find(row => row.token === 'escape-point').client_id));
   const after = await snapshot(ui), untouched = before.find(row => row.token === 'photo-point');
   assert.deepEqual(after.find(row => row.token === 'photo-point'), untouched);
   const original = before.find(row => row.token === 'escape-point'), repaired = after.find(row => row.token === 'escape-point');
   for (const key of ['client_id', 'owner', 'grant', 'observed_at', 'note', 'is_abnormal', 'token']) assert.deepEqual(repaired[key], original[key], key);
   assert.equal(repaired.photos[0].blob, 'G014 replacement');
   assert.equal(ui.win.document.querySelectorAll('.offline-photo-repair').length, 2);
+});
+
+test('failed connection check appears at the sync button and permits retry with original evidence', async t => {
+  const options = { preflightError: true }, ui = await repairUI(t, options), before = await snapshot(ui);
+  const button = ui.win.document.querySelector('[data-offline-sync]'), feedback = ui.win.document.querySelector('[data-offline-queue-feedback]');
+  button.click();
+  await waitFor(() => !button.disabled && feedback.dataset.state === 'error' && /連線/.test(feedback.textContent), 'connection failure at queue');
+  assert.equal(feedback.hidden, false); assert.deepEqual(await snapshot(ui), before); assert.equal(ui.uploads.length, 0);
+  options.preflightError = false; ui.receiptReady.resolve(); button.click();
+  await waitFor(() => feedback.textContent.includes('已確認 1 筆'), 'retry receives acknowledgement');
+  assert.equal(ui.uploads[0].photo, 'old');
+});
+
+test('already received record settles at photo selection with no second upload', async t => {
+  const ui = await repairUI(t, { alreadySynced: true }), doc = ui.win.document;
+  const picker = doc.querySelector('.offline-photo-repair input');
+  Object.defineProperty(picker, 'files', { value: [photo('new')] });
+  picker.dispatchEvent(new ui.win.Event('change', { bubbles: true })); ui.receiptReady.resolve();
+  await waitFor(() => doc.querySelector('[data-offline-queue-feedback]').textContent.includes('已確認收件'), 'existing receipt in queue');
+  assert.deepEqual(await snapshot(ui), []); assert.equal(ui.uploads.length, 0);
+});
+
+test('reconnection in the foreground uploads the eligible draft once and leaves blocked records alone', async t => {
+  const ui = await repairUI(t, { twoRows: true, secondStatus: 'pending' }), doc = ui.win.document;
+  Object.defineProperty(doc, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  ui.receiptReady.resolve();
+  ui.win.dispatchEvent(new ui.win.Event('online'));
+  await new Promise(resolve => setTimeout(resolve, 800));
+  assert.equal(ui.uploads.length, 0);
+  Object.defineProperty(doc, 'visibilityState', { configurable: true, get: () => 'visible' });
+  doc.dispatchEvent(new ui.win.Event('visibilitychange'));
+  ui.win.dispatchEvent(new ui.win.Event('online'));
+  await waitFor(() => doc.querySelector('[data-offline-queue-feedback]').textContent.includes('已確認 1 筆'), 'foreground synchronization');
+  assert.deepEqual(ui.uploads.map(upload => upload.entry.token), ['escape-point']);
+  const state = await ui.core.getState();
+  assert.deepEqual([...state.queue].map(row => row.token), ['photo-point']);
+  assert.equal(state.queue[0].status, 'blocked');
 });

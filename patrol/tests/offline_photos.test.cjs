@@ -22,6 +22,8 @@ async function harness(t, options = {}) {
     if (url.endsWith('/prepare')) return response(manifest);
     if (url.endsWith('/status')) return response({ ok: true, owner: manifest.owner, csrf_token: 'fresh',
       server_time: manifest.server_time, identity: manifest.identity });
+    if (url.startsWith('/api/offline/receipt/')) return response({ ok: true, owner: manifest.owner,
+      client_id: new URL(url, 'https://local.test').pathname.split('/').pop(), status: 'not_received' });
     const entry = JSON.parse(init.body.get('entry'));
     const files = await Promise.all(init.body.getAll('photos').map(async file => ({ name: file.name, type: file.type,
       bytes: Array.from(new Uint8Array(await file.arrayBuffer())) })));
@@ -34,7 +36,7 @@ async function harness(t, options = {}) {
     return response({ ok: true, status: 'saved', client_id: entry.client_id });
   };
   const core = createCore({ indexedDB, crypto: globalThis.crypto, databaseName, now: () => stamp, navigator: { onLine: true },
-    fetch, broadcast: false, ...options });
+    fetch, retryDelay: 0, broadcast: false, ...options });
   t.after(() => core.close()); await core.prepare();
   return { core, state, databaseName, manifest };
 }
@@ -106,13 +108,14 @@ test('lost stored photo is retained with its UUID and does not stop another vali
   await queue(h, row => { if (row.client_id === broken.client_id) row.photos[0].blob = new Blob([], { type: 'image/png' }); });
   await h.core.sync();
   assert.deepEqual(h.state.uploads.map(row => row.entry.client_id), [good.client_id]);
-  let [remaining] = await queue(h);
-  assert.equal(remaining.client_id, broken.client_id); assert.equal(remaining.status, 'retry');
-  assert.match(remaining.error, /第 1 張暫存照片.*資料仍保留/);
+  const [remaining] = await queue(h);
+  const [failure] = (await h.core.getState()).queue;
+  assert.equal(remaining.client_id, broken.client_id); assert.equal(failure.status, 'retry');
+  assert.match(failure.error, /第 1 張暫存照片.*資料仍保留/);
   assert.equal(remaining.photos[0].blob.size, 0); assert.equal(remaining.photos[0].size, 6);
   await h.core.sync();
-  [remaining] = await queue(h); assert.equal(remaining.client_id, broken.client_id);
-  assert.equal(h.state.uploads.length, 1); assert.equal(remaining.attempts, 2);
+  const [retried] = (await h.core.getState()).queue; assert.equal(retried.client_id, broken.client_id);
+  assert.equal(h.state.uploads.length, 1); assert.equal(retried.attempts, 2);
 });
 
 test('photo multipart append failure stays on its own row and other drafts upload', async t => {
@@ -125,15 +128,15 @@ test('photo multipart append failure stays on its own row and other drafts uploa
   const second = await h.core.enqueue({ ...input, photos: [photo()] });
   await h.core.sync();
   assert.deepEqual(h.state.uploads.map(row => row.entry.client_id), [second.client_id]);
-  const [row] = await queue(h); assert.equal(row.client_id, first.client_id); assert.equal(row.status, 'retry');
+  const [row] = (await h.core.getState()).queue; assert.equal(row.client_id, first.client_id); assert.equal(row.status, 'retry');
   await h.core.sync(); assert.equal((await queue(h)).length, 0);
   assert.equal(h.state.uploads[1].entry.client_id, first.client_id);
 });
 
-test('ACK lost retry sends unchanged UUID, observed time, note and exact photo bytes', async t => {
+test('verified unreceived upload automatically resends unchanged UUID, observed time, note and exact photo bytes', async t => {
   const h = await harness(t); await h.core.enqueue({ ...input, photos: [photo()] });
-  h.state.failNext = true; await h.core.sync(); assert.equal((await queue(h)).length, 1);
-  await h.core.sync(); assert.deepEqual(h.state.uploads[1], h.state.uploads[0]);
+  h.state.failNext = true; await h.core.sync();
+  assert.equal(h.state.uploads.length, 2); assert.deepEqual(h.state.uploads[1], h.state.uploads[0]);
   assert.equal((await queue(h)).length, 0);
 });
 

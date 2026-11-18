@@ -42,6 +42,7 @@
   "已超過補傳期限；暫存仍保留，請聯絡管理員。": {"id":"Batas sinkronisasi telah lewat. Data lokal tetap disimpan. Hubungi admin.", "vi":"Đã quá hạn gửi bù. Dữ liệu tạm vẫn được giữ. Hãy liên hệ quản trị viên."},
   "同步期間已有相同次數的紀錄；暫存仍保留，請核對。": {"id":"Putaran ini sudah dicatat saat sinkronisasi. Data lokal tetap disimpan. Periksa catatan.", "vi":"Lần này đã có bản ghi trong lúc đồng bộ. Dữ liệu tạm vẫn được giữ. Hãy kiểm tra."},
   "同步未完成，暫存仍保留；請重新連線後再試。": {"id":"Sinkronisasi belum selesai. Data lokal tetap disimpan. Hubungkan kembali lalu coba lagi.", "vi":"Đồng bộ chưa hoàn tất. Dữ liệu tạm vẫn được giữ. Hãy kết nối lại rồi thử."},
+  "上傳內容太大，這筆仍在手機上。請重新選擇較小的照片，最多 3 張，每張不超過 8 MB。": {"id":"Unggahan terlalu besar. Catatan ini masih tersimpan di ponsel. Pilih foto yang lebih kecil, maksimal 3 foto dan masing-masing maksimal 8 MB.", "vi":"Nội dung tải lên quá lớn. Bản ghi vẫn còn trên điện thoại. Hãy chọn ảnh nhỏ hơn, tối đa 3 ảnh và mỗi ảnh không quá 8 MB."},
   "登入表單已過期，請重新輸入密碼後再登入。": {"id":"Formulir masuk kedaluwarsa. Masukkan kembali kata sandi untuk masuk.", "vi":"Biểu mẫu đăng nhập đã hết hạn. Hãy nhập lại mật khẩu để đăng nhập."},
   "帳號或密碼不正確，或帳號已停用。": {"id":"Akun atau kata sandi salah, atau akun tidak aktif.", "vi":"Sai tài khoản hoặc mật khẩu, hoặc tài khoản đã bị khóa."},
   "帳號設定已更新，請重新登入。": {"id":"Pengaturan akun berubah. Silakan masuk kembali.", "vi":"Cài đặt tài khoản đã thay đổi. Vui lòng đăng nhập lại."},
