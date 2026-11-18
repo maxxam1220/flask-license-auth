@@ -656,7 +656,10 @@
       if (pending) return pending;
       let cancelled = false, deadline;
       const probes = new Set();
-      const currentShell = value => value?.audioVersion === 'patrol-v1' && value.audioRevision === 'natural-female-1' && value.checklistVersion === 1 && value.calendarVersion === 1;
+      // Older workers may have every file but fail to serve the versioned URLs
+      // referenced by their cached HTML. Require the corrected asset contract
+      // before today's manifest can be reported prepared.
+      const currentShell = value => value?.assetVersion === 1 && value.audioVersion === 'patrol-v1' && value.audioRevision === 'natural-female-1' && value.checklistVersion === 1 && value.calendarVersion === 1;
       const ready = value => value?.ready === true && value.audioReady === true && currentShell(value);
       const probe = (worker, type, timeout) => new Promise((resolve, reject) => {
         const channel = new e.MessageChannel(); let finished = false;
@@ -687,7 +690,8 @@
             }
           }
           // An older worker may be controlling this page while the new public
-          // assets install. Its old ready:true response cannot prove checklist support.
+          // assets install. Its old ready:true response cannot prove that the
+          // cached shell can load all of its scripts and styles while offline.
           if (!updated && !registration.installing && !registration.waiting && nav.onLine !== false) {
             updated = true; await registration.update();
           }

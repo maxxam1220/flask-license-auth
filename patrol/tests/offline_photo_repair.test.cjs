@@ -317,7 +317,7 @@ async function repairUI(t, options = {}) {
   win.PatrolI18n = { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? ''), getLocale: () => 'zh-Hant', setLocale() {}, getPreferences: () => ({}), acceptPreferences: () => false };
   class Channel { constructor() { this.port1 = { close() {} }; this.port2 = { close() {}, postMessage: data => this.port1.onmessage?.({ data }) }; } }
   win.MessageChannel = Channel;
-  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 }) } }) } });
+  Object.defineProperty(win.navigator, 'serviceWorker', { value: { register: async () => ({ active: { postMessage: (_, ports) => ports[0].postMessage({ ready: true, audioReady: true, assetVersion: 1, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 }) } }) } });
   win.fetch = async url => {
     if (url === '/api/offline/prepare') return response(manifest);
     if (url === '/api/ui-preferences') return response({ ok: true });

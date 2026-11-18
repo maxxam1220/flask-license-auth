@@ -13,6 +13,20 @@ const audioBytes = new Uint8Array([73, 68, 51, 3, 0, 0, 0, 0, 0, 0, 255, 251, 14
 const manifest = { version: 'patrol-v1', revision: 'natural-female-1', files: audioPaths.map(path => ({ path, locale: path.split('/').at(-2), kind: path.split('/').at(-1).slice(0, -4),
   bytes: audioBytes.byteLength, sha256: createHash('sha256').update(audioBytes).digest('hex') })) };
 const required = ['/offline', '/static/app.css', '/static/offline.css', '/static/checklist.css', '/static/executor-locale.css', '/static/i18n.js', '/static/offline.js', '/static/offline-update.js', '/static/patrol-scanner.js', '/static/patrol-voice.js', '/static/patrol-voice.css', '/static/vendor/jsqr-1.4.0.js', '/static/logo.ico', audioRoot + 'manifest.json', ...audioPaths];
+// Resolve the real template's public asset attributes instead of maintaining a
+// second list of URLs that could silently diverge from the deployed page.
+function offlineTemplate() {
+  return fs.readFileSync(require.resolve('../templates/offline.html'), 'utf8').replace(
+    /\{\{\s*url_for\(['"]static['"],\s*filename=['"]([^'"]+)['"](?:,\s*v=['"]([^'"]+)['"])?\)\s*\}\}/g,
+    (_, filename, version) => '/static/' + filename + (version ? '?v=' + encodeURIComponent(version) : ''));
+}
+function publicAssets(html) {
+  const head = html.match(/<head>([\s\S]*?)<\/head>/)[1];
+  const paths = [...head.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"/g)].map(match => match[1].replace(/&amp;/g, '&'));
+  assert(paths.length > 8, 'The actual offline head must expose its stylesheet and script dependencies');
+  assert(paths.every(value => value.startsWith('/static/') && !value.includes('{{')), 'Resolve every template asset URL, including any new template expression');
+  return paths;
+}
 function defaultResponse(path) {
   return path === audioRoot + 'manifest.json' ? new Response(JSON.stringify(manifest), { headers: { 'Content-Type': 'application/json' } }) :
     audioPaths.includes(path) ? new Response(audioBytes, { headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(audioBytes.length), ETag: '"qa-audio-v1"' } }) :
@@ -59,6 +73,59 @@ test('offline scan navigation returns shell immediately without network access',
   const w = worker(); await w.lifecycle('install'); w.self.navigator.onLine = false; const before = w.requests.length;
   assert.equal(await (await w.fetchPage('/c/test-token')).text(), 'GENERIC OFFLINE SHELL'); assert.equal(w.requests.length, before);
 });
+
+test('prepared real offline template loads all styles and scripts after offline SCAN navigation', async () => {
+  const html = offlineTemplate(), w = worker();
+  w.respond(request => Promise.resolve(new URL(request.url).pathname === '/offline'
+    ? new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
+    : defaultResponse(new URL(request.url).pathname)));
+  await w.lifecycle('install'); await w.lifecycle('activate');
+  assert.equal((await readiness(w)).ready, true);
+  w.self.navigator.onLine = false;
+  w.respond(() => { throw new TypeError('The phone has no network'); });
+  const before = w.requests.length;
+  const shell = await w.fetchPage('/c/real-point-qr-token');
+  assert.equal(shell.status, 200);
+  const rendered = await shell.text(); assert.equal(rendered, html);
+  // In-app SCAN routes offline directly to this neutral, cached shell URL;
+  // an external camera can instead navigate to /c/<token> above.
+  const scanDestination = await w.fetchPage('/offline?point=real-point-qr-token&lang=id');
+  assert.equal(scanDestination.status, 200); assert.equal(await scanDestination.text(), html);
+  const missing = [];
+  for (const asset of publicAssets(rendered)) {
+    const response = await w.fetchPage(asset, { mode: 'no-cors' });
+    if (!response || response.status !== 200 || !(await response.text()).length) missing.push(asset);
+  }
+  assert.deepEqual(missing, [], 'A ready shell must serve the URLs the page actually requests, including version queries');
+  // The scanner lazily loads its decoder after the user presses SCAN.
+  assert.equal((await w.fetchPage('/static/vendor/jsqr-1.4.0.js', { mode: 'no-cors' })).status, 200);
+  assert.equal(w.requests.length, before, 'SCAN and its dependencies cannot depend on a warm HTTP cache or network');
+});
+
+test('already-open photo-recovery pages can load their released script and stylesheet URLs offline', async () => {
+  const w = worker(); await w.lifecycle('install'); w.self.navigator.onLine = false;
+  w.respond(() => { throw new TypeError('No network'); });
+  const before = w.requests.length;
+  for (const asset of ['/static/offline.js?v=photo-storage-1', '/static/offline.js?v=photo-repair-1',
+    '/static/offline.js?v=photo-repair-2', '/static/offline.css?v=photo-repair-1']) {
+    const response = await w.fetchPage(asset, { mode: 'no-cors' });
+    assert(response, 'Released page dependency must be intercepted: ' + asset);
+    assert.equal(response.status, 200); assert.equal(await response.text(), 'asset');
+  }
+  assert.equal(w.requests.length, before);
+});
+
+test('photo recovery compatibility never caches private requests or unknown query variants', async () => {
+  const w = worker(); await w.lifecycle('install'); w.self.navigator.onLine = false;
+  const before = w.requests.length, writes = w.writes.length;
+  for (const asset of ['/static/offline.js?v=unreleased', '/static/offline.js?v=photo-repair-2&owner=secret',
+    '/static/offline.js?v=photo-repair-2&v=photo-repair-1', '/static/offline.css?v=photo-repair-1&extra=1',
+    '/static/private.json?v=photo-repair-2', '/api/offline/receipt/uuid?v=photo-repair-2',
+    '/api/offline/prepare?v=photo-repair-2', '/photos/1?v=photo-repair-2']) {
+    assert.equal(await w.fetchPage(asset, { mode: 'no-cors' }), null, asset);
+  }
+  assert.equal(w.requests.length, before); assert.equal(w.writes.length, writes);
+});
 test('weak network falls back for scan navigation without caching returned private page', async () => {
   const w = worker(); await w.lifecycle('install'); const before = w.writes.length;
   w.respond(() => Promise.reject(new TypeError('network failed')));
@@ -71,6 +138,7 @@ test('readiness requires every cached asset; activation deletes only old patrol 
   await w.lifecycle('message', { data: { type: 'PATROL_OFFLINE_READY' }, ports: [{ postMessage(value) { answer = value; } }] }); assert.equal(answer.ready, true);
   assert.equal(answer.audioReady, true); assert.equal(answer.audioVersion, 'patrol-v1');
   assert.equal(answer.audioRevision, 'natural-female-1');
+  assert.equal(answer.assetVersion, 1);
   assert.equal(answer.checklistVersion, 1);
   assert.equal(answer.calendarVersion, 1);
   const current = [...w.stores.keys()][0]; w.stores.get(current).delete('/static/offline.js');

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createShellReadiness } = require('../static/offline.js');
-const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1 };
+const complete = { ready: true, audioReady: true, audioVersion: 'patrol-v1', audioRevision: 'natural-female-1', checklistVersion: 1, calendarVersion: 1, assetVersion: 1 };
 function fixture(options = {}) {
   const calls = [], channels = [];
   class Channel {
@@ -60,6 +60,34 @@ test('old calendar shell cannot claim readiness while offline', async () => {
   const x = fixture(), legacy = { ...complete }; delete legacy.calendarVersion;
   x.env.navigator.onLine = false; x.registration.active = x.worker(legacy);
   await assert.rejects(x.ensure(), /尚未備妥/); assert(!x.calls.includes('update'));
+});
+
+test('photo-era worker with every old capability must update before preparation succeeds', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.assetVersion;
+  x.registration.active = x.worker(legacy); await x.ensure();
+  assert.deepEqual(x.calls.slice(1), ['PATROL_OFFLINE_READY', 'update', 'PATROL_OFFLINE_READY']);
+  assert(!x.calls.includes('PATROL_OFFLINE_PREPARE'));
+});
+
+test('broken cached URL contract cannot report ready while offline', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.assetVersion;
+  x.env.navigator.onLine = false; x.registration.active = x.worker(legacy);
+  await assert.rejects(x.ensure(), /尚未備妥/);
+  assert(!x.calls.includes('update')); assert(!x.calls.includes('PATROL_OFFLINE_PREPARE'));
+});
+
+test('asset repair installation must become active before old ready response is accepted', async () => {
+  const x = fixture(), legacy = { ...complete }; delete legacy.assetVersion;
+  x.registration.active = x.worker(legacy); x.registration.installing = {};
+  let finished = false;
+  const preparation = x.ensure().then(() => { finished = true; });
+  await new Promise(resolve => setTimeout(resolve, 12));
+  assert.equal(finished, false);
+  assert.equal(x.calls.filter(value => value === 'PATROL_OFFLINE_READY').length, 1);
+  x.registration.active = x.worker(); x.registration.installing = null;
+  await preparation;
+  assert.equal(finished, true); assert(!x.calls.includes('update'));
+  assert.equal(x.calls.filter(value => value === 'PATROL_OFFLINE_READY').length, 2);
 });
 
 test('offline old audio revision fails promptly without network repair', async () => {
