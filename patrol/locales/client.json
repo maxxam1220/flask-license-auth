@@ -295,6 +295,46 @@
     "id": "Titik belum tersedia",
     "vi": "Chưa có thông tin điểm"
   },
+  "無法離線打卡": {
+    "id": "Tidak dapat mencatat secara offline",
+    "vi": "Không thể ghi nhận ngoại tuyến"
+  },
+  "由總務執行人員先簽到，再由{inspector}或總務管理員巡檢。系統管理員可在此查看點位。": {
+    "id": "Petugas pelaksana bagian umum melakukan check-in terlebih dahulu. Setelah itu, pemeriksaan dilakukan oleh {inspector} atau pengelola bagian umum. Administrator sistem dapat melihat titik ini.",
+    "vi": "Nhân viên thực hiện của bộ phận tổng vụ điểm danh trước. Sau đó, {inspector} hoặc quản lý tổng vụ thực hiện kiểm tra. Quản trị viên hệ thống có thể xem điểm này."
+  },
+  "執行人員已簽到，可以巡檢": {
+    "id": "Petugas pelaksana sudah check-in. Pemeriksaan dapat dimulai.",
+    "vi": "Nhân viên thực hiện đã điểm danh. Có thể bắt đầu kiểm tra."
+  },
+  "尚未查到本次執行簽到": {
+    "id": "Belum ada catatan check-in petugas pelaksana untuk giliran ini di data offline.",
+    "vi": "Dữ liệu ngoại tuyến chưa có bản ghi điểm danh của nhân viên thực hiện cho lượt này."
+  },
+  "請先確認執行人員已簽到。若對方已離線簽到，可先暫存巡檢，連線後請對方先同步。": {
+    "id": "Pastikan petugas pelaksana sudah check-in. Jika ia check-in secara offline, Anda dapat menyimpan pemeriksaan di ponsel. Saat kembali online, minta ia menyinkronkan catatannya terlebih dahulu.",
+    "vi": "Hãy xác nhận nhân viên thực hiện đã điểm danh. Nếu họ đã điểm danh ngoại tuyến, bạn có thể lưu tạm lần kiểm tra. Khi có mạng trở lại, hãy nhờ họ đồng bộ trước."
+  },
+  "離線資料更新於 {time}": {
+    "id": "Data offline diperbarui pada {time}",
+    "vi": "Dữ liệu ngoại tuyến được cập nhật lúc {time}"
+  },
+  "巡檢已暫存。若執行人員也離線簽到，請對方先同步，再補傳本筆巡檢。": {
+    "id": "Pemeriksaan tersimpan di ponsel. Jika petugas pelaksana juga check-in secara offline, minta ia melakukan sinkronisasi sebelum Anda mengirim pemeriksaan ini.",
+    "vi": "Lần kiểm tra đã được lưu tạm. Nếu nhân viên thực hiện cũng điểm danh ngoại tuyến, hãy nhờ họ đồng bộ trước rồi gửi bản ghi kiểm tra này."
+  },
+  "這支手機已有此點的暫存紀錄，請查看「待傳紀錄」。": {
+    "id": "Catatan untuk titik ini sudah tersimpan di ponsel ini. Lihat daftar catatan yang menunggu dikirim.",
+    "vi": "Điện thoại này đã lưu bản ghi của điểm này. Hãy xem danh sách bản ghi chờ gửi."
+  },
+  "本次{stage}已完成，可繼續掃描下一點。": {
+    "id": "{stage} untuk giliran ini sudah selesai. Silakan pindai titik berikutnya.",
+    "vi": "{stage} cho lượt này đã hoàn tất. Bạn có thể quét điểm tiếp theo."
+  },
+  "正在暫存到這支手機…": {
+    "id": "Sedang menyimpan di ponsel ini…",
+    "vi": "Đang lưu trên điện thoại này…"
+  },
   "請連線登入並準備今日離線資料。": {
     "id": "Masuk saat online dan siapkan data offline hari ini.",
     "vi": "Đăng nhập khi có mạng và chuẩn bị dữ liệu ngoại tuyến hôm nay."

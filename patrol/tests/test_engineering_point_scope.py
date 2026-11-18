@@ -243,9 +243,20 @@ def test_engineering_weekly_handoff_and_personal_daily_quota_stay_unchanged(team
 
 def test_safety_cannot_read_either_general_team_and_admin_two_stage_remains_management_only(teams):
     t = teams
+    prepared = prepare(t.clients['admin'])
+    labels = {label['token']: label for label in prepared['management_only_points']}
+    assert set(labels) == {t.points[team + '_pair'].qr_token for team in ('general', 'engineering')}
+    assert all(set(label) == {'token', 'code', 'name', 'name_i18n', 'floor', 'inspection_team'} for label in labels.values())
+    assert set(labels).isdisjoint(point['token'] for point in prepared['points'])
+    assert all(prepare(client)['management_only_points'] == [] for role, client in t.clients.items() if role != 'admin')
     for team in ('general', 'engineering'):
         point, record = t.points[team], t.records[team]
         assert t.clients['safety'].get('/c/' + point.qr_token).status_code == 404
         assert t.clients['safety'].get(f'/records/{record.id}').status_code == 404
         pair = t.points[team + '_pair']
-        assert 'id="inspection-form"' not in t.clients['admin'].get('/c/' + pair.qr_token).text
+        assert labels[pair.qr_token]['code'] == pair.code and labels[pair.qr_token]['name'] == pair.name
+        assert labels[pair.qr_token]['inspection_team'] == team
+        html = t.clients['admin'].get('/c/' + pair.qr_token).text
+        role = '工務巡檢員' if team == 'engineering' else '總務巡檢員'
+        assert f'由總務執行人員先簽到，再由{role}或總務管理員巡檢' in html
+        assert 'id="inspection-form"' not in html

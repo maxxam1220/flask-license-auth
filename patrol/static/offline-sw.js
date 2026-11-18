@@ -1,7 +1,7 @@
 /* Never cache account pages, API responses, records, or uploaded photos. */
 'use strict';
 // Bump this release key whenever the shell or a required asset changes.
-const CACHE = 'patrol-offline-shell-20261118-v27';
+const CACHE = 'patrol-offline-shell-20261118-v28';
 const AUDIO_VERSION = 'patrol-v1', AUDIO_ROOT = '/static/audio/' + AUDIO_VERSION + '/';
 // Keep the fixed paths compatible with already-open pages and pending drafts.
 // A new revision still requires a complete, verified download before activation.
@@ -141,7 +141,7 @@ self.addEventListener('fetch', event => {
   const versionedAudio = audioAllowed.has(url.pathname) && url.search === '?rev=' + AUDIO_REVISION;
   // Keep exact public asset aliases used by already-open pages. The template
   // dependency regression test verifies every current src/href works offline.
-  const versionedCore = url.pathname === '/static/offline.js' && ['?v=checklist-1', '?v=checklist-2', '?v=ios-audio-1', '?v=ios-audio-2', '?v=three-day-1', '?v=photo-storage-1', '?v=photo-repair-1', '?v=photo-repair-2', '?v=offline-shell-1'].includes(url.search);
+  const versionedCore = url.pathname === '/static/offline.js' && ['?v=checklist-1', '?v=checklist-2', '?v=ios-audio-1', '?v=ios-audio-2', '?v=three-day-1', '?v=photo-storage-1', '?v=photo-repair-1', '?v=photo-repair-2', '?v=offline-shell-1', '?v=offline-scan-1'].includes(url.search);
   const versionedVoice = url.pathname === '/static/patrol-voice.js' && ['?v=ios-audio-1', '?v=ios-audio-2'].includes(url.search);
   const versionedFeedbackStyle = url.pathname === '/static/offline.css' && ['?v=ios-audio-2', '?v=photo-repair-1'].includes(url.search);
   if (allowed.has(url.pathname) && url.pathname !== '/offline' && (!url.search || versionedAudio || versionedCore || versionedVoice || versionedFeedbackStyle)) {

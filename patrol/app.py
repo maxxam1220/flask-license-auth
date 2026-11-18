@@ -1297,7 +1297,8 @@ def create_app(config=None):
             period = "本週期" if point.frequency in ("three_day", "weekly", "monthly") else "本次"
             return "execute", first is None, f"{period}已登記執行，不需重複簽到。" if first else ""
         if g.user.role != "inspector" or patrol_scope(g.user) != "general":
-            return "inspect", False, "系統管理員僅可管理此點，兩段打卡須由對應角色完成。"
+            inspector = t("工務巡檢員" if point.inspection_team == "engineering" else "總務巡檢員")
+            return "inspect", False, t("由總務執行人員先簽到，再由{inspector}或總務管理員巡檢。系統管理員可在此查看點位。", inspector=inspector)
         if not first:
             return "inspect", False, "尚未執行，請等總務執行人員先刷同一點位。"
         if first.user_id == g.user.id:

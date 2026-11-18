@@ -72,6 +72,18 @@ def test_preparation_counts_older_personal_slot_when_schedule_changes(applicatio
     assert item["used_slots"] == (["am", "pm"] if new_frequency == "daily2" else ["any"])
 
 
+def test_reviewer_sees_own_first_stage_only_for_the_round_previously_executed(application, anytime):
+    a = anytime
+    assert a.executor.post(a.paired + "/confirm", data=payload(a.executor, a.paired)).status_code == 302
+    actor = db.session.scalar(db.select(User).where(User.username == "exec"))
+    actor.role = "inspector"
+    db.session.commit()
+    for client, own_slots in ((a.executor, ["am"]), (a.inspector, [])):
+        point = next(point for point in prepare(client)["points"] if point["id"] == a.pair_point.id)
+        assert point["stage"] == "inspect" and point["executed_slots"] == ["am"]
+        assert point["own_execution_slots"] == own_slots
+
+
 def test_deeply_nested_invalid_json_returns_actionable_error_without_writes(application, anytime):
     prepared = prepare(anytime.inspector)
     response = anytime.inspector.post("/api/offline/sync", data={"entry": "[" * 1500 + "0" + "]" * 1500},

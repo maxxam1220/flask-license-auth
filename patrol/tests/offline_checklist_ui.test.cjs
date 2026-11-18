@@ -18,26 +18,30 @@ const waitFor = async (read, description) => {
   do { if (await read()) return; await new Promise(resolve => setTimeout(resolve, 5)); } while (Date.now() < until);
   assert.fail('Timed out: ' + description);
 };
-async function setup(t, { shell = false, stage = 'execute' } = {}) {
+async function setup(t, { shell = false, stage = 'execute', token = 'test-point', configure, storage, offline = false } = {}) {
   const hidden = { personal_day: '2026-11-09', slot: 'am', stage, frequency: 'daily2', workflow_mode: 'two_stage', period_key: '2026-11-09', point_revision: 'revision-1' };
   const inputs = Object.entries(hidden).map(([name, value]) => `<input type="hidden" name="${name}" value="${value}">`).join('');
   const fields = `<div data-offline-report-fields><textarea name="note"></textarea><input type="checkbox" name="is_abnormal"><input type="file" name="photos" multiple></div>`;
-  const offline = `<div data-offline-status></div><div data-offline-point><h2 data-offline-point-name></h2><form data-offline-checkin action="/offline">
-    <button type="submit" data-offline-save disabled>OK</button><fieldset data-offline-fields disabled>
-    <fieldset data-offline-checklist hidden><legend data-offline-checklist-title></legend><div data-offline-checklist-options></div><p data-offline-checklist-count></p></fieldset>${fields}</fieldset></form></div><ul data-offline-queue></ul>`;
+  const shellHTML = `<div data-offline-status></div><button data-qr-start>SCAN</button><div data-offline-point hidden><span data-offline-point-code></span><h2 data-offline-point-name></h2><p data-offline-point-meta></p>
+    <div data-offline-execution hidden><strong data-offline-execution-title></strong><p data-offline-execution-help></p><small data-offline-execution-time></small></div><form data-offline-checkin action="/offline">
+    <button type="submit" data-offline-save disabled><strong>OK</strong> <span data-i18n="確認暫存打卡">確認暫存打卡</span></button><fieldset data-offline-fields disabled>
+    <fieldset data-offline-checklist hidden><legend data-offline-checklist-title></legend><div data-offline-checklist-options></div><p data-offline-checklist-count></p></fieldset>${fields}</fieldset></form></div>
+    <section data-offline-saved hidden><h2 id="offline-saved-title"></h2><p data-offline-saved-message></p></section><ul data-offline-queue></ul>`;
   const normal = `<main><div class="checkin-card"><form id="inspection-form" method="post" action="/c/test-point/confirm">${inputs}<fieldset data-checklist><p class="checklist-count"></p>
     <label class="checklist-option"><input type="checkbox" name="checklist" value="dining.a1">A1</label><label class="checklist-option"><input type="checkbox" name="checklist" value="dining.a2">A2</label>
     </fieldset><button type="submit">OK</button></form></div></main>`;
   const errors = [], console = new VirtualConsole();
   console.on('jsdomError', error => { if (!error.message.includes('Not implemented: navigation')) errors.push(error); });
-  const dom = new JSDOM(`<body ${shell ? 'data-offline-shell' : 'data-offline-workspace="true" data-offline-user="12" data-offline-version="1"'}>${shell ? offline : normal}</body>`,
-    { url: 'https://local.invalid/' + (shell ? 'offline?point=test-point' : 'c/test-point'), runScripts: 'outside-only', virtualConsole: console });
-  const win = dom.window, uploads = [];
+  const dom = new JSDOM(`<body ${shell ? 'data-offline-shell data-offline-hydrating' : 'data-offline-workspace="true" data-offline-user="12" data-offline-version="1"'}>${shell ? shellHTML : normal}</body>`,
+    { url: 'https://local.invalid/' + (shell ? 'offline?point=' + token : 'c/test-point'), runScripts: 'outside-only', virtualConsole: console });
+  const win = dom.window, uploads = [], requests = [];
   const manifest = { ok: true, version: 1, checklist_version: 1, owner: 'test-owner', identity: { id: 12, auth_version: 1, binding_id: 8, name: 'Test', ui_language: 'vi', role: stage === 'inspect' ? 'inspector' : 'executor' },
     server_time: new Date(stamp).toISOString(), day: '2026-11-09', capture_until: '2026-11-09T16:00:00Z', sync_until: '2026-11-10T16:00:00Z', csrf_token: 'csrf',
     points: [{ token: 'test-point', code: '4M-G01', name: 'Dining', floor: '4M', frequency: 'daily2', workflow_mode: 'two_stage', stage,
       period_key: '2026-11-09', slots: ['am', 'pm'], used_slots: [], executed_slots: [], grant: 'grant', revision: 'revision-1', checklist }] };
-  win.indexedDB = new IDBFactory(); win.isSecureContext = true; win.Date.now = () => stamp; win.HTMLElement.prototype.scrollIntoView = () => {};
+  configure?.(manifest);
+  win.indexedDB = storage || new IDBFactory(); win.isSecureContext = true; win.Date.now = () => stamp; win.HTMLElement.prototype.scrollIntoView = () => {};
+  if (offline) Object.defineProperty(win.navigator, 'onLine', { value: false });
   class Channel {
     constructor() { this.port1 = { close() {} }; this.port2 = { close() {}, postMessage: data => this.port1.onmessage?.({ data }) }; }
   }
@@ -47,6 +51,7 @@ async function setup(t, { shell = false, stage = 'execute' } = {}) {
   win.PatrolI18n = { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? ''), getLocale: () => locale,
     setLocale: value => { locale = value; }, getPreferences: () => ({ ui_language: locale }), acceptPreferences: () => false };
   win.fetch = async (url, init) => {
+    requests.push(url);
     if (url === '/api/offline/prepare') return response(manifest);
     if (url === '/api/offline/status') return response({ ok: true, owner: manifest.owner, csrf_token: 'fresh' });
     if (url === '/api/ui-preferences') return response({ ok: true, ui_language: locale });
@@ -61,11 +66,140 @@ async function setup(t, { shell = false, stage = 'execute' } = {}) {
     await win.PatrolOffline?.close(); win.close(); assert.deepEqual(errors, []);
   });
   await new Promise(resolve => win.document.readyState === 'loading' ? win.document.addEventListener('DOMContentLoaded', resolve, { once: true }) : resolve());
-  if (shell) await win.PatrolOffline.prepare();
+  if (shell && !offline) await win.PatrolOffline.prepare();
   await waitFor(async () => (await win.PatrolOffline.getState()).prepared, 'prepared manifest');
-  if (shell) await waitFor(() => win.document.querySelectorAll('[name="checklist"]').length === 2, 'offline choices');
-  return { win, uploads, manifest, form: win.document.querySelector('form'), core: win.PatrolOffline, changeLocale(value) { locale = value; win.document.dispatchEvent(new win.CustomEvent('patrol:locale-changed')); } };
+  if (shell) await waitFor(() => !win.document.querySelector('[data-offline-point]').hidden &&
+    win.document.querySelector('[data-offline-point-meta]').textContent &&
+    !win.document.querySelector('[data-offline-point-meta]').textContent.includes('請連線登入') &&
+    (!manifest.points.find(point => point.token === token)?.checklist || win.document.querySelectorAll('[name="checklist"]').length === 2), 'offline point');
+  return { win, uploads, requests, manifest, form: win.document.querySelector('form'), core: win.PatrolOffline, changeLocale(value) { locale = value; win.document.dispatchEvent(new win.CustomEvent('patrol:locale-changed')); } };
 }
+
+test('offline admin sees a two-stage label without a check-in form or grant; an unknown QR has a separate explanation', async t => {
+  const configure = manifest => {
+    manifest.identity.role = 'admin';
+    manifest.management_only_points = [{ token: 'stairs', code: 'B2-G002', name: '甲梯', floor: 'B2', inspection_team: 'general' }];
+  };
+  const storage = new IDBFactory();
+  await setup(t, { shell: true, configure, storage });
+  const stairs = await setup(t, { shell: true, configure, storage, offline: true, token: 'stairs' });
+  assert.equal(stairs.win.document.querySelector('[data-offline-point-name]').textContent, '甲梯');
+  assert.equal(stairs.win.document.querySelector('[data-offline-point-code]').textContent, 'B2-G002');
+  assert.match(stairs.win.document.querySelector('[data-offline-point-meta]').textContent, /執行人員.*巡檢員.*系統管理員/);
+  assert.equal(stairs.win.document.querySelector('[data-offline-execution]').hidden, true);
+  assert.equal(stairs.form.hidden, true);
+  stairs.form.dispatchEvent(new stairs.win.Event('submit', { bubbles: true, cancelable: true }));
+  assert.equal(await stairs.core.getPoint('stairs'), null);
+  await assert.rejects(stairs.core.enqueue({ token: 'stairs' }), { code: 'point' });
+  assert.equal((await stairs.core.getState()).pending, 0);
+  const missing = await setup(t, { shell: true, configure, storage, offline: true, token: 'unknown' });
+  assert.match(missing.win.document.querySelector('[data-offline-point-meta]').textContent, /不在本帳號的離線清單/);
+  assert.equal(missing.form.hidden, true);
+  assert.deepEqual([...stairs.requests, ...missing.requests], []);
+});
+
+test('back-to-back offline check-ins show saving, accept one tap per point and identify a rescan from the local queue', async t => {
+  const storage = new IDBFactory();
+  const configure = manifest => {
+    manifest.points[0].slots = ['any'];
+    manifest.points.push({ ...manifest.points[0], token: 'next-point', code: 'B2-B' });
+  };
+  const options = { shell: true, configure, storage };
+  await setup(t, options);
+  const first = await setup(t, { ...options, offline: true });
+  const persist = first.core.enqueue;
+  let release, writes = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  first.core.enqueue = async input => { ++writes; await gate; return persist(input); };
+  async function checkAndSave(ui, hold = false) {
+    const button = ui.form.querySelector('[data-offline-save]');
+    const scan = ui.win.document.querySelector('[data-qr-start]');
+    const choice = ui.form.querySelector('[name="checklist"]');
+    choice.checked = true; choice.dispatchEvent(new ui.win.Event('change', { bubbles: true }));
+    assert.equal(button.disabled, false, 'checking an item should update OK immediately');
+    button.click();
+    if (hold) {
+      try {
+        assert.match(button.textContent, /正在暫存/);
+        assert.equal(scan.disabled, true);
+        assert.equal(ui.form.getAttribute('aria-busy'), 'true');
+        ui.form.dispatchEvent(new ui.win.Event('submit', { bubbles: true, cancelable: true }));
+        assert.equal(writes, 1);
+        assert.equal((await ui.core.getState()).pending, 0);
+      } finally { release(); }
+    }
+    await waitFor(() => !scan.disabled && ui.form.dataset.submitting !== 'true', 'durable local save');
+  }
+  await checkAndSave(first, true);
+  const second = await setup(t, { ...options, offline: true, token: 'next-point' });
+  await checkAndSave(second);
+  const rows = (await second.core.getState()).queue;
+  assert.deepEqual(Array.from(rows, row => row.token), ['test-point', 'next-point']);
+  assert.notEqual(rows[0].client_id, rows[1].client_id);
+  const again = await setup(t, { ...options, offline: true });
+  assert.match(again.win.document.querySelector('[data-offline-point-meta]').textContent, /已有此點的暫存紀錄/);
+  assert.equal(again.form.hidden, true);
+  assert.equal((await again.core.getState()).pending, 2);
+  assert.deepEqual([...first.requests, ...second.requests, ...again.requests], []);
+});
+
+test('a completed point in the prepared data shows its name and completion without asking for login', async t => {
+  const ui = await setup(t, { shell: true, configure: manifest => { manifest.points[0].used_slots = ['am', 'pm']; } });
+  assert.equal(ui.win.document.querySelector('[data-offline-point-name]').textContent, 'Dining');
+  assert.match(ui.win.document.querySelector('[data-offline-point-meta]').textContent, /已完成/);
+  assert.equal(ui.form.hidden, true);
+});
+
+for (const signed of [false, true]) test(`offline inspector sees the execution for the displayed round only: ${signed ? 'signed' : 'unconfirmed'}`, async t => {
+  const configure = manifest => {
+    manifest.points[0].used_slots = ['am'];
+    manifest.points[0].executed_slots = signed ? ['pm'] : ['am'];
+  };
+  const options = { shell: true, stage: 'inspect', storage: new IDBFactory(), configure };
+  await setup(t, options);
+  const ui = await setup(t, { ...options, offline: true });
+  const panel = ui.win.document.querySelector('[data-offline-execution]');
+  assert.equal(panel.hidden, false);
+  assert.equal(panel.dataset.state, signed ? 'signed' : 'unconfirmed');
+  assert.match(panel.querySelector('strong').textContent, signed ? /執行人員已簽到，可以巡檢/ : /尚未查到本次執行簽到/);
+  assert.match(panel.querySelector('small').textContent, /離線資料更新於 .*2026/);
+  assert.equal(panel.querySelector('p').textContent.includes('請對方先同步'), !signed);
+  const choice = ui.form.querySelector('[name="checklist"]');
+  choice.checked = true; choice.dispatchEvent(new ui.win.Event('change', { bubbles: true }));
+  ui.form.querySelector('button').click();
+  await waitFor(() => ui.win.document.querySelector('[data-offline-saved-message]').textContent, 'offline inspection saved');
+  assert.equal(ui.win.document.querySelector('[data-offline-saved-message]').textContent.includes('請對方先同步'), !signed);
+  assert.equal(ui.win.document.querySelector('[data-offline-queue]').textContent.includes('請對方先同步'), !signed);
+  const state = await ui.core.getState();
+  assert.equal(state.pending, 1);
+  assert.equal(state.queue[0].slot, 'pm');
+  assert.equal(state.queue[0].execution_unconfirmed, !signed);
+  assert.deepEqual(ui.requests, []);
+});
+
+test('a fresh preparation updates the open inspection handoff and preserves the selected checklist', async t => {
+  const ui = await setup(t, { shell: true, stage: 'inspect' });
+  const panel = ui.win.document.querySelector('[data-offline-execution]');
+  assert.equal(panel.dataset.state, 'unconfirmed');
+  const choice = ui.form.querySelector('[name="checklist"]'); choice.click();
+  ui.manifest.points[0].executed_slots = ['am'];
+  await ui.core.prepare();
+  await waitFor(() => panel.dataset.state === 'signed', 'updated execution visible');
+  assert.equal(choice.checked, true);
+  assert.equal(ui.form.querySelector('button').disabled, false);
+});
+
+test('an inspector who performed the execution under an earlier role cannot review that same round', async t => {
+  const ui = await setup(t, { shell: true, stage: 'inspect', configure: manifest => {
+    manifest.points[0].executed_slots = ['am'];
+    manifest.points[0].own_execution_slots = ['am'];
+  } });
+  assert.match(ui.win.document.querySelector('[data-offline-point-meta]').textContent, /不同帳號/);
+  assert.equal(ui.win.document.querySelector('[data-offline-execution]').hidden, true);
+  assert.equal(ui.form.hidden, true);
+  await assert.rejects(ui.core.enqueue({ token: 'test-point', checklist: ['dining.a1'] }), { code: 'forbidden' });
+  assert.equal((await ui.core.getState()).pending, 0);
+});
 
 for (const stage of ['execute', 'visit', 'inspect']) test(`prepared-online ${stage} serializes checked inputs before disabling and sends one selected ID`, async t => {
   const ui = await setup(t, { stage });

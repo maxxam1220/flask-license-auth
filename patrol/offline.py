@@ -212,11 +212,18 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         day = local_dt(instant).date()
         capture_until = datetime.combine(day + timedelta(days=1), time.min, timezone_local)
         sync_until = capture_until + timedelta(days=1)
-        candidates = []
+
+        def point_label(point):
+            return dict(token=point.qr_token, code=point.code, name=point.name, floor=floor_label(point.floor),
+                        name_i18n={language: translate(point.name, language) for language in ("id", "vi")})
+
+        candidates, management_only = [], []
         for point in db.session.scalars(select(Point).where(Point.active.is_(True),
                 Point.deleted_at.is_(None), Point.schedule_start <= day).order_by(Point.floor, Point.code)):
             stage = stage_for(user, point)
             if not stage:
+                if user.role == "admin" and point.workflow_mode == "two_stage":
+                    management_only.append(dict(**point_label(point), inspection_team=point.inspection_team))
                 continue
             key = period_for(point, instant)[0]
             slots = ["am", "pm"] if point.frequency == "daily2" else ["any"]
@@ -238,14 +245,17 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
         shared_used = set(db.session.execute(select(Inspection.point_id, Inspection.frequency, Inspection.period_key, Inspection.slot).where(
             Inspection.point_id.in_(shared_ids), Inspection.period_key.in_(keys),
             Inspection.legacy_unscheduled.is_(False), Inspection.executor_visit.is_(False))).all()) if shared_ids else set()
-        executed_used = set(db.session.execute(select(PatrolExecution.point_id, PatrolExecution.frequency, PatrolExecution.period_key, PatrolExecution.slot).where(
-            PatrolExecution.point_id.in_(execution_ids), PatrolExecution.period_key.in_(keys))).all()) if execution_ids else set()
+        executions = db.session.execute(select(PatrolExecution.point_id, PatrolExecution.frequency, PatrolExecution.period_key,
+            PatrolExecution.slot, PatrolExecution.user_id).where(PatrolExecution.point_id.in_(execution_ids),
+            PatrolExecution.period_key.in_(keys))) if execution_ids else ()
+        executor_by_slot = {(point_id, frequency, period, slot): actor_id for point_id, frequency, period, slot, actor_id in executions}
         rows = []
         for point, stage, key, slots in candidates:
             grant = dict(v=1, owner=owner(user, binding), settings=settings(point), stage=stage,
                          day=day.isoformat(), period_key=key, issued_at=iso(instant),
                          capture_until=iso(capture_until), sync_until=iso(sync_until))
-            executed = [slot for slot in slots if (point.id, point.frequency, key, slot) in executed_used]
+            executed = [slot for slot in slots if (point.id, point.frequency, key, slot) in executor_by_slot]
+            own_execution = [slot for slot in executed if stage == "inspect" and executor_by_slot[point.id, point.frequency, key, slot] == user.id]
             if stage == "execute":
                 used = executed
             elif point.workflow_mode in ("spot", "two_stage"):
@@ -253,16 +263,15 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
                         or (slot == "any" and any((point.id, old_slot) in personal_used for old_slot in ("am", "pm"))))]
             else:
                 used = [slot for slot in slots if (point.id, point.frequency, key, slot) in shared_used]
-            rows.append(dict(id=point.id, token=point.qr_token, revision=point_revision(point), code=point.code, name=point.name,
-                             name_i18n={language: translate(point.name, language) for language in ("id", "vi")},
-                             floor=floor_label(point.floor), frequency=point.frequency, workflow_mode=point.workflow_mode,
+            rows.append(dict(**point_label(point), id=point.id, revision=point_revision(point),
+                             frequency=point.frequency, workflow_mode=point.workflow_mode,
                              inspection_team=point.inspection_team,
                              checklist=checklist_for_point(point),
-                             stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed,
+                             stage=stage, period_key=key, slots=slots, used_slots=used, executed_slots=executed, own_execution_slots=own_execution,
                              grant=signer.dumps(grant)))
         return jsonify(ok=True, version=1, checklist_version=1, owner=owner(user, binding), identity=identity(user, binding),
                        server_time=iso(instant), day=day.isoformat(), capture_until=iso(capture_until),
-                       sync_until=iso(sync_until), csrf_token=csrf_token(), points=rows)
+                       sync_until=iso(sync_until), csrf_token=csrf_token(), points=rows, management_only_points=management_only)
 
     def receipt(row, status, **extra):
         endpoint = "execution_success" if row.execution_id else "checkin_success"

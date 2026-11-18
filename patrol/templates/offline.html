@@ -18,7 +18,7 @@
   <script src="/static/i18n.js"></script>
   <link rel="stylesheet" href="/static/patrol-voice.css">
   <script defer src="/static/patrol-voice.js?v=ios-audio-2"></script>
-  <script defer src="{{ url_for('static', filename='offline.js', v='offline-shell-1') }}"></script>
+  <script defer src="{{ url_for('static', filename='offline.js', v='offline-scan-1') }}"></script>
   <script defer src="/static/offline-update.js"></script>
   <script defer src="/static/patrol-scanner.js"></script>
 </head>
@@ -38,6 +38,11 @@
     <h2 id="offline-point-title" data-offline-point-name></h2>
     <p class="offline-point-meta" data-offline-point-meta></p>
     <div class="offline-point-tags"><span data-offline-stage></span><span data-offline-round></span></div>
+    <div class="offline-execution" data-offline-execution role="status" aria-atomic="true" hidden>
+      <strong data-offline-execution-title></strong>
+      <p data-offline-execution-help></p>
+      <small data-offline-execution-time></small>
+    </div>
     <form method="post" action="/offline" id="offline-checkin" data-offline-checkin>
       <div class="offline-confirm-action"><button class="button button-primary button-full button-large" type="submit" data-offline-save disabled><strong lang="en">OK</strong> <span data-i18n="確認暫存打卡">{{ t('確認暫存打卡') }}</span></button><p><span data-i18n="暫存成功後仍需同步，系統確認收件才算完成。">{{ t('暫存成功後仍需同步，系統確認收件才算完成。') }}</span></p></div>
       <fieldset class="offline-fields" data-offline-fields disabled>

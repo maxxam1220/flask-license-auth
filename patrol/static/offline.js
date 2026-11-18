@@ -40,6 +40,11 @@
     return definition.items.filter(item => chosen.has(item.id)).map(item => item.id);
   }
   const checklistCapable = manifest => manifest?.checklist_version === 1 && Array.isArray(manifest.points) && manifest.points.every(point => point && validChecklistDefinition(point.checklist));
+  function executionStatus(point, slot) {
+    if (!slot || point?.stage !== 'inspect' || point.workflow_mode !== 'two_stage') return null;
+    if (Array.isArray(point.own_execution_slots) && point.own_execution_slots.includes(slot)) return 'same_account';
+    return Array.isArray(point.executed_slots) && point.executed_slots.includes(slot) ? 'signed' : 'unconfirmed';
+  }
   // Preserve absence on pre-checklist rows: adding [] changes their receipt hash.
   const savedChecklist = row => owns(row, 'checklist') ? { checklist: row.checklist, checklist_snapshot: row.checklist_snapshot } : {};
   const formChecklist = target => target ? Array.from(target.querySelectorAll('input[type="checkbox"][name="checklist"]')).filter(choice => choice.checked).map(choice => choice.value) : [];
@@ -215,7 +220,8 @@
     }
     const summary = row => ({ client_id: row.client_id, token: row.token, code: row.code, name: row.name, name_i18n: row.name_i18n, stage: row.stage, slot: row.slot,
       day: row.day, observed_at: row.observed_at, status: row.status, error: row.error || '', retryable: row.retryable,
-      note: row.note, is_abnormal: row.is_abnormal, photo_count: row.photos?.length || 0, attempts: row.attempts || 0, ...savedChecklist(row) });
+      note: row.note, is_abnormal: row.is_abnormal, photo_count: row.photos?.length || 0, attempts: row.attempts || 0,
+      execution_unconfirmed: row.execution_unconfirmed === true, ...savedChecklist(row) });
     async function refresh() {
       if (capabilityError) { setMessage(capabilityError.message); state.online = navigator.onLine !== false; hidePrivateState(); return state; }
       let snapshot;
@@ -324,14 +330,19 @@
       if (!syncing) syncState = {};
       broadcast(); return refresh();
     }
-    async function getPoint(token) {
+    async function getPoint(token, { includeManagementOnly = false } = {}) {
       if (capabilityError) return null;
       return transaction(STORES, 'readonly', (tx, done) => readAll(tx, data => {
         const { manifest } = current(data), point = manifest?.points.find(item => item.token === token);
-        if (!point) return done(null);
+        if (!point) {
+          const label = includeManagementOnly && manifest?.identity.role === 'admin' && fresh(manifest) &&
+            Array.isArray(manifest.management_only_points) && manifest.management_only_points.find(item => item?.token === token);
+          return done(label ? { ...label, owner: manifest.owner, managementOnly: true } : null);
+        }
         const used = usedSlots(manifest, point, data);
-        done({ ...point, owner: manifest.owner, identity: manifest.identity, availableSlots: point.slots.filter(slot => !used.has(slot) && !used.has('any')), prepared: fresh(manifest), day: manifest.day,
-          waitingExecution: point.stage === 'inspect' && point.workflow_mode === 'two_stage' });
+        const availableSlots = point.slots.filter(slot => !used.has(slot) && !used.has('any'));
+        done({ ...point, owner: manifest.owner, identity: manifest.identity, availableSlots, prepared: fresh(manifest), day: manifest.day,
+          executionCheckedAt: manifest.server_time, waitingExecution: executionStatus(point, availableSlots[0]) === 'unconfirmed' });
       }));
     }
     async function enqueue(input) {
@@ -371,6 +382,8 @@
         const slot = point.slots.find(item => !used.has(item) && !used.has('any'));
         if (!slot) return fail(fault('quota', '此點今日可登記的次數已完成或已暫存。'));
         if (input.expected && input.expected.slot !== slot) return fail(fault('stale', '這份表單的次數已完成或已暫存，請重新掃描下一次；不會自動改成另一個次數。'));
+        const execution = executionStatus(point, slot);
+        if (execution === 'same_account') return fail(fault('forbidden', '執行與巡檢必須由不同帳號完成。'));
         const usedBytes = data.queue.reduce((total, item) => total + (item.photos || []).reduce((size, photo) => size + photo.size, 0), 0);
         if (data.queue.length >= MAX_QUEUE_ITEMS || usedBytes + photos.reduce((total, photo) => total + photo.size, 0) > MAX_QUEUE_BYTES) {
           return fail(fault('storage', '待補傳資料已達本機上限（200 筆或 256 MB 照片），請先補傳既有紀錄。這筆原表單與照片仍保留。'));
@@ -383,6 +396,7 @@
           day: manifest.day, sync_until: manifest.sync_until, created_ms: now(), code: point.code, name: point.name, name_i18n: point.name_i18n,
           stage: point.stage, frequency: point.frequency, period_key: point.period_key, status: 'pending', retryable: true, attempts: 0,
           checklist, checklist_snapshot };
+        if (execution === 'unconfirmed') row.execution_unconfirmed = true;
         tx.objectStore('meta').put({ key: 'sequence', value: sequence }); tx.objectStore('queue').add(row); done(summary(row));
       }));
       setMessage('已暫存此手機，尚未收到伺服器確認。', { kind: 'local-save', client_id: saved.client_id });
@@ -761,6 +775,11 @@
     const slotText = slot => slot === 'am' ? t('第 1 次') : slot === 'pm' ? t('第 2 次') : t('本次');
     const stageText = stage => ({ execute: t('執行簽到'), inspect: t('巡檢'), visit: t('直接簽到') }[stage] || t('巡檢'));
     const timeText = iso => { try { return new Date(iso).toLocaleString(({ id: 'id-ID', vi: 'vi-VN' })[root.PatrolI18n?.getLocale()] || 'zh-TW', { timeZone: 'Asia/Taipei', hour12: false }); } catch { return iso; } };
+    const pendingExecutionHint = '巡檢已暫存。若執行人員也離線簽到，請對方先同步，再補傳本筆巡檢。';
+    function pendingSaveMessage(row) {
+      if (row.error || row.execution_unconfirmed) return `${row.code} · ${slotText(row.slot)} · ${t(row.error || pendingExecutionHint)}`;
+      return t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) });
+    }
     function showNotice(source, tone = 'error') {
       localNotice = { source, tone };
       text('status', t(source));
@@ -832,31 +851,64 @@
     async function showPoint() {
       const run = ++pointGeneration, section = one('point'); if (!section) return;
       if (latestState?.storageUnavailable) { section.hidden = true; if (one('save')) one('save').disabled = true; return; }
-      const point = selectedToken ? await core.getPoint(selectedToken) : null;
+      if (body.hasAttribute('data-offline-hydrating') && latestState?.supported && latestState.revision === undefined) return;
+      const point = selectedToken ? await core.getPoint(selectedToken, { includeManagementOnly: true }) : null;
       if (run !== pointGeneration) return;
-      section.hidden = !selectedToken;
-      if (!selectedToken) return;
+      section.hidden = !selectedToken || Boolean(point && point.owner !== latestState?.owner);
+      if (section.hidden) return;
       selectedOwner = point?.owner;
-      if (point && !selectedSnapshot) selectedSnapshot = { point, expected: { user_id: point.identity.id, auth_version: point.identity.auth_version,
+      const actionable = point && !point.managementOnly;
+      if (actionable && !selectedSnapshot) selectedSnapshot = { point, expected: { user_id: point.identity.id, auth_version: point.identity.auth_version,
         day: point.day, slot: point.availableSlots[0], stage: point.stage, frequency: point.frequency, workflow_mode: point.workflow_mode,
         period_key: point.period_key, revision: point.revision } };
-      const displayed = selectedSnapshot?.point || point;
+      const displayed = point?.managementOnly ? point : selectedSnapshot?.point || point;
       const expected = selectedSnapshot?.expected;
-      const unchanged = point && expected && point.owner === selectedSnapshot.point.owner && point.revision === expected.revision && point.day === expected.day;
-      const eligible = point?.prepared && unchanged && point.availableSlots.includes(expected.slot);
+      const unchanged = actionable && expected && point.owner === selectedSnapshot.point.owner && point.revision === expected.revision && point.day === expected.day;
+      const roundAvailable = point?.prepared && unchanged && point.availableSlots.includes(expected.slot);
+      const handoff = roundAvailable ? executionStatus(point, expected.slot) : null;
+      const eligible = roundAvailable && handoff !== 'same_account';
+      const saving = form?.dataset.submitting === 'true';
+      let reason = '';
+      if (point?.managementOnly) reason = '由總務執行人員先簽到，再由{inspector}或總務管理員巡檢。系統管理員可在此查看點位。';
+      else if (latestState?.supported === false) reason = latestState.supportMessage;
+      else if (latestState?.locked) reason = '請連線登入並準備今日離線資料。';
+      else if (latestState?.needsChecklistUpdate) reason = CHECKLIST_UPDATE_MESSAGE;
+      else if (!latestState?.prepared || (actionable && !point.prepared)) reason = '今日離線資料已到期，請連線重新準備。原有待補傳資料仍保留。';
+      else if (!point) reason = '此點不在本帳號的離線清單中，請連線更新。';
+      else if (!unchanged) reason = '點位或日期已變更，請重新掃描';
+      else if (handoff === 'same_account') reason = '執行與巡檢必須由不同帳號完成。';
+      else if (!eligible && !saving) {
+        if (point.availableSlots.length) reason = '這份表單的次數已完成或已暫存，請重新掃描下一次；不會自動改成另一個次數。';
+        else if (latestState.queue.some(row => !row.stale_owner && row.token === point.token && row.day === point.day))
+          reason = '這支手機已有此點的暫存紀錄，請查看「待傳紀錄」。';
+        else reason = '本次{stage}已完成，可繼續掃描下一點。';
+      }
       if (scanVoicePending && latestState && !body.hasAttribute('data-offline-hydrating')) {
         scanVoicePending = false;
         if (!eligible) voice('point_unavailable', `scan:${Date.now()}:${++voiceSequence}`);
       }
-      text('point-code', displayed?.code || t('尚未取得點位')); text('point-name', displayed ? pointName(displayed.name, displayed.name_i18n) : t('請連線登入並準備今日離線資料。'));
-      text('point-meta', point ? `${point.floor} · ${frequencyLabel(point.frequency)}` : '');
-      text('point-stage', point ? stageText(point.stage) : '');
-      const roundLabel = displayed ? eligible ? `${slotText(expected.slot)} · ${expected.day}` : !unchanged ? t('點位或日期已變更，請重新掃描') : t('本次已完成、已暫存或已到期，請重新掃描確認') : '';
+      text('point-code', displayed?.code || '');
+      text('point-name', displayed ? pointName(displayed.name, displayed.name_i18n) : t('無法離線打卡'));
+      const labels = point?.managementOnly ? { inspector: t(point.inspection_team === 'engineering' ? '工務巡檢員' : '總務巡檢員') } :
+        { stage: actionable ? stageText(point.stage) : '' };
+      text('point-meta', reason ? t(reason, labels) : `${point.floor} · ${frequencyLabel(point.frequency)}`);
+      text('point-stage', actionable ? stageText(point.stage) : '');
+      const roundLabel = (eligible || saving) && expected?.slot ? `${slotText(expected.slot)} · ${expected.day}` : '';
       text('point-round', roundLabel);
-      text('stage', point ? stageText(point.stage) : '');
+      text('stage', actionable ? stageText(point.stage) : '');
       text('round', roundLabel);
-      if (form) form.dataset.pointPath = '/c/' + selectedToken;
-      const saving = form?.dataset.submitting === 'true';
+      const execution = one('execution');
+      if (execution) {
+        execution.hidden = !eligible || !handoff;
+        execution.dataset.state = handoff || '';
+        text('execution-title', handoff === 'signed' ? t('執行人員已簽到，可以巡檢') : handoff === 'unconfirmed' ? t('尚未查到本次執行簽到') : '');
+        text('execution-help', handoff === 'unconfirmed' ? t('請先確認執行人員已簽到。若對方已離線簽到，可先暫存巡檢，連線後請對方先同步。') : '');
+        text('execution-time', handoff ? t('離線資料更新於 {time}', { time: timeText(point.executionCheckedAt) }) : '');
+      }
+      if (form) {
+        form.dataset.pointPath = '/c/' + selectedToken;
+        form.hidden = !actionable || (!eligible && !draftPresent(form));
+      }
       if (one('fields')) one('fields').disabled = !eligible || saving;
       const checklistValid = showChecklist(displayed, expected);
       if (one('save')) one('save').disabled = !eligible || saving || !checklistValid;
@@ -966,8 +1018,7 @@
           const title = document.getElementById('offline-saved-title');
           if (title) title.textContent = receipt ? t('已同步完成') : blocked ? t('本筆未完成') : t('已暫存在這支手機');
           text('saved-message', receipt ? t('{code} · {slot} 已收到伺服器確認，可以繼續下一點。', { code: record.code, slot: slotText(record.slot) }) :
-            blocked ? `${record.code} · ${slotText(record.slot)} · ${t(record.error || '本筆未完成')}` :
-            t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: record.code, slot: slotText(record.slot) }));
+            blocked ? `${record.code} · ${slotText(record.slot)} · ${t(record.error || '本筆未完成')}` : pendingSaveMessage(record));
         }
       }
       const list = one('queue');
@@ -987,7 +1038,8 @@
           const heading = document.createElement('strong'); heading.textContent = `${row.code} · ${pointName(row.name, row.name_i18n)}`;
           const info = document.createElement('p'); info.textContent = `${stageText(row.stage)} · ${slotText(row.slot)} · ${timeText(row.observed_at)}`;
           const status = document.createElement('p'); status.className = row.status === 'blocked' ? 'offline-item-error' : 'offline-item-status';
-          status.textContent = t(row.error || (row.checklist_review_required ? '這筆舊版暫存未記錄點檢勾選。可先同步核對是否已有收據；若被拒絕，請核對後明確刪除，再到現場重新掃描。' : '已暫存此手機，尚未收到伺服器確認。'));
+          status.textContent = t(row.error || (row.checklist_review_required ? '這筆舊版暫存未記錄點檢勾選。可先同步核對是否已有收據；若被拒絕，請核對後明確刪除，再到現場重新掃描。' :
+            row.execution_unconfirmed ? pendingExecutionHint : '已暫存此手機，尚未收到伺服器確認。'));
           const details = document.createElement('small'); details.textContent = `${row.is_abnormal ? t('異常回報') + ' · ' : ''}${t('{count} 張照片', { count: row.photo_count })}${row.note ? ' · ' + row.note : ''}`;
           const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button button-secondary button-small'; remove.disabled = state.sync?.running;
           remove.textContent = t('刪除本機紀錄'); remove.addEventListener('click', async () => {
@@ -1087,13 +1139,23 @@
       renderPhotos();
     });
     one('clear-photos')?.addEventListener('click', () => { photosInput.value = ''; renderPhotos(); photosInput.focus(); });
-    form?.addEventListener('change', event => { if (event.target.name === 'checklist') showPoint().catch(reportError); });
+    form?.addEventListener('change', event => {
+      if (event.target.name !== 'checklist' || !selectedSnapshot || form.hidden) return;
+      const valid = showChecklist(selectedSnapshot.point, selectedSnapshot.expected);
+      one('save').disabled = one('fields').disabled || !valid;
+    });
     form?.addEventListener('reset', () => { resetPhotos(); setTimeout(() => showPoint().catch(reportError), 0); });
     form?.addEventListener('submit', async event => {
-      event.preventDefault(); if (form.dataset.submitting === 'true') return;
+      event.preventDefault(); if (form.dataset.submitting === 'true' || form.hidden || !selectedSnapshot) return;
       localNotice = null;
       const checklist = new FormData(form).getAll('checklist');
       form.dataset.submitting = 'true'; const submit = one('save'); if (submit) submit.disabled = true;
+      form.setAttribute('aria-busy', 'true');
+      const caption = submit?.querySelector('[data-i18n]'), mark = submit?.querySelector('strong');
+      if (caption) { caption.dataset.i18n = '正在暫存到這支手機…'; caption.textContent = t(caption.dataset.i18n); }
+      if (mark) mark.hidden = true;
+      const scanButtons = document.querySelectorAll('[data-qr-start]:enabled');
+      for (const button of scanButtons) button.disabled = true;
       if (one('fields')) one('fields').disabled = true;
       const captureOwner = selectedSnapshot?.point.owner || selectedOwner;
       try {
@@ -1111,13 +1173,19 @@
         const savedTitle = document.getElementById('offline-saved-title');
         if (savedTitle) savedTitle.textContent = t('已暫存在這支手機');
         voice('offline_stored', `local:${row.client_id}`);
-        text('saved-message', t('{code} · {slot} 已暫存此手機，尚未收到伺服器確認。連線後請按「同步待傳紀錄」。', { code: row.code, slot: slotText(row.slot) }));
+        text('saved-message', pendingSaveMessage(row));
         await showPoint(); one('saved')?.scrollIntoView({ block: 'nearest' });
       } catch (error) {
         if (error.code === 'checklist') { one('checklist')?.classList.add('is-invalid'); one('checklist-options')?.querySelector('input')?.focus(); }
         reportError(error); voiceFailure();
       }
-      finally { delete form.dataset.submitting; await showPoint().catch(reportError); }
+      finally {
+        delete form.dataset.submitting; form.removeAttribute('aria-busy');
+        if (caption) { caption.dataset.i18n = '確認暫存打卡'; caption.textContent = t(caption.dataset.i18n); }
+        if (mark) mark.hidden = false;
+        for (const button of scanButtons) button.disabled = false;
+        await showPoint().catch(reportError);
+      }
     }, true);
     one('prepare')?.addEventListener('click', async () => {
       if (preparing) return;

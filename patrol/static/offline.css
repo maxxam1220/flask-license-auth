@@ -85,6 +85,11 @@ html[data-offline-locale-pending] .offline-shell { visibility: hidden; }
 .offline-point-meta { margin: 7px 0 0; color: #65786c; font-size: 15px; }
 .offline-point-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .offline-point-tags > span:not(:empty) { padding: 5px 10px; border-radius: 6px; background: #edf4ec; color: #3c654d; font-size: 14px; font-weight: 650; }
+.offline-execution { margin-top: 12px; padding: 12px 14px; border-inline-start: 4px solid #528a6d; border-radius: 6px; background: #edf4ec; color: #294d3b; line-height: 1.55; }
+.offline-execution[data-state="unconfirmed"] { border-color: #c9974f; background: #fff6e7; color: #705422; }
+.offline-execution p { margin: 4px 0; }
+.offline-execution p:empty { display: none; }
+.offline-execution small { display: block; margin-top: 4px; }
 .offline-confirm-action { padding: 17px 0; }
 .offline-confirm-action .button { min-height: 54px; gap: 10px; font-size: 19px; }
 .offline-confirm-action .button > strong[lang="en"] { flex: none; white-space: nowrap; }
