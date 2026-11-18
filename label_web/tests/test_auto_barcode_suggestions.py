@@ -8,6 +8,7 @@ from werkzeug.exceptions import Conflict
 
 import barcode_rule_authoring as rules
 import database as db
+import standard_library
 import standard_reference as standards
 import test_manual_barcode_rule as manual_fixture
 
@@ -21,6 +22,24 @@ def entry(value="2834665432436",expiry="2026-11-20",base_date="2026-11-17"):
 
 
 class AutoBarcodeMathTests(unittest.TestCase):
+    def test_qmc_meal_examples_use_the_printed_expiry_time_and_original_code(self):
+        # Printed and decoded examples on pages 5 and 8 of QMC001 B.
+        examples = (("2764706633938", "2020-12-04", "03時", "3.1.4"),
+                    ("2013101013242", "2021-11-09", "24時", "4.1.3"))
+        for value, expiry, time, clause in examples:
+            with self.subTest(clause=clause):
+                data = entry(value, expiry=expiry, base_date="")
+                data["dates"][0]["value"] = expiry + " " + time
+                candidates, recommended = rules.auto_hypotheses(data)
+                selected = next(item for item in candidates if item["id"] == recommended)
+                self.assertEqual(selected["sop_reference"], {"document":"QMC001", "edition":"B", "clause":clause})
+                self.assertEqual(selected["composed_value"], value)
+                data["fixed_barcode_reference"] = True
+                self.assertIsNone(rules.auto_hypotheses(data)[1])
+                data["dates"][0]["value"] = expiry + " 17時"
+                candidates, _ = rules.auto_hypotheses(data)
+                self.assertFalse(any("sop_reference" in item for item in candidates))
+
     def test_unique_three_digit_suggests_but_retains_two_digit_alternative(self):
         candidates,recommended=rules.auto_hypotheses(entry())
         best=next(item for item in candidates if item["id"]==recommended)
@@ -96,6 +115,86 @@ class AutoBarcodeWorkflowTests(unittest.TestCase):
     tearDown=manual_fixture.ManualBarcodeRuleTests.tearDown
     body=manual_fixture.ManualBarcodeRuleTests.body
     save_body=manual_fixture.ManualBarcodeRuleTests.save_body
+
+    def test_upca_is_carried_into_legacy_library_suggestion_save_and_recheck(self):
+        from label_source import _manual_catalog_item, _barcode_matches
+        from source_validation import evaluate_source
+        printed="4 00000 79003 9"
+        value="400000790039"
+        original=deepcopy(self.original)
+        source=deepcopy(self.source)
+        source["name"]="B8 高山甜柿2.5kg"
+        source["fields"]["product"]=source["name"]
+        source["lines"][0]["text"]="品名："+source["name"]
+        source["lines"][1]["text"]=printed
+        source["barcode_values"]=[]
+        source["barcode_config"]={}
+        original["ocr"]["lines"][0]["text"]=source["lines"][0]["text"]
+        original["ocr"]["lines"][1]["text"]=printed
+        original["ocr"]["barcodes"]={"items":[{"text":"0"+value,"format":"EAN-13","box":[]}]}
+        with self.engine.begin() as conn:
+            conn.execute(update(db.manual_sources).where(db.manual_sources.c.code==CODE).values(snapshot=source))
+            conn.execute(update(standards.versions).where(standards.versions.c.code==CODE).values(snapshot=source))
+            conn.execute(update(db.inspections).where(db.inspections.c.id=="scan").values(ocr=original["ocr"]))
+        display=standard_library.detail(self.engine,"manual",CODE,lambda _:None)
+        self.assertEqual(display["identity"]["barcode"],value)
+        self.assertTrue(_barcode_matches(_manual_catalog_item(source),value))
+        self.assertTrue(_barcode_matches(_manual_catalog_item(source),"0"+value))
+        result=rules.suggest(self.engine,"scan")
+        self.assertTrue(result["can_write"])
+        self.assertFalse(result["manual_entry"]["available"])
+        self.assertEqual(result["manual_entry"]["auto_candidates"],[])
+        candidate,=result["candidates"]
+        self.assertEqual(candidate["rule"],{"version":1,"symbology":"UPCA","value":value})
+        body={key:result[key] for key in ("base_revision","source_revision","manual_revision")}
+        body.update(candidate_id=candidate["id"],fill_keep_days=False)
+        preview=rules.preview(self.engine,"scan",body)
+        self.assertEqual(preview["after"]["rule"],candidate["rule"])
+        saved=rules.save(self.engine,"scan",dict(body,preview_hash=preview["preview_hash"],confirmed=True,reviewer="QA",note="核對柿子條碼"))
+        self.assertEqual(saved["rule"],candidate["rule"])
+        reopened=rules.suggest(self.engine,"scan")
+        self.assertEqual(reopened["current_rule"],candidate["rule"])
+        display=standard_library.detail(self.engine,"manual",CODE,lambda _:None)
+        self.assertNotIn("web_barcode_rule", display["source"])
+        self.assertEqual(display["source"]["lines"],source["lines"])
+        for text,status in ((printed,"pass"),(value,"pass"),("0"+value,"pass"),("036000291452","review")):
+            original["ocr"]["lines"][1]["text"]=text
+            result=evaluate_source(original["ocr"]["lines"],display["source"],base_date="2026-11-17")
+            checks=[check for check in result["checks"] if check["label"]=="條碼"]
+            self.assertEqual([item["status"] for item in checks],[status],checks)
+
+    def test_new_fixed_code_is_saved_when_manual_standard_lacks_any_barcode(self):
+        from source_validation import evaluate_source
+        printed="4 00000 79003 9"
+        ocr=deepcopy(self.original["ocr"]);ocr["lines"][1]["text"]=printed
+        source=deepcopy(self.source);source["lines"].pop(1)
+        with self.engine.begin() as conn:
+            conn.execute(update(standards.versions).where(standards.versions.c.code==CODE).values(snapshot=source))
+            conn.execute(update(db.inspections).where(db.inspections.c.id=="scan").values(ocr=ocr))
+        result=rules.suggest(self.engine,"scan")
+        self.assertIsNone(result["current_rule"])
+        candidate,=result["candidates"]
+        self.assertEqual(candidate["evidence"]["type_verification"],"printed_checksum")
+        body={key:result[key] for key in ("base_revision","source_revision","manual_revision")}
+        body.update(candidate_id=candidate["id"],fill_keep_days=False)
+        preview=rules.preview(self.engine,"scan",body)
+        rules.save(self.engine,"scan",dict(body,preview_hash=preview["preview_hash"],confirmed=True,reviewer="QA",note="核對固定商品碼"))
+        final=standard_library.detail(self.engine,"manual",CODE,lambda _:None)["source"]
+        updated=standards.changed_snapshot(source,final,{"keep_days":source["keep_days"]})
+        self.assertEqual(updated["barcode_values"],["400000790039"])
+        result=evaluate_source(ocr["lines"],updated,base_date="2026-11-17")
+        self.assertEqual(next(check for check in result["checks"] if check["label"]=="條碼")["status"],"pass")
+
+    def test_upca_blocks_an_existing_different_or_dynamic_barcode(self):
+        for source in (dict(deepcopy(self.source),barcode_values=["036000291452"]),dict(deepcopy(self.source),web_barcode_rule=RULE)):
+            ocr=deepcopy(self.original["ocr"]);ocr["lines"][1]["text"]="4 00000 79003 9"
+            with self.engine.begin() as conn:
+                conn.execute(update(standards.versions).where(standards.versions.c.code==CODE).values(snapshot=source))
+                conn.execute(update(db.inspections).where(db.inspections.c.id=="scan").values(ocr=ocr))
+            payload=rules.suggest(self.engine,"scan")
+            self.assertFalse(payload["can_write"])
+            self.assertEqual(payload["candidates"],[])
+            self.assertIn("現行標準",payload["reason"])
 
     def test_get_proposals_and_preview_are_read_only_and_preserve_raw(self):
         before=deepcopy(self.original)

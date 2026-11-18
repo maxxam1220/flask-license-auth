@@ -44,6 +44,27 @@ def _fixed_barcodes(value):
     return values
 
 
+def with_printed_upca(source):
+    """Recover the fixed barcode field from an approved manual 1-5-5-1 row."""
+    if source.get("source_kind") != "manual" or source.get("web_barcode_rule"):
+        return source
+    config = source.get("barcode_config") or {}
+    if any(value for key, value in config.items() if key != "kind") or str(config.get("kind", "")) not in {"", "2"}:
+        return source
+    from barcode_checks import gtin_valid
+    digits = set()
+    for row in source.get("lines", []):
+        line = unicodedata.normalize("NFKC", str(row.get("text", ""))).strip()
+        match = re.fullmatch(r"(?:(?:商品條碼|條碼|条码|Barcode|UPC-?A)\s*[:：]?\s*)?([0-9]\s+[0-9]{5}\s+[0-9]{5}\s+[0-9])", line, re.I)
+        if match:
+            compact = re.sub(r"\s", "", match[1])
+            if gtin_valid(compact) is True:
+                digits.add(compact)
+    if len(digits) == 1 and all(isinstance(item, str) and re.sub(r"\s", "", item) in digits for item in source.get("barcode_values", [])):
+        return dict(source, barcode_config={**config, "kind": "2"}, barcode_values=sorted(digits))
+    return source
+
+
 def _reliable_lines(lines):
     return [line for line in lines if not line.get("human_uncertain") and
             (line.get("human_verified") is True or (float(line.get("score",0))>=.65 and not line.get("ambiguous")))]
@@ -71,14 +92,15 @@ def _barcode_matches(item,value):
     """Typography is interchangeable only for explicitly typed GTIN values."""
     known=item.get("barcode",set())
     if value in known:return True
-    length={"1":13,"2":12,"3":8}.get(str(item.get("barcode_kind","")).strip())
+    kind=str(item.get("barcode_kind","")).strip()
+    length={"1":13,"2":12,"3":8}.get(kind)
     if not length:return False
-    from barcode_checks import gtin_valid
+    from barcode_checks import gtin_valid, typed_gtin_digits
     def canonical(raw):
         # Code128 can contain meaningful spaces, so this branch is type-gated.
         raw=re.sub(r"^(?:條碼|条码|商品條碼|商品条码|Barcode)\s*[:：]\s*","",str(raw).strip(),count=1,flags=re.I)
         if re.fullmatch(r"[0-9 \t]+",raw) is None:return None
-        compact=re.sub(r"[ \t]","",raw)
+        compact=typed_gtin_digits(re.sub(r"[ \t]","",raw),kind)
         return compact if len(compact)==length and gtin_valid(compact) is True else None
     normalized=canonical(value)
     return bool(normalized) and any(canonical(raw)==normalized for raw in known)
@@ -270,6 +292,7 @@ def raw_catalog(engine):
 
 def _manual_catalog_item(source):
     from barcode_rule_authoring import dynamic_literal
+    source=with_printed_upca(source)
     rule=source.get("web_barcode_rule")
     item = {"code": source["code"], "name": source["name"], "sku": set(),
             "barcode": {value for value in source.get("barcode_values", []) if not rule or not dynamic_literal(rule,value)}, "spec": set(), "origin": set(),

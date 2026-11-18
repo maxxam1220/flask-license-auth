@@ -60,6 +60,15 @@ check("history restores stored batch dates and source",()=>{t.state.templates=[]
 async function main(){
   context.fetch=async()=>({ok:false,status:409,json:async()=>({error:"conflict"})});await assert.rejects(t.api("/conflict"),error=>error.status===409);checks++;console.log("PASS API preserves 409 status");
   context.apiResult={items:[{id:"a",name:"系統來源",version:0,status:"fail",created_at:inspection.created_at,image:{thumbnail:"/a"},manual_revision:4,manual_status:"review"},{id:"b",name:"照片標準",version:3,status:"pass",created_at:inspection.created_at,image:{thumbnail:"/b"}}],has_more:false};vm.runInContext("api=async()=>apiResult",context);await t.loadHistory();check("history hides internal zero version and retains photo/manual versions",()=>{assert.match($("#history-list").textContent,/系統比對/);assert.doesNotMatch($("#history-list").textContent,/第 0 版/);assert.match($("#history-list").textContent,/第 3 版/);assert.match($("#history-list").textContent,/已訂正 · 第 4 版/);});
+  context.apiResult.items.forEach(item=>item.day="2026-11-12");
+  context.apiResult.day_counts={"2026-11-12":{photos:25,records:28}};
+  context.apiResult.today={date:"2026-11-12",photos:25,records:28};
+  await t.loadHistory();
+  check("history headings show complete day counts across page boundaries",()=>{
+    assert.equal($("#history-list").querySelectorAll(".history-day").length,1);
+    assert.match($("#history-list").querySelector(".history-day").textContent,/25 張照片 · 28 筆檢查/);
+    assert.match($("#history-today").textContent,/今天.*25 張照片 · 28 筆檢查/);
+  });
   const generatedName="人工文字標準 manual:7f0123456789abcd7f0123456789abcd · 精緻水果餐盒";
   check("history shortens only exact generated manual UUID prefix without changing records",()=>{const item={name:generatedName,version:0},before=JSON.stringify(item);assert.deepEqual(plain(t.historyPresentation(item)),{name:"精緻水果餐盒",reference:"人工文字標準"});assert.equal(JSON.stringify(item),before);for(const name of ["自訂："+generatedName,"人工文字標準 manual:123 · 精緻水果餐盒"])assert.equal(t.historyPresentation({name,version:0}).name,name);assert.equal(t.historyPresentation({name:generatedName,version:2}).name,generatedName);});
   context.apiResult={items:[{id:"manual-row",name:generatedName,version:0,status:"fail",manual_revision:2,manual_status:"pass",created_at:inspection.created_at,image:{thumbnail:"/a"}}],has_more:false};await t.loadHistory();check("history badges have a separate group below product copy",()=>{const list=$("#history-list"),row=list.querySelector(".history-row");assert.match(row.querySelector(".history-copy").textContent,/精緻水果餐盒/);assert.match(row.querySelector(".history-copy").textContent,/人工文字標準/);assert.doesNotMatch(row.textContent,/manual:7f/);assert.equal(row.querySelector(".history-copy").querySelectorAll(".badge").length,0);assert.equal(row.querySelector(".history-statuses").querySelectorAll(".badge").length,2);});
@@ -122,7 +131,17 @@ async function main(){
   $("#cleanup-reviewer").value="QA";$("#cleanup-note").value="整理測試紀錄";sent=[];await t.commitHistoryCleanup({preventDefault(){}});check("archive requires explicit confirmation",()=>assert.equal(sent.length,0));
   $("#cleanup-confirm").checked=true;context.capture=(url,options)=>{sent.push({url,body:options?.body});return url==="/api/admin/history/archive" ? {batch_id:"b1",count:1,status:"archived"} : {items:[],has_more:false};};await t.commitHistoryCleanup({preventDefault(){}});
   check("archive submits reviewed snapshot hash without widening filters",()=>{const request=sent.find(item=>item.url==="/api/admin/history/archive");assert.deepEqual(plain(request.body),{reviewer:"QA",note:"整理測試紀錄",confirmed:true,preview_id:"preview-1",preview_hash:"approved-hash"});assert.match($("#cleanup-notice").textContent,/已將 1 筆移至回收區/);assert.equal($("#cleanup-confirm-panel").hidden,true);});
-  t.state.historySelection.set("one","一");t.state.historySelection.set("two","二");await t.openHistoryCleanup("selected");check("selected cleanup sends only captured IDs regardless of date controls",()=>{assert.deepEqual(plain(t.cleanupFilters()),{ids:["one","two"]});t.state.historySelection.clear();assert.deepEqual(plain(t.cleanupFilters()),{ids:["one","two"]});});
+  t.state.historySelection.set("one","一");t.state.historySelection.set("two","二");sent=[];
+  context.capture=(url,options)=>{sent.push({url,body:options?.body});return options?.method==="POST" ? {count:2} : {items:[],has_more:false};};
+  await vm.runInContext("archiveSelectedHistory()",context);
+  check("selected cleanup immediately sends only captured IDs",()=>{assert.deepEqual(plain(sent.filter(item=>item.body)),[{url:"/api/admin/history/archive-selected",body:{ids:["one","two"]}}]);assert.equal(t.state.historySelection.size,0);});
+  context.capture=(url,options)=>{sent.push({url,body:options?.body});return options?.method==="POST" ? {count:2} : {items:[],recycle_count:2,recycle_token:"shown",has_more:false};};
+  await t.openHistoryCleanup("recycle");sent=[];context.window.confirm=()=>false;
+  await vm.runInContext("emptyHistoryRecycle()",context);
+  check("cancel leaves the recycle bin intact",()=>assert.equal(sent.length,0));
+  context.window.confirm=()=>true;await vm.runInContext("emptyHistoryRecycle()",context);
+  check("confirmed empty uses the displayed recycle snapshot",()=>assert.deepEqual(plain(sent[0]),{url:"/api/admin/history/empty",body:{confirmed:true,recycle_token:"shown"}}));
+  await t.openHistoryCleanup("filters");
   context.capture=()=>({...preview,count:0,items:[]});await t.previewHistoryCleanup();check("empty preview cannot expose confirmation",()=>{assert.equal($("#cleanup-confirm-panel").hidden,true);assert.equal($("#cleanup-confirm-save").disabled,true);});
   context.capture=(url)=>url.includes("/batches/") ? {batch:{batch_id:"b1",count:1,status:"archived",revision:1,created_at:inspection.created_at},items:preview.items} : {items:[],page:1,has_more:false};await t.openHistoryCleanup("recycle");sent=[];context.capture=(url,options)=>{sent.push({url,body:options?.body});return {batch:{batch_id:"b1",count:1,status:"archived",revision:1,created_at:inspection.created_at},items:preview.items};};await t.previewHistoryRestore("b1");
   check("restore shows snapshot before any write and resets consent",()=>{assert.deepEqual(sent,[{url:"/api/admin/history/batches/b1",body:undefined}]);assert.equal($("#cleanup-confirm").checked,false);assert.equal($("#cleanup-confirm-save").disabled,true);assert.match($("#cleanup-confirm-text").textContent,/1 筆還原/);});

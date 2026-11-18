@@ -124,7 +124,8 @@ class BuiltinScanTests(unittest.TestCase):
         checks = {c["key"]: c for c in result["checks"]}
         self.assertEqual(checks["date_line_0_0"]["status"], "review")
         self.assertEqual(checks["date_line_1_0"]["status"], "pass")
-        self.assertEqual(checks["text_line_0"]["status"], "read")
+        self.assertEqual(checks["date_line_0_0"]["whole_date_label"], "包裝日期")
+        self.assertNotIn("text_line_0", checks)
 
     def test_manufacture_batch_is_checked_without_expiry(self):
         result = recognize_only([line(0, "製造日期：2026.11.12")], batch_date="2026-11-13")

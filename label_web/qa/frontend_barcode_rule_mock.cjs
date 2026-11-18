@@ -79,7 +79,31 @@ async function main(){
  check("unlocking after changing inspections cannot reopen the previous barcode modal",()=>{assert.equal(requests.length,1);assert.equal(t.state.barcodeRule,null);assert.equal($("#barcode-rule-dialog").open,false);});
  context.originalLoadTemplates=actualLoadTemplates;vm.runInContext("loadTemplates=originalLoadTemplates",context);
  const formulaCheck={key:"web_barcode_rule",source:"database",status:"pass",actual:"2803993832539",expected:"2803993832539",reason:"依已核准日期規則相符"},unread={key:"barcode_unread",status:"review",actual:"2803993832539",reason:"尚未成功解碼條紋，不能確認可掃描或檢查碼。"};
- function barcodeCard(checks){const area=new Node();pick("renderBarcodeCard")({barcodeChecks:checks},{...inspection.result,checks},area,inspection);return area.querySelector("section");}
+ function barcodeCard(checks,fields=inspection.result.fields){const area=new Node();pick("renderBarcodeCard")({barcodeChecks:checks},{...inspection.result,checks,fields},area,inspection);return area.querySelector("section");}
+ const trace={key:"barcode_traceability_0",actual:"https://trace.example.test/?t=0000000000000001",label:"履歷 QR Code",status:"pass"};
+ const retail={key:"barcode_decode_0",actual:"4711378333473",label:"條碼圖形",status:"pass"};
+ check("a retail barcode and a traceability URL have distinct headings and values",()=>{
+   const card=barcodeCard([trace,retail],{});
+   assert.equal(card.querySelector("h3").textContent,"商品條碼");
+   assert.deepEqual(card.querySelectorAll(".barcode-observed").map(node=>node.textContent),[retail.actual]);
+   assert.equal(card.querySelector(".barcode-traceability").querySelector("h4").textContent,"履歷 QR Code");
+   assert.equal(card.querySelector(".traceability-url").textContent,trace.actual);
+   assert.ok(card.textContent.indexOf(retail.actual)<card.textContent.indexOf(trace.actual));
+ });
+ check("a QR-only scan reports only traceability even if a legacy barcode field repeats its URL",()=>{
+   const card=barcodeCard([trace],{barcode:{value:trace.actual}});
+   assert.equal(card.querySelector("h3").textContent,"履歷 QR Code");
+   assert.match(card.textContent,/只讀到履歷 QR Code/);
+   assert.doesNotMatch(card.textContent,/基本檢查通過|商品條碼/);
+   assert.equal(card.querySelector(".barcode-observed"),null);
+   assert.equal(card.querySelector(".barcode-rule-entry"),null);
+ });
+ check("a readable traceability URL does not satisfy a required retail barcode",()=>{
+   const card=barcodeCard([trace,{key:"barcode_expected",source:"database",status:"fail",expected:retail.actual,reason:"商品條碼缺漏"}],{});
+   assert.equal(card.querySelector(".badge").textContent,"✕ 有差異");
+   assert.match(card.textContent,/商品條碼缺漏/);
+   assert.equal(card.querySelector(".barcode-traceability").querySelector(".badge").textContent,"✓ 已讀取履歷網址");
+ });
  check("approved formula pass is visible separately from unresolved barcode readability",()=>{const checks=[formulaCheck,unread],before=JSON.stringify(checks),card=barcodeCard(checks);assert.match(card.className,/\bpass\b/);assert.match(card.querySelector(".badge").textContent,/✓ 條碼數字與日期規則相符/);assert.match(card.querySelector(".barcode-readability").textContent,/需實際掃碼確認可讀性/);assert.doesNotMatch(card.textContent,/不能確認.*檢查碼/);assert.equal(JSON.stringify(checks),before);});
  for(const status of ["fail","review"]){check(`genuine other barcode ${status} dominates even when the approved formula passes`,()=>{const card=barcodeCard([formulaCheck,unread,{key:"barcode_hri",status,reason:"條紋與印字不同"}]);assert.match(card.className,new RegExp(`\\b${status}\\b`));assert.match(card.querySelector(".barcode-formula-status").textContent,/數字與日期規則相符/);assert.match(card.querySelector(".badge").textContent,status==="fail" ? /有差異/ : /需確認/);assert.match(card.textContent,/條紋與印字不同/);});}
  check("uncertain formula never becomes a pass because the barcode was unread",()=>{const card=barcodeCard([{...formulaCheck,status:"review",reason:"日期不清楚"},unread]);assert.match(card.className,/\breview\b/);assert.doesNotMatch(card.textContent,/✓ 條碼數字與日期規則相符/);});
@@ -106,6 +130,18 @@ async function main(){
  check("an available photo-derived candidate folds source evidence while keeping administrator unlock visible",()=>{assert.equal($("#barcode-rule-basis-details").open,false);assert.equal($("#barcode-rule-basis").hidden,false);assert.equal($("#barcode-rule-unlock").hidden,false);const html=fs.readFileSync(path.join(__dirname,"../static/index.html"),"utf8");const details=html.slice(html.indexOf('<details id="barcode-rule-basis-details"'),html.indexOf('</details>',html.indexOf('<details id="barcode-rule-basis-details"')));assert.match(details,/barcode-rule-observed/);assert.match(details,/barcode-rule-current/);assert.doesNotMatch(details,/barcode-rule-unlock|barcode-rule-write-note/);});
  setup();api(manualData);await open(inspection.id);check("missing candidates keep observation evidence expanded",()=>assert.equal($("#barcode-rule-basis-details").open,true));
  api({...manualData,current_rule:rule});await open(inspection.id);check("an approved current rule also folds repeated observation details",()=>assert.equal($("#barcode-rule-basis-details").open,false));
+ const upcaRule={version:1,symbology:"UPCA",value:"400000790039"};
+ const upca={id:"fixed",rule:upcaRule,summary:"固定 UPC-A 商品條碼 400000790039",evidence:{kind:"fixed_upca"}};
+ setup();api({...data,candidates:[upca],manual_entry:{available:false}});
+ await open(inspection.id);
+ check("a fixed UPC-A is selected without EAN-13 date fields",()=>{
+   assert.equal(t.state.barcodeRule.candidateId,"fixed");
+   assert.equal($("#barcode-rule-manual").hidden,true);
+   assert.equal($("#barcode-rule-preview-button").disabled,false);
+   assert.match($("#barcode-rule-notice").textContent,/UPC-A 固定商品條碼 400000790039/);
+   assert.match(pick("barcodeRuleDescription")(upcaRule),/固定 UPC-A 商品條碼 400000790039/);
+   assert.doesNotMatch($(".barcode-candidates-fieldset > .help").textContent,/日期碼/);
+ });
  console.log(`${count} barcode-rule frontend checks passed`);
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

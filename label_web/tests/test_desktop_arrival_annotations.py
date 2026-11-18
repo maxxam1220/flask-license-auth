@@ -93,11 +93,11 @@ class DesktopArrivalAnnotationTests(unittest.TestCase):
             source["date_settings"][0]["layout_anchor"] = anchor
             self.assertTrue(self.literal_circle(source))
 
-    def test_only_arrival_field_can_own_annotation(self):
-        for heading in ("製造日期", "有效日期", "其他日期"):
+    def test_all_known_dynamic_date_fields_can_own_annotations(self):
+        for heading in ("製造日期", "有效日期", "到店日", "其他日期"):
             source = self.source()
             source["date_settings"][0]["content"] = heading
-            self.assertTrue(self.literal_circle(source))
+            self.assertEqual(self.literal_circle(source), heading == "其他日期")
 
     def test_photo_replacement_and_manual_coordinates_do_not_use_desktop_origin(self):
         source = self.source()
@@ -107,8 +107,8 @@ class DesktopArrivalAnnotationTests(unittest.TestCase):
         source["source_kind"] = "manual"
         self.assertTrue(self.literal_circle(source))
 
-    def test_normal_text_and_plain_numbers_are_still_literal(self):
-        for text in ("第⑤組", "5", "⑤⑥", "⑴", "ⓐ"):
+    def test_normal_text_and_barcode_length_rows_are_still_literal(self):
+        for text in ("第⑤組", "400000790039", "4711378333473"):
             source = build_draft(desktop_rows(text), "1457")
             self.assertTrue(any(row["text"] == text for row in _source_rows(source)))
 

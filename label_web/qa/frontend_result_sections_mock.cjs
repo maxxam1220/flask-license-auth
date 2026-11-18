@@ -32,6 +32,16 @@ check("date evidence spans retain any remaining non-date ink",()=>{
   const text="到店日2026.11.18 糖",s=sample([line(0,text)],[{key:"arrival",source:"date",status:"pass",actual:"2026.11.18",line_ids:[0]}],{fields:{arrival:{value:"2026.11.18",line_ids:[0],evidence_spans:[{line_id:0,start:0,end:13}]}}});
   const model=build(s);assert.equal(model.content.length,1);assert.equal(model.content[0].status,"read");
 });
+check("packaging date is shown with its year check in the date card",()=>{
+  const date = {key:"date_line_0_0", label:"包裝日期格式", actual:"2026/11/18",
+    source:"date", status:"pass", whole_date_label:"包裝日期", line_ids:[0]};
+  const year = {key:"date_year_0_0", label:"日期年份", actual:"2026", source:"date", status:"fail", line_ids:[0]};
+  const s = sample([line(0,"包裝日期: 2026/11/18")], [date, year]);
+  const area = new Node("div");
+  pick("renderUnmatchedDates")(s.inspection, s.result, area, true);
+  assert.match(area.textContent, /包裝日期.*2026\/11\/18.*有異常/);
+  assert.equal(build(s).content.length, 0);
+});
 check("no standard never yields a green overall verdict",()=>{
   const s=sample([],[],{status:"pass",source_match:{status:"unmatched"}});assert.equal(coverage(s.inspection,s.result,[]).status,"review");assert.match(coverage(s.inspection,s.result,[]).title,/尚無比對標準/);
 });

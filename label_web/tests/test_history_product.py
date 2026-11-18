@@ -1,5 +1,6 @@
 """History titles may use original OCR, never alter the recorded result."""
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ import unittest
 from sqlalchemy import insert, select
 
 import database as db
+import history_cleanup
 from server import create_app
 
 
@@ -57,6 +59,31 @@ class HistoryProductTests(unittest.TestCase):
         for identifier,source in (("with",{"code":"1013","name":"標準答案"}),("without",None)):
             self.add(identifier,[line(0,"品名：原圖品名")],product="原有結果品名",source=source)
         self.assertEqual({item["product"] for item in self.items().values()},{"原有結果品名"})
+
+    def test_daily_counts_span_pages_and_distinguish_photos_from_rechecks(self):
+        today = datetime.now(history_cleanup.TAIWAN).date()
+        midnight = datetime.combine(today, datetime.min.time(), history_cleanup.TAIWAN).astimezone(timezone.utc)
+        sample = self.add("first", [], product="柿子")
+        with self.engine.begin() as conn:
+            conn.execute(insert(db.images).values(id="other",created_at=db.now(),filename="other.jpg",width=600,height=400))
+            conn.execute(db.inspections.update().where(db.inspections.c.id=="first").values(created_at=midnight.isoformat()))
+            for i in range(26):
+                conn.execute(insert(db.inspections).values(**{**sample, "id":str(i), "image_id":"other" if i < 25 else "hidden",
+                    "created_at":(midnight+timedelta(seconds=i+1)).isoformat(), "status":"pass"}))
+            conn.execute(insert(db.inspections).values(**{**sample,"id":"yesterday","created_at":(midnight-timedelta(seconds=1)).isoformat()}))
+            conn.execute(insert(history_cleanup.tombstones).values(inspection_id="25",batch_id="b",archived=True,revision=1,updated_at=db.now()))
+        for page in (1,2):
+            response = self.client.get(f"/api/inspections?page={page}")
+            self.assertEqual(response.status_code,200,response.json)
+            result = response.json
+            self.assertEqual(result["today"],{"date":today.isoformat(),"photos":2,"records":26})
+            self.assertEqual(result["day_counts"][today.isoformat()],{"photos":2,"records":26})
+        yesterday = (today - timedelta(days=1)).isoformat()
+        self.assertEqual(result["day_counts"][yesterday],{"photos":1,"records":1})
+        self.assertEqual(result["items"][-1]["day"],yesterday)
+        filtered = self.client.get("/api/inspections?status=pass").json
+        self.assertEqual(filtered["day_counts"][today.isoformat()],{"photos":1,"records":25})
+        self.assertEqual(filtered["today"],result["today"])
 
     def test_source_name_is_not_used_to_fill_missing_observed_product(self):
         self.add("with-source",[line(0,"商品名稱：實印蘋果")],source={"code":"1013","name":"標準答案"})

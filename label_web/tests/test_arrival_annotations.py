@@ -32,9 +32,9 @@ class ArrivalAnnotationTests(unittest.TestCase):
                 self.assertEqual(result["status"], "pass")
                 self.assertEqual(check(result, "arrival")["raw_actual"], value)
                 self.assertEqual(parse_date(value, kind="arrival"), {"date": date(2026, 11, 20), "hour": None, "minute": 0})
-        for marker in ("⒈", "⑴", "ⓐ", "○", "(5)", "5"):
-            with self.subTest(disallowed=marker):
-                self.assertEqual(check(self.inspect([line(0, "到店日：2026.11.20" + marker)]), "arrival")["status"], "fail")
+        for marker in ("⒈", "⑴", "ⓐ", "○", "(5)", "5", "＊2"):
+            with self.subTest(marker=marker):
+                self.assertEqual(check(self.inspect([line(0, "到店日：2026.11.20" + marker)]), "arrival")["status"], "pass")
 
     def test_heading_date_and_annotation_in_three_boxes_are_one_evidence_chain(self):
         observed = [line(0, "到店日：", width=90), line(1, "2026.11.20", x=100, width=150),
@@ -63,7 +63,7 @@ class ArrivalAnnotationTests(unittest.TestCase):
         self.assertNotIn(2, check(result, "arrival")["line_ids"])
 
     def test_near_circle_does_not_cross_an_intervening_field_or_jump_to_next_line(self):
-        for barrier in (line(1, "保存條件", x=185, width=28), line(1, "65", x=185, width=28, height=40)):
+        for barrier in (line(1, "保存條件", x=185, width=28), line(1, "65元", x=185, width=28, height=40)):
             observed = [line(0, "到店日：2026.11.20"), barrier, line(2, "⑤", x=220, width=24)]
             result = self.inspect(observed)
             self.assertEqual(result["fields"]["arrival"]["line_ids"], [0])

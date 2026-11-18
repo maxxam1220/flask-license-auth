@@ -10,6 +10,7 @@ const maxPhotoBytes = 15 * 1024 * 1024;
 let toastTimer;
 Object.assign(state, {role:"anonymous", authenticated:false, permissions:{}, adminConfigured:false, authEpoch:0, historySelection:new Map(), standardSaved:false,crop:null,sampleRequest:0,recognition:{cloud_available:false,default_engine:"local"},referencePhoto:null,uploadRequests:{},libraryDetail:null,libraryCategories:[],libraryCategoryRequest:0,libraryCategoryContext:null});
 let cleanupContext = null;
+let historyRequest = 0;
 
 function allowed(permission = "manage_standards") { return state.role === "admin" && state.permissions[permission] === true; }
 function requireAdmin(permission = "manage_standards") {
@@ -62,7 +63,8 @@ function applySession(session) {
   if(!state.authenticated){
     state.inspection=null;state.correction=null;state.inspectSource=null;state.nextScanChoice=null;state.templates=[];state.failedJobs=[];state.inspectSearchRequest++;state.failedJobsRequest++;
     state.uploadRequests={};$("#inspect-upload-resend").hidden=true;$("#reference-upload-resend").hidden=true;
-    for(const id of ["result-area","history-list","inspect-source-results","inspect-source-selected","selected-standard","failed-jobs-list"])$("#"+id).replaceChildren();
+    historyRequest++;
+    for(const id of ["result-area","history-list","history-today","inspect-source-results","inspect-source-selected","selected-standard","failed-jobs-list"])$("#"+id).replaceChildren();
     $("#template-select").replaceChildren(new Option("自動對應系統標籤與清單",""));
     renderNextScanChoice();
     $("#correction-form").reset();$("#correction-original").value="";$("#correction-text").value="";$("#correction-standard").textContent="";$("#correction-full-photo").removeAttribute("href");
@@ -1502,11 +1504,13 @@ function renderUnmatchedDates(inspection,result,area,showMatched=false){
   const keyGroups={manufacture:["manufacture","date_order","arrival_manufacture","keep_days","batch","future_manufacture"],expiry:["expiry","date_order","arrival_expiry","keep_days","expired"],arrival:["arrival","arrival_manufacture","arrival_expiry"]},weights={fail:3,review:2,pass:1,read:0};
   const panel=element("section","result-date-first");panel.id=matched ? "result-date-card" : "result-date-first";panel.setAttribute("aria-label","日期檢查");panel.append(element("h3","",matched ? "日期" : "日期先看"));
   const list=element("dl","date-first-list"),related=new Set();
-  for(const [key,label] of [["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"]]){
+  const dateRows=[["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"],
+    ...checks.filter(check=>check.whole_date_label).map(check=>[check.key,check.whole_date_label])];
+  for(const [key,label] of dateRows){
     const field=result.fields?.[key],direct=checks.find(check=>check.key===key),value=field?.display_value || field?.value || direct?.display_actual || direct?.actual;
     if(typeof value!=="string" || !value.trim())continue;
     const identifiers=field?.line_ids || direct?.line_ids || [],rowChecks=checks.filter(check=>{
-      if(keyGroups[key].some(prefix=>check.key===prefix || check.key?.startsWith(prefix+"_")))return true;
+      if((keyGroups[key] || [key]).some(prefix=>check.key===prefix || check.key?.startsWith(prefix+"_")))return true;
       // Several dates can share one OCR row. Known field checks must not leak across dates.
       if(/^(manufacture|expiry|arrival)(_|$)|^date_order$|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check.key || ""))return false;
       return (check.line_ids || []).some(id=>identifiers.includes(id) && Object.keys(keyGroups).every(other=>other===key || !(result.fields?.[other]?.line_ids || checks.find(item=>item.key===other)?.line_ids || []).includes(id)));
@@ -1720,6 +1724,7 @@ function barcodeResultCheck(check){return /barcode/i.test(check?.key || "") || c
 function resultRowStatus(rows){return rows.some(row=>row.status==="fail") ? "fail" : rows.some(row=>row.status==="review") ? "review" : !rows.length || rows.some(row=>row.status==="read") ? "read" : "pass";}
 function approvedTextReference(inspection,result){const source=inspection.template_snapshot?.source || {};return result.verified_scope==="approved_text" || source.web_text_approved===true || !!inspection.template_id || !!inspection.template_snapshot?.rules?.approved_text_source || source.source_kind==="manual" || String(source.code || "").startsWith("manual:") || (source.source_kind==="desktop" && (source.lines || []).length>0);}
 function dateOnlyEvidence(line,result){
+  if((result.checks || []).some(check=>check.whole_date_label && (check.line_ids || []).includes(line.id)))return true;
   const fields=Object.entries(result.fields || {}).filter(([key])=>["manufacture","expiry","arrival"].includes(key));
   const spans=fields.flatMap(([,field])=>(field.evidence_spans || []).filter(span=>span.line_id===line.id));
   if(spans.length){const chars=Array.from(line.text || "");for(const span of spans)if(Number.isInteger(span.start) && Number.isInteger(span.end))for(let i=Math.max(0,span.start);i<Math.min(chars.length,span.end);i++)chars[i]="";if(!chars.join("").replace(/[\s:：,，;；|｜/\-]/g,""))return true;}
@@ -1782,24 +1787,43 @@ function renderResultHero(inspection,result,area){
 function barcodeDisplayValues(values){
   const seen=new Set();return values.filter(value=>{if(typeof value!=="string" || !value.trim())return false;const key=/^\s*[0-9][0-9\s]*$/.test(value) ? `numeric:${value.replace(/\s/g,"")}` : `text:${value}`;if(seen.has(key))return false;seen.add(key);return true;});
 }
+function renderTraceability(checks,urls,card,onlyTrace){
+  const section=element("div","barcode-traceability"),status=resultRowStatus(checks);
+  section.append(element(onlyTrace ? "h3" : "h4","","履歷 QR Code"),badge(status,status==="pass" ? "✓ 已讀取履歷網址" : "履歷需確認"));
+  for(const url of urls)section.append(element("p","traceability-url",url));
+  for(const reason of new Set(checks.filter(check=>check.status!=="pass").map(check=>check.reason).filter(Boolean)))section.append(element("p","check-reason",reason));
+  if(onlyTrace)section.append(element("p","help","本次只讀到履歷 QR Code。"));
+  card.append(section);
+}
 function renderBarcodeCard(model,result,area,inspection=state.inspection){
   if(!model.barcodeChecks.length)return;
-  const checks=model.barcodeChecks,formulaPass=checks.some(check=>check.key==="web_barcode_rule" && check.source==="database" && check.status==="pass" && check.expected);
+  const isTrace=check=>String(check.key || "").startsWith("barcode_traceability_");
+  const trace=model.barcodeChecks.filter(isTrace),checks=model.barcodeChecks.filter(check=>!isTrace(check));
+  const urls=barcodeDisplayValues(trace.map(check=>check.actual));
+  const field=result.fields?.barcode,observed=field?.display_value || field?.value;
+  const values=barcodeDisplayValues([urls.includes(observed) || urls.includes(field?.value) ? null : observed,...checks.map(check=>check.display_actual || check.actual)]);
+  if(!checks.length && !values.length){
+    const card=element("section",`result-barcode-card ${resultRowStatus(trace)}`);card.id="result-barcode-card";
+    renderTraceability(trace,urls,card,true);area.append(card);return;
+  }
+  const formulaPass=checks.some(check=>check.key==="web_barcode_rule" && check.source==="database" && check.status==="pass" && check.expected);
   const readabilityOnly=check=>formulaPass && check.key==="barcode_unread" && check.status==="review",status=resultRowStatus(checks.filter(check=>!readabilityOnly(check))),referenced=checks.some(check=>check.status==="pass" && check.source==="database" && check.expected),card=element("section",`result-barcode-card ${status}`);card.id="result-barcode-card";
   const formulaLabel="✓ 條碼數字與日期規則相符",readabilityNote="條紋尚未成功解碼，需實際掃碼確認可讀性。";
-  card.append(element("h3","","條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 僅辨識",pass:formulaPass ? formulaLabel : referenced ? "✓ 已核對相符" : "✓ 基本檢查通過"}[status]));
+  card.append(element("h3","","商品條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 僅辨識",pass:formulaPass ? formulaLabel : referenced ? "✓ 已核對相符" : "✓ 基本檢查通過"}[status]));
   if(formulaPass && status!=="pass")card.append(element("p","barcode-formula-status pass",formulaLabel));
-  const values=barcodeDisplayValues([result.fields?.barcode?.display_value || result.fields?.barcode?.value,...checks.map(check=>check.display_actual || check.actual)]);for(const value of values.slice(0,3))card.append(element("p","barcode-observed",value));
+  for(const value of values.slice(0,3))card.append(element("p","barcode-observed",value));
   const problems=checks.filter(check=>["fail","review"].includes(check.status) && !readabilityOnly(check)),reasons=[...new Set(problems.map(check=>check.reason).filter(Boolean))];reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
   if(checks.some(readabilityOnly))card.append(element("p","check-reason barcode-readability review",`? ${readabilityNote}`));
   if(!referenced)card.append(element("p","help","格式或解碼檢查不代表已確認商品或批次條碼。"));
   const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${readabilityOnly(check) ? readabilityNote : check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}card.append(detail);
   if(inspection?.id){const button=element("button","button secondary barcode-rule-entry",allowed() ? "查看推算／補上條碼規則" : "查看條碼推算");button.id="result-barcode-rule-open";button.type="button";button.dataset.barcodeRule="true";button.disabled=state.busy;button.onclick=()=>openBarcodeRule(inspection.id);card.append(button);}
+  if(trace.length)renderTraceability(trace,urls,card,false);
   area.append(card);
 }
 const barcodeDateLabels={base_date:"本批基準日",manufacture:"製造日期",expiry:"有效日期",arrival:"到店日"};
 function barcodeRuleDescription(rule){
   if(!rule || typeof rule!=="object")return "未設定已核准的條碼推算規則";
+  if(rule.symbology==="UPCA")return `固定 UPC-A 商品條碼 ${rule.value}`;
   return `${rule.symbology || "條碼"}：前綴 ${rule.prefix ?? "未設定"} ＋ ${barcodeDateLabels[rule.day_source] || "未指定日期"}的 ${rule.day_width ?? "?"} 位太陽日 ＋ 尾碼 ${rule.suffix==="" ? "無" : rule.suffix ?? "未設定"} ＋ 檢查碼`;
 }
 function barcodeRuleRows(area,parts){
@@ -1898,6 +1922,7 @@ function updateBarcodeRuleControls(){
   $("#barcode-rule-adjust").hidden=!reviewing || done;$("#barcode-rule-adjust").textContent=manual ? "返回調整手動設定" : "返回調整候選";
   $("#barcode-rule-write-note").textContent=context?.saved ? "" : !allowed() ? "一般使用者可查看推算；請切換管理員，才能補充設定、預覽並確認寫入標準。" : state.resultDirty ? "比對設定已變更，請先關閉視窗並重新核對，再預覽要寫入的規則。" : manual && canManual ? context.autoCandidates?.length || data.current_rule ? "請核對下方帶入內容；候選尚未生效，只有預覽後明確確認才會寫入。" : "這筆可手動補充組碼設定。請依實際印製規則填寫下方欄位，再試算預覽；目前尚未寫入。" : !canWrite ? data?.manual_entry?.reason || data?.reason || "目前資料不足，無法確認寫入規則。" : "候選只表示本次試算一致，尚未核准，也不能證明是唯一公式。請核對各段來源與尚未確認的日期設定後再確認。";
   $("#barcode-rule-unlock").hidden=allowed() || !data || done;$("#barcode-rule-unlock").disabled=state.busy;
+  if(allowed() && canWrite && context?.fixedUpca && !state.resultDirty)$("#barcode-rule-write-note").textContent="請對照商品和完整 12 碼，預覽後即可確認為固定條碼。";
   $("#barcode-rule-mode-label").hidden=!canManual || !(context?.candidates?.length);$("#barcode-rule-mode").disabled=!allowed() || !!context?.conflict || state.busy;
   $("#barcode-rule-candidate-fields").hidden=manual;$("#barcode-rule-manual").hidden=!manual || !canManual;
   for(const id of ["barcode-rule-prefix","barcode-rule-suffix","barcode-rule-day-source","barcode-rule-day-width","barcode-rule-ean13"])$("#"+id).disabled=!editable || !!context?.previewLoading;
@@ -1934,6 +1959,11 @@ function renderBarcodeRule(data,context){
   $("#barcode-rule-current").replaceChildren(element("p","",barcodeRuleDescription(data.current_rule)));
   const candidates=$("#barcode-rule-candidates");candidates.replaceChildren();context.candidateInputs=[];context.candidates=(Array.isArray(data.candidates) ? data.candidates : []).filter(item=>item && typeof item.id==="string" && item.id);
   context.candidateId=context.candidates.length===1 ? context.candidates[0].id : "";
+  context.fixedUpca=context.candidates.length===1 && context.candidates[0].rule?.symbology==="UPCA";
+  if(context.fixedUpca){
+    $("#barcode-rule-notice").textContent=`已帶入 UPC-A 固定商品條碼 ${context.candidates[0].rule.value}。`;
+    if($("#barcode-rule-note").value==="依照片與日期推算核對，補充同款條碼規則")$("#barcode-rule-note").value="依照片與商品核對固定 UPC-A 條碼";
+  }
   context.autoCandidates=data.manual_entry?.available && Array.isArray(data.manual_entry.auto_candidates) ? data.manual_entry.auto_candidates.filter(item=>item && typeof item.id==="string" && item.id && item.rule?.symbology==="EAN13" && typeof item.rule.prefix==="string" && typeof item.rule.suffix==="string" && [2,3].includes(item.rule.day_width)) : [];
   context.autoSelected="";context.manualEdited=false;
   context.mode=data.manual_entry?.available && (!data.can_write || data.current_rule) ? "manual" : "candidate";$("#barcode-rule-mode").value=context.mode;
@@ -1948,11 +1978,12 @@ function renderBarcodeRule(data,context){
   $("#barcode-rule-auto").hidden=!current && !context.autoCandidates.length;$("#barcode-rule-auto-label").hidden=!!current && !context.autoCandidates.length;$("#barcode-rule-manual-fields").open=!current && !context.autoCandidates.length;
   if(current)chooseBarcodeAutoCandidate("approved",true);else if(context.autoCandidates.some(item=>item.id===data.manual_entry?.recommended_id))chooseBarcodeAutoCandidate(data.manual_entry.recommended_id,true);else renderBarcodeAutoSummary(context);
   const methodNote=$(".barcode-candidates-fieldset > .help");if(methodNote)methodNote.textContent=context.candidates.some(candidate=>candidate.evidence?.kind==="catalog_structure") ? "清單已提供的組碼設定會標明來源；日期來源與其他待確認事項依各候選說明核對。單張吻合不代表整份規則已核准。" : "候選僅試算固定前綴後接日期碼的組合；單張吻合不證明真實印製規則。尾碼仍是待確認的固定字元假設，不代表時間或保存天數。";
-  for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status","候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeCandidateEvidence(item,candidate.evidence);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
+  if(methodNote && context.fixedUpca)methodNote.textContent="UPC-A 採用固定 12 碼，包含最後一位檢查碼。";
+  for(const candidate of context.candidates){const item=element("section","barcode-rule-candidate"),label=element("label","barcode-rule-choice"),input=element("input");input.type="radio";input.name="barcode-rule-candidate";input.value=candidate.id;input.checked=candidate.id===context.candidateId;input.onchange=()=>{if(state.barcodeRule!==context || !input.checked)return;context.candidateId=candidate.id;invalidateBarcodeRulePreview();};label.append(input,element("span","",candidate.summary || "候選推算"));context.candidateInputs.push(input);item.append(label,element("p","barcode-candidate-status",context.fixedUpca ? "完整號碼已帶入，檢查碼相符" : "候選試算一致，尚未核准規則"));barcodeRuleRows(item,candidate.parts);barcodeCandidateEvidence(item,candidate.evidence);barcodeWarnings(item,candidate.warnings);candidates.append(item);}
   if(!context.candidates.length)candidates.append(element("p","help","目前沒有足夠依據可提出規則候選。請先核對條碼、日期與對應標準。"));
   else if(context.candidates.length>1)candidates.prepend?.(element("p","help","有多個候選，本次相同數字不能證明哪個公式正確；請確認後選擇。"));
   $("#barcode-rule-warnings").replaceChildren();barcodeWarnings($("#barcode-rule-warnings"),data.warnings);
-  const days=data.keep_days || {};$("#barcode-rule-fill-days").checked=days.current===null && days.can_fill===true && Number.isInteger(days.suggested);$("#barcode-rule-fill-text").textContent=`將補入 ${days.suggested ?? "未提供"} 天（本張日期差推算，待確認；可取消）`;
+  const days=data.keep_days || {};$("#barcode-rule-fill-days").checked=!context.fixedUpca && days.current===null && days.can_fill===true && Number.isInteger(days.suggested);$("#barcode-rule-fill-text").textContent=`將補入 ${days.suggested ?? "未提供"} 天（本張日期差推算，待確認；可取消）`;
   $("#barcode-rule-days-note").textContent=days.reason || "既有保存天數不會被候選覆寫。";
   updateBarcodeRuleControls();
 }
@@ -2134,12 +2165,20 @@ function historyProblemSummary(item){
   return counts.fail || counts.review ? `${prefix}差異 ${counts.fail} 項 · 待確認 ${counts.review} 個檢查點` : counts.read>0 ? `${prefix}${counts.read} 項尚無比對依據` : `${prefix}已核對項目無差異`;
 }
 async function loadHistory() {
-  const filter = $("#history-filter").value, page = state.page;
+  const filter = $("#history-filter").value, page = state.page, request = ++historyRequest;
   const data = await api(`/api/inspections?page=${page}&status=${encodeURIComponent(filter)}`);
-  if (page !== state.page || filter !== $("#history-filter").value) return;
+  if (request !== historyRequest || page !== state.page || filter !== $("#history-filter").value) return;
+  $("#history-today").textContent = data.today ? `今天（${data.today.date}）共 ${data.today.photos} 張照片 · ${data.today.records} 筆檢查` : "";
   const list = $("#history-list"); list.replaceChildren();
-  if (!data.items.length) { const empty = element("div", "empty-state"); empty.append(element("h2", "", "這裡還沒有檢查紀錄"),element("p", "", "完成一次照片檢查後，結果會自動保存在這裡。")); list.append(empty); }
-  data.items.forEach(item => { const row = element("button", "history-row"), img = element("img"), text = element("span","history-copy"),statuses=element("span","history-statuses"),display=historyPresentation(item); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy";text.append(element("strong", "", display.name), element("small", "", `${item.base_date ? `本批 ${item.base_date}` : when(item.created_at)} · ${display.reference}`),element("span","history-problems",historyProblemSummary(item)));statuses.append(badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));statuses.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));}row.append(img,text,statuses); row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
+  if (!data.items.length) { const empty = element("div", "empty-state"); empty.append(element("h2", "", filter ? "沒有符合結果的檢查紀錄" : "這裡還沒有檢查紀錄")); list.append(empty); }
+  let lastDay;
+  data.items.forEach(item => {
+    if (item.day && lastDay !== item.day) {
+      lastDay = item.day;
+      const totals = data.day_counts[item.day];
+      list.append(element("h2","history-day",`${item.day} · ${filter ? "符合篩選 " : ""}${totals.photos} 張照片 · ${totals.records} 筆檢查`));
+    }
+    const row = element("button", "history-row"), img = element("img"), text = element("span","history-copy"),statuses=element("span","history-statuses"),display=historyPresentation(item); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy";text.append(element("strong", "", display.name), element("small", "", `${item.base_date ? `本批 ${item.base_date}` : when(item.created_at)} · ${display.reference}`),element("span","history-problems",historyProblemSummary(item)));statuses.append(badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));statuses.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));}row.append(img,text,statuses); row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
     if(allowed("cleanup_history")){
       const wrap=element("div","history-entry"),label=element("label","history-select"),select=element("input");select.type="checkbox";select.checked=state.historySelection.has(item.id);select.setAttribute("aria-label",`選取紀錄：${display.name}，${when(item.created_at)}`);
       select.onchange=()=>{if(select.checked)state.historySelection.set(item.id,item.name);else state.historySelection.delete(item.id);updateCleanupSelection();};label.append(select);wrap.append(label,row);list.append(wrap);
@@ -2148,34 +2187,50 @@ async function loadHistory() {
   $("#history-page").textContent=`第 ${page} 頁`; $("#history-prev").disabled=page<=1; $("#history-next").disabled=!data.has_more;
 }
 function updateCleanupSelection(){
-  const count=state.historySelection.size;$("#history-cleanup-selected").textContent=`整理所選 ${count} 筆`;
+  const count=state.historySelection.size;$("#history-cleanup-selected").textContent=`回收所選 ${count} 筆`;
   $("#history-cleanup-selected").disabled=!allowed("cleanup_history") || !count || state.busy;
+}
+async function archiveSelectedHistory(){
+  if(!requireAdmin("cleanup_history") || state.busy || !state.historySelection.size)return;
+  const ids=[...state.historySelection.keys()];
+  setBusy(true);updateCleanupSelection();
+  try {
+    const result=await api("/api/admin/history/archive-selected",{method:"POST",body:{ids}});
+    ids.forEach(id=>state.historySelection.delete(id));
+    state.page=1;
+    toast(`已回收 ${result.count} 筆，可到紀錄回收區還原。`);
+    await loadHistory();
+  } catch(error) {
+    toast(error.message,true);
+    if(error.status===409){
+      state.historySelection.clear();
+      await loadHistory().catch(failure=>toast(failure.message,true));
+    }
+  } finally {setBusy(false);updateCleanupSelection();}
 }
 function clearCleanupPreview(){
   if(cleanupContext){cleanupContext.preview=null;cleanupContext.batch=null;}
   $("#cleanup-confirm-panel").hidden=true;$("#cleanup-confirm").checked=false;$("#cleanup-confirm-save").disabled=true;
   $("#cleanup-items").replaceChildren();$("#cleanup-summary").textContent="";
 }
-function cleanupBusy(busy){setBusy(busy);$$("#history-cleanup-dialog button, #history-cleanup-dialog input, #history-cleanup-dialog select, #history-cleanup-dialog textarea").forEach(node=>{node.disabled=busy;});if(!busy){cleanupConfirmChanged();$("#cleanup-batch-prev").disabled=(cleanupContext?.page || 1)<=1;$("#cleanup-batch-next").disabled=!cleanupContext?.batchHasMore;}}
+function cleanupBusy(busy){setBusy(busy);$$("#history-cleanup-dialog button, #history-cleanup-dialog input, #history-cleanup-dialog select, #history-cleanup-dialog textarea").forEach(node=>{node.disabled=busy;});if(!busy){cleanupConfirmChanged();$("#cleanup-batch-prev").disabled=(cleanupContext?.page || 1)<=1;$("#cleanup-batch-next").disabled=!cleanupContext?.batchHasMore;$("#cleanup-empty").disabled=!cleanupContext?.recycleCount;}}
 function cleanupConfirmChanged(){
   const ready=cleanupContext?.preview?.count>0 || cleanupContext?.batch?.status==="archived";
   $("#cleanup-confirm-save").disabled=state.busy || !allowed("cleanup_history") || !ready || !$("#cleanup-confirm").checked;
 }
 async function openHistoryCleanup(mode="filters"){
   if(!requireAdmin("cleanup_history") || state.busy)return;
-  const ids=mode==="selected" ? [...state.historySelection.keys()] : [];
-  if(mode==="selected" && !ids.length)return;
-  cleanupContext={mode,ids,page:1,preview:null,batch:null};
+  cleanupContext={mode,page:1,preview:null,batch:null};
   $("#cleanup-filter-form").reset();$("#cleanup-confirm-form").reset();clearCleanupPreview();setDialogError("#cleanup-error");
   $("#cleanup-notice").textContent="";$("#cleanup-batches").replaceChildren();$("#cleanup-reviewer").value=sessionStorage.getItem("labelcheck-operator") || "";
   $("#cleanup-filter-fields").hidden=mode!=="filters";$("#cleanup-filter-form").hidden=mode==="recycle";$("#cleanup-recycle").hidden=mode!=="recycle";
-  $("#cleanup-selection-note").textContent=mode==="selected" ? `準備整理已選取的 ${ids.length} 筆紀錄，請先預覽實際清單。` : "依台灣日期（含起訖日）與原始判定篩選；每次最多 500 筆。";
+  $("#cleanup-selection-note").textContent="依台灣日期（含起訖日）與原始判定篩選，每次最多 500 筆。";
+  $("#cleanup-empty").disabled=true;$("#cleanup-empty").textContent="清空回收區";
   $("#cleanup-title").textContent=mode==="recycle" ? "紀錄回收區" : "整理檢查紀錄";
   $("#history-cleanup-dialog").showModal();
   if(mode==="recycle")await loadCleanupBatches(1);
 }
 function cleanupFilters(){
-  if(cleanupContext?.mode==="selected")return {ids:[...cleanupContext.ids]};
   const filters={};for(const [key,id] of [["date_from","cleanup-from"],["date_to","cleanup-to"],["status","cleanup-status"]])if($("#"+id).value)filters[key]=$("#"+id).value;
   if(!Object.keys(filters).length)throw new Error("請至少設定日期或原始判定，避免一次整理全部紀錄。");
   if(filters.date_from && filters.date_to && filters.date_from>filters.date_to)throw new Error("開始日期不可晚於結束日期。");
@@ -2207,8 +2262,10 @@ async function loadCleanupBatches(page=1){
   if(!allowed("cleanup_history") || !cleanupContext)return;
   const context=cleanupContext,request=(context.request || 0)+1;context.request=request;
   try{
-    const data=await api(`/api/admin/history/batches?page=${page}`);if(cleanupContext!==context || context.request!==request)return;
+    const data=await api(`/api/admin/history/batches?page=${page}&scope=recycle`);if(cleanupContext!==context || context.request!==request)return;
     context.page=page;context.batchHasMore=!!data.has_more;const list=$("#cleanup-batches");list.replaceChildren();
+    context.recycleCount=data.recycle_count || 0;context.recycleToken=data.recycle_token;
+    $("#cleanup-empty").textContent=`清空回收區（${context.recycleCount} 筆）`;$("#cleanup-empty").disabled=state.busy || !context.recycleCount;
     for(const item of data.items || []){
       const row=element("article","review-record");row.append(element("strong","",`${item.count} 筆 · ${item.status==="restored" ? "已還原" : "回收區"}`),element("p","help",`${when(item.created_at)} · ${item.reviewer || ""}`),element("p","",item.note || ""));
       const button=element("button","button secondary",item.status==="archived" ? "查看並還原" : "查看清單");button.type="button";button.onclick=()=>previewHistoryRestore(item.batch_id);row.append(button);list.append(row);
@@ -2216,6 +2273,23 @@ async function loadCleanupBatches(page=1){
     if(!data.items?.length)list.append(element("p","help","回收區目前沒有紀錄。"));
     $("#cleanup-batch-page").textContent=`第 ${page} 頁`;$("#cleanup-batch-prev").disabled=page<=1;$("#cleanup-batch-next").disabled=!data.has_more;
   }catch(error){if(cleanupContext===context)setDialogError("#cleanup-error",error.message);}
+}
+async function emptyHistoryRecycle(){
+  const context=cleanupContext;
+  if(!requireAdmin("cleanup_history") || state.busy || !context?.recycleCount || !context.recycleToken)return;
+  if(!window.confirm(`清空回收區的 ${context.recycleCount} 筆紀錄？清空後無法還原。原始照片與標準來源將保留。`))return;
+  cleanupBusy(true);clearCleanupPreview();setDialogError("#cleanup-error");
+  try {
+    const result=await api("/api/admin/history/empty",{method:"POST",body:{recycle_token:context.recycleToken,confirmed:true}});
+    if(context!==cleanupContext)return;
+    context.recycleCount=0;context.recycleToken=null;
+    $("#cleanup-notice").textContent=`已清空回收區，共 ${result.count} 筆。`;
+    await loadCleanupBatches(1);
+  } catch(error) {
+    if(context!==cleanupContext)return;
+    setDialogError("#cleanup-error",error.message);
+    if(error.status===409)await loadCleanupBatches(1);
+  } finally {cleanupBusy(false);}
 }
 async function previewHistoryRestore(batchId){
   if(!requireAdmin("cleanup_history") || state.busy || !cleanupContext)return;
@@ -2242,7 +2316,7 @@ async function commitHistoryCleanup(event){
     if(cleanupContext!==context)return;
     sessionStorage.setItem("labelcheck-operator",reviewer);state.historySelection.clear();clearCleanupPreview();
     $("#cleanup-notice").textContent=batch ? `已還原 ${result.count} 筆，現在可在檢查紀錄查看。` : `已將 ${result.count} 筆移至回收區，照片與完整紀錄均保留，可隨時至回收區還原。`;
-    state.page=1;await loadHistory();if(batch)await loadCleanupBatches(context.page);
+    state.page=1;await loadHistory();if(batch)await loadCleanupBatches(1);
   }catch(error){if(cleanupContext===context){if([409,410].includes(error.status))clearCleanupPreview();setDialogError("#cleanup-error",error.message);}}
   finally{cleanupBusy(false);}
 }
@@ -2604,7 +2678,8 @@ $("#admin-unlock-form").onsubmit=event=>{event.preventDefault();changeAdminRole(
 $("#admin-lock").onclick=()=>changeAdminRole(false);
 $("#admin-logout").onclick=()=>$("#logout").click();
 $("#history-cleanup-filter").onclick=()=>openHistoryCleanup("filters");
-$("#history-cleanup-selected").onclick=()=>openHistoryCleanup("selected");
+$("#history-cleanup-selected").onclick=archiveSelectedHistory;
+$("#cleanup-empty").onclick=emptyHistoryRecycle;
 $("#history-recycle").onclick=()=>openHistoryCleanup("recycle");
 $("#cleanup-close").onclick=()=>{if(!state.busy){cleanupContext=null;$("#history-cleanup-dialog").close();}};
 $("#history-cleanup-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();else cleanupContext=null;});

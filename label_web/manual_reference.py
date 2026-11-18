@@ -426,7 +426,7 @@ def payload(engine, inspection):
 
 def definition(body):
     from standard_reference import _text, _integer, _fixed_text
-    from label_source import _fixed_barcodes, _identifiers, _SKU_LABEL
+    from label_source import _fixed_barcodes, _identifiers, _SKU_LABEL, with_printed_upca
     if not isinstance(body, dict):
         abort(400, description="請填寫人工標準內容。")
     name = _fixed_text(_text(body.get("name"), "品名", 200))
@@ -478,6 +478,7 @@ def definition(body):
               "barcode_config": {}, "barcode_values": sorted({value for text in texts for value in _fixed_barcodes(text)}),
               "known_fields": [key for key, value in fields.items() if value], "limitations": LIMITATIONS,
               "notice": "人工確認的獨立文字標準；只核對已列入的內容，不代表具有完整印標版面。"}
+    source=with_printed_upca(source)
     validate_date_rules(source)
     digest = hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     source.update(revision=digest)

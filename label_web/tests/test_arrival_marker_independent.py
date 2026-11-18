@@ -70,14 +70,43 @@ class ArrivalMarkerIndependentTests(unittest.TestCase):
         result = self.inspect("2027.01.01⑥", standard(offset=1), base="2026-12-31")
         self.assertEqual(check(result, "arrival_schedule")["status"], "pass")
 
-    def test_real_time_is_preserved_and_24_hour_policy_is_not_relaxed(self):
+    def test_real_time_is_preserved_including_end_of_the_printed_day(self):
         result = self.inspect("2026.11.20 23:59⑤")
         self.assertEqual(check(result, "arrival")["status"], "pass")
         parsed = parse_date("2026.11.20 23:59⑤", kind="arrival")
         self.assertEqual((parsed["hour"], parsed["minute"]), (23, 59))
-        for suffix in ("24:00⑤", "24:01⑤", "25時⑤", "23:60⑤"):
+        for suffix in ("24時", "24:00⑤", "24時00分※", "24時 00分", "24: 00", "24 時 00 分"):
+            parsed = parse_date("2026.11.20 " + suffix, kind="arrival")
+            self.assertEqual((parsed["date"], parsed["hour"], parsed["minute"]), (date(2026, 11, 20), 24, 0))
+        for suffix in ("24:01⑤", "25時⑤", "23:60⑤", "24:001", "24:00:99", "10:59:80"):
             with self.subTest(suffix=suffix):
                 self.assertEqual(check(self.inspect("2026.11.20 " + suffix), "arrival")["status"], "fail")
+
+    def test_clock_on_standalone_date_is_checked_even_without_a_heading(self):
+        for suffix, expected in (("24時", "pass"), ("#7", "pass"), ("25時", "fail"), ("24:001", "fail"),
+                                 ("24:01", "fail"), ("24:00:99", "fail"), ("03:", "fail")):
+            with self.subTest(suffix=suffix):
+                value = "2026.11.21 " + suffix
+                result = evaluate_source([line(0, value)], None, base_date="2026-11-18")
+                item = check(result, "date_line_0_0")
+                self.assertEqual((item["status"], item["raw_actual"]), (expected, value))
+
+    def test_barcode_in_same_row_or_close_separate_box_stays_independent(self):
+        heading = "有效日期：2026.11.21"
+        for barcode in ("4 00000 79003 9", "4-00000-79003-9", "400000790039"):
+            for suffix in ("", " 24時", " 24:00"):
+                with self.subTest(barcode=barcode, suffix=suffix):
+                    result = evaluate_source([line(0, heading + suffix + " " + barcode)], None, base_date="2026-11-18")
+                    self.assertEqual(check(result, "expiry")["actual"], "2026.11.21" + suffix)
+                    self.assertIn(barcode, check(result, "text_line_0")["actual"])
+            rows = [line(0, heading, width=230), line(1, barcode, x=235, y=0)]
+            result = evaluate_source(rows, None, base_date="2026-11-18")
+            self.assertEqual(check(result, "expiry")["line_ids"], [0])
+            self.assertEqual(check(result, "text_line_1")["actual"], barcode)
+            rows = [line(0, "有效日期：", width=90), line(1, "2026.11.21 " + barcode, x=95, y=0)]
+            result = evaluate_source(rows, None, base_date="2026-11-18")
+            self.assertEqual(check(result, "expiry")["actual"], "2026.11.21")
+            self.assertIn(barcode, check(result, "text_line_1")["actual"])
 
     def test_existing_explicit_short_2400_format_remains_supported(self):
         result = self.inspect("11202400⑤", standard(date_format="L", offset=3))
@@ -85,8 +114,8 @@ class ArrivalMarkerIndependentTests(unittest.TestCase):
         self.assertEqual(check(result, "arrival_schedule")["status"], "pass")
         self.assertEqual(check(self.inspect("11202401⑤", standard(date_format="L", offset=3)), "arrival")["status"], "fail")
 
-    def test_general_tail_text_or_plain_digits_are_not_dropped(self):
-        for suffix in ("錯", "批次5", "第5組", "5", "⑤錯", "錯⑤", "⑤⑥", "(5)"):
+    def test_general_tail_text_is_not_dropped(self):
+        for suffix in ("錯", "批次5", "第5組", "⑤錯", "錯⑤", "2026.11.21"):
             with self.subTest(suffix=suffix):
                 self.assertEqual(check(self.inspect("2026.11.20 " + suffix), "arrival")["status"], "fail")
 
@@ -96,11 +125,15 @@ class ArrivalMarkerIndependentTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(check(self.inspect(value), "arrival")["status"], "fail")
 
-    def test_arrival_exception_does_not_apply_to_manufacture_or_expiry(self):
-        for heading, key in (("製造日期", "manufacture"), ("有效日期", "expiry")):
-            observed = [line(1, heading + ":2026.11.20⑤")]
-            result = evaluate_source(observed, None, base_date="2026-11-17")
-            self.assertEqual(check(result, key)["status"], "fail")
+    def test_all_date_fields_accept_attached_numbers_and_symbols(self):
+        for heading, key in (("製造日期", "manufacture"), ("有效日期", "expiry"), ("到店日", "arrival")):
+            for suffix in ("⑤⑥", "7", " #03", "24時（２）", " · *"):
+                with self.subTest(heading=heading, suffix=suffix):
+                    value = "2026.11.21" + suffix
+                    observed = [line(1, heading + ":" + value)]
+                    result = evaluate_source(observed, None, base_date="2026-11-21")
+                    self.assertEqual(check(result, key)["status"], "pass")
+                    self.assertEqual(check(result, key)["raw_actual"], value)
 
     def test_photo_template_public_path_uses_same_arrival_marker_policy(self):
         template = {"fields": {}, "rules": {"arrival": True, "dates": False, "keep_days": None}}

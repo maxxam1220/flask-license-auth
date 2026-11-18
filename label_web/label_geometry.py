@@ -15,36 +15,94 @@ ANCHORS = {
     "phone": ("電話", r"^(?:免付費(?:服務)?[電电][話话]|客服[電电][話话]|服務[電电][話话]|聯絡[電电][話话]|客服專線|服務專線|[電电][話话])"),
 }
 DATE_KINDS = {"manufacture", "expiry", "arrival"}
-# These are single circled-number glyphs, not arbitrary suffixes or digits.
-# Inspect them before NFKC, which would turn e.g. ⑤ into an ordinary 5.
-CIRCLED_NUMBERS = frozenset(chr(value) for start, end in (
-    (0x2460, 0x2473), (0x24EA, 0x24F4), (0x24FF, 0x24FF),
-    (0x2776, 0x2793), (0x3251, 0x325F), (0x32B1, 0x32BF),
-) for value in range(start, end + 1))
+DIGIT = r"[0-9０-９]"
+DATE_PREFIX = re.compile(rf"(?:民國\s*)?{DIGIT}{{3,4}}\s*[年./．／－-]\s*{DIGIT}{{1,2}}\s*[月./．／－-]\s*{DIGIT}{{1,2}}(?:\s*日)?")
+CLOCK_PREFIX = re.compile(rf"\s*(?P<hour>{DIGIT}{{1,2}})\s*(?:[時时](?:\s*(?P<cjk_min>{DIGIT}{{1,2}})\s*分?)?|[:：]\s*(?P<colon_min>{DIGIT}{{1,2}}))")
+DATE_CANDIDATE = re.compile(DATE_PREFIX.pattern.replace(DIGIT, r"[0-9０-９OoIl]"))
 
 
-def split_arrival_marker(text):
-    """Separate one observed circled-number annotation, without changing its date."""
+def barcode_number(text):
+    """Recognize a complete retail-code length, including grouped printed digits."""
+    digits = re.sub(r"[\s－-]+", "", str(text))
+    return len(digits) in (8, 12, 13, 14) and re.fullmatch(DIGIT + "+", digits) is not None
+
+
+def date_barcode_boundary(value):
+    """Keep a product number on the same OCR line outside the date's evidence."""
+    date = DATE_PREFIX.match(value)
+    if not date:
+        return None
+    start = date.end()
+    hour = re.match(rf"\s*{DIGIT}{{1,2}}\s*[時时]", value[start:])
+    clock = CLOCK_PREFIX.match(value, start)
+    ends = [start]
+    if hour:
+        ends.append(start + hour.end())
+    if clock:
+        ends.append(clock.end())
+    return next((end for end in ends if barcode_number(value[end:])), None)
+
+
+def is_date_annotation(text):
+    """Printed digits, punctuation and symbols following a complete date."""
     value = str(text or "").strip()
-    core = value[:-1].rstrip()
-    if value and value[-1] in CIRCLED_NUMBERS and core and (core[-1].isdecimal() or core[-1] in "日時时分"):
-        return core, value[-1]
-    return value, ""
+    return bool(value and not DATE_PREFIX.search(value) and not barcode_number(value) and all(
+        char.isspace() or unicodedata.category(char)[0] in "NPS" for char in value))
 
 
-def date_value_for_parsing(text, kind=None):
-    value = split_arrival_marker(text)[0] if kind == "arrival" else str(text or "").strip()
-    if any(character in CIRCLED_NUMBERS for character in value):
-        raise ValueError("圈數只能是到店日最後的附記，不能代替日期或時間數字。")
-    return value
+def split_date_annotation(text, short_format=""):
+    """Read the calendar and clock first; symbols can never supply missing digits."""
+    value = str(text or "").strip()
+    if short_format:
+        value = re.sub(r"\s+", "", value)
+        pattern = (rf"{DIGIT}{{2}}[.．]{DIGIT}{{2}}" if short_format in "EF" else
+                   rf"{DIGIT}{{2}}[/／]{DIGIT}{{2}}" if short_format in "GH" else
+                   DIGIT + ("{8}" if short_format in "KL" else "{4}"))
+        match = re.match(pattern, value)
+    else:
+        match = DATE_PREFIX.match(value)
+    if not match:
+        raise ValueError("日期須包含完整數字。")
+    end = match.end()
+    annotation_start = end
+    if not short_format or short_format in "EFGHIJ":
+        clock = CLOCK_PREFIX.match(value, end)
+        if clock:
+            hour, minute = int(clock["hour"]), int(clock["cjk_min"] or clock["colon_min"] or 0)
+            extra = value[clock.end():]
+            if (hour > 24 or minute > 59 or (hour == 24 and minute) or
+                    (extra[:1].isdecimal() and value[clock.end()-1].isdecimal()) or re.match(r"\s*[:：]\s*\d", extra)):
+                raise ValueError("日期的時間不合法。")
+            annotation_start = clock.end()
+        else:
+            hour = re.match(r"\s*([^：:\s]+)\s*[:：]", value[end:])
+            if hour and hour[1].isnumeric():
+                raise ValueError("時間須有完整的時與分。")
+    tail = value[annotation_start:].strip()
+    if tail and not is_date_annotation(tail):
+        raise ValueError("日期後方含無法辨識的文字。")
+    return value[:end if short_format else annotation_start].rstrip(), tail
 
 
-def _complete_date_shape(value):
-    """Shape only; calendar, year and time validity still belong to the validators."""
-    if any(character in CIRCLED_NUMBERS for character in value):
-        return False
-    return bool(re.fullmatch(r"(?:民國)?[0-9]{3,4}[./年-][0-9]{1,2}[./月-][0-9]{1,2}日?"
-                             r"(?:[0-9]{1,2}(?:[時时](?:[0-9]{1,2}分?)?|:[0-9]{1,2}))?", compact(value)))
+def unlabelled_dates(text):
+    """Include the observed time and annotation when they finish a date line."""
+    for match in DATE_CANDIDATE.finditer(text):
+        value = text[match.start():].strip()
+        boundary = date_barcode_boundary(value)
+        if boundary is not None:
+            value = value[:boundary]
+        try:
+            split_date_annotation(value)
+        except ValueError:
+            # Keep a malformed clock visible to the validator, while treating
+            # unrelated prose or a second date on the line as separate evidence.
+            tail = text[match.end():].strip()
+            clock_like = tail and all(char.isspace() or char in "時时分" or
+                                      unicodedata.category(char)[0] in "NPS" for char in tail)
+            if not clock_like or DATE_CANDIDATE.search(tail):
+                clock = CLOCK_PREFIX.match(text, match.end())
+                value = text[match.start():clock.end()] if clock else match[0]
+        yield value
 
 
 def date_segments(line):
@@ -74,6 +132,9 @@ def date_segments(line):
             value_start += 1
         while value_end > value_start and text[value_end - 1].isspace():
             value_end -= 1
+        boundary = date_barcode_boundary(text[value_start:value_end])
+        if boundary is not None:
+            value_end = end = value_start + boundary
         segments.append({"kind": kind, "value": text[value_start:value_end], "start": start, "end": end,
                          "value_start": value_start, "value_end": value_end})
     return segments
@@ -88,11 +149,13 @@ def date_observations(lines):
         # one shared box. Do not borrow a nearby value for either sub-heading.
         shared_empty = len(segments) > 1 and any(not segment["value"] for segment in segments)
         for segment in segments:
-            observed = (date_evidence(line, segment["value"], lines, kind=segment["kind"]) if len(segments) == 1
+            observed = (date_evidence(line, segment["value"], lines, kind=segment["kind"])
+                        if len(segments) == 1 and not line["text"][segment["end"]:].strip()
                         else {"value": segment["value"], "lines": [line], "ambiguous": shared_empty})
             observed["kind"] = segment["kind"]
             observed["evidence_spans"] = [{"line_id": line["id"], "start": segment["start"], "end": segment["end"]}]
-            observed["evidence_spans"].extend({"line_id": other["id"], "start": 0, "end": len(other["text"])}
+            observed["evidence_spans"].extend({"line_id": other["id"], "start": 0,
+                                               "end": observed.get("end_offsets", {}).get(other["id"], len(other["text"]))}
                                                for other in observed["lines"] if other["id"] != line["id"])
             observations.append(observed)
     return observations
@@ -305,15 +368,19 @@ def _blocked_between(first, candidate, lines, horizontal):
 def date_evidence(heading, value, lines, kind=None):
     """Find one close, unobstructed date value/continuation; never use expected data."""
     evidence, conflicts, ambiguous = [heading], [], False
+    end_offsets = {}
     for _ in range(3):
-        if any(character in CIRCLED_NUMBERS for character in value):
-            break  # Preserve an observed marker/invalid enclosed digit; never repair it.
-        normalized = compact(value)
-        time_only = bool(re.fullmatch(r"(?:民國)?[0-9]{3,4}[./年-][0-9]{1,2}[./月-][0-9]{1,2}日?",normalized))
-        complete = _complete_date_shape(value)
-        marker_only = kind == "arrival" and complete and not time_only
-        if normalized and not time_only and not marker_only and not re.fullmatch(r"(?:民國)?[0-9０-９OoIl]{3,4}[./年-](?:[0-9０-９OoIl]{1,2}[./月-]?)?", normalized):
-            break  # A complete/invalid observed value is never replaced with another date.
+        complete = DATE_PREFIX.match(value.strip())
+        if complete:
+            try:
+                core, tail = split_date_annotation(value)
+            except ValueError:
+                break
+            if tail:
+                break
+            has_clock = not DATE_PREFIX.fullmatch(core)
+        elif value.strip() and not re.fullmatch(rf"(?:民國)?{DIGIT}{{3,4}}[./年．／－-](?:{DIGIT}{{1,2}}[./月．／－-]?)?", re.sub(r"\s+", "", value)):
+            break
         first = evidence[-1]
         area = bounds(first)
         if not area:
@@ -324,23 +391,19 @@ def date_evidence(heading, value, lines, kind=None):
             if other["id"] in {item["id"] for item in evidence} or anchor_kind(other.get("text","")) or not bounds(other):
                 continue
             raw = str(other["text"]).strip()
-            is_marker = len(raw) == 1 and raw in CIRCLED_NUMBERS
-            if is_marker:
-                if kind != "arrival" or not complete:
+            is_marker = False
+            if complete:
+                clock = CLOCK_PREFIX.match(raw)
+                if clock and not has_clock:
+                    suffix = raw[clock.end():].strip()
+                    if suffix and not is_date_annotation(suffix):
+                        continue
+                elif is_date_annotation(raw) and not clock:
+                    is_marker = True
+                else:
                     continue
-                text = raw
-            else:
-                core, marker = split_arrival_marker(raw)
-                if marker and (kind != "arrival" or not _complete_date_shape(value + core)):
-                    continue
-                if any(character in CIRCLED_NUMBERS for character in core):
-                    continue
-                text = compact(core)
-            if marker_only and not is_marker:
-                continue
-            if not is_marker and time_only and not re.fullmatch(r"[0-9]{1,2}(?:[時时](?:[0-9]{1,2}分?)?|:[0-9]{2})",text):
-                continue
-            if not is_marker and not re.fullmatch(r"(?:民國)?[0-9OoIl][0-9OoIl年年月日./:時时分-]{0,23}", text):
+            elif not DATE_PREFIX.match((value + raw).strip()) and not re.fullmatch(
+                    r"(?:民國)?[0-9０-９OoIl][0-9０-９OoIl年月日./．／－:時时分-]{0,23}", re.sub(r"\s+", "", raw)):
                 continue
             nx,ny,nr,nb = bounds(other);height=max(b-y,nb-ny,1)
             row_overlap=max(0,min(b,nb)-max(y,ny))
@@ -349,7 +412,7 @@ def date_evidence(heading, value, lines, kind=None):
             vertical=(overlap>=min(r-x,nr-nx)*.55 and abs(nx-x)<=height*1.5 and
                       ny>=b-height*.2 and ny-b<=height*1.5)
             if is_marker and not (horizontal and nx-r <= height*1.5):
-                continue  # A loose circle elsewhere is not a date annotation.
+                continue
             if not (horizontal or vertical) or _blocked_between(first,other,lines,horizontal):
                 continue
             candidates.append(((0,nx-r) if horizontal else (1,max(0,ny-b)),other))
@@ -361,9 +424,18 @@ def date_evidence(heading, value, lines, kind=None):
         if len(candidates)>1:
             conflicts.extend(item for _,item in candidates[1:])
         chosen=candidates[0][1]
+        if complete and value[-1:].isdecimal() and chosen["text"][:1].isdecimal():
+            value += " "  # Separate digit groups observed in different OCR boxes.
+        previous_length = len(value)
         value += chosen["text"]
         evidence.append(chosen)
+        boundary = date_barcode_boundary(value.lstrip())
+        if boundary is not None:
+            boundary += len(value) - len(value.lstrip())
+            end_offsets[chosen["id"]] = max(0, boundary - previous_length)
+            value = value[:boundary].rstrip()
+            break
     for item in conflicts:
         if item["id"] not in {line["id"] for line in evidence}:
             evidence.append(item)
-    return {"value":value,"lines":evidence,"ambiguous":ambiguous}
+    return {"value":value,"lines":evidence,"ambiguous":ambiguous,"end_offsets":end_offsets}

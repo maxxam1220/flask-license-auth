@@ -5,14 +5,14 @@ import math
 import re
 import unicodedata
 
-from validation import diff_parts, parse_date, traditional_display, product_row_candidates, line_is_uncertain
+from validation import diff_parts, parse_date, standalone_date_label, traditional_display, product_row_candidates, line_is_uncertain
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
                             date_evidence_overlaps, without_date_evidence,
-                            date_value_for_parsing, split_arrival_marker, CIRCLED_NUMBERS)
+                            is_date_annotation, split_date_annotation, unlabelled_dates)
 from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
 
 
-RULE_VERSION = "1.16"
+RULE_VERSION = "1.17"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -158,8 +158,8 @@ def _compared_text(expected, text):
         text = _strip_barcode_heading(text)
     numeric = kind in {"1", "2", "3"} or (kind is None and expected["text"].strip().isascii() and expected["text"].strip().isdigit())
     if numeric:
-        # EAN/UPC human-readable digits may be visually spaced; no punctuation/digit repair.
-        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text)))
+        from barcode_checks import typed_gtin_digits
+        return typed_gtin_digits(re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(text))),kind)
     # Code128 punctuation, spaces and case are data, not label formatting.
     return str(text).strip()
 
@@ -189,8 +189,8 @@ def _compatible(expected, actual):
     return True
 
 
-def _desktop_arrival_annotation_ids(source, rows):
-    """Associate bare circles with dynamic desktop arrival fields by layout.
+def _desktop_date_annotation_ids(source, rows):
+    """Associate separate printed annotations with dynamic desktop dates by layout.
 
     Dynamic date text is deliberately absent from source.lines. Its saved
     origin still identifies an appended annotation without generating an
@@ -206,13 +206,16 @@ def _desktop_arrival_annotation_ids(source, rows):
                 any(not isinstance(value, (int, float)) or not math.isfinite(value) for value in anchor)):
             continue
         anchors.append((_heading(item.get("content", "")), *anchor))
+    annotation_rows = {
+        row["id"] for row in rows if row.get("_kind") != "barcode" and
+        is_date_annotation(row["text"]) and not re.fullmatch(r"(?:\d\s*){8,}", row["text"].strip())}
     associations = []
     for kind, x, y in anchors:
-        if kind != "arrival":
+        if kind not in DATE_KEYS:
             continue
         candidates = []
         for row in rows:
-            if str(row.get("text", "")).strip() not in CIRCLED_NUMBERS:
+            if row["id"] not in annotation_rows:
                 continue
             area = _bounds(row)
             if not area:
@@ -224,12 +227,12 @@ def _desktop_arrival_annotation_ids(source, rows):
             # right-hand gap, and no other field between date and annotation.
             if not (0 < left - x <= height * 20 and abs(top - y) <= height * .35):
                 continue
-            if any(other != (kind, x, y) and x <= other[1] < left and abs(other[2] - y) <= height * .35
+            if any(other != (kind, x, y) and 0 < left - other[1] <= height * 20 and abs(other[2] - y) <= height * .35
                    for other in anchors):
                 continue
             blocked = False
             for other in rows:
-                if other is row or str(other.get("text", "")).strip() in CIRCLED_NUMBERS:
+                if other["id"] in annotation_rows:
                     continue
                 bounds = _bounds(other)
                 if bounds and x <= bounds[0] < left and abs(bounds[1] - y) <= height * .35:
@@ -261,16 +264,22 @@ def _source_rows(source):
                 existing = next((row for row in rows if _strip_barcode_heading(row["text"]) == value.strip()), None)
                 heading = existing is not None
             kind = str((source or {}).get("barcode_config", {}).get("kind", "")).strip() or None
+            if existing is None and kind in {"1","2","3"}:
+                for row in rows:
+                    raw=_strip_barcode_heading(row["text"])
+                    if re.fullmatch(r"[0-9 \t]+",raw) and re.sub(r"[ \t]", "", raw)==value:
+                        existing, heading=row, raw!=row["text"].strip()
+                        break
             if existing:
                 existing.update(_kind="barcode", _barcode_kind=kind, _barcode_heading=heading)
             else:
                 rows.append({"id": f"barcode_{index}", "text": value, "score": 1., "box": [],
                              "_kind": "barcode", "_barcode_kind": kind})
-    # A geometrically attached arrival annotation is variable even when an old
-    # reference retained it as its own OCR box. Unrelated circles stay literal.
-    annotation_ids = {line["id"] for observed in date_observations(rows) if observed["kind"] == "arrival"
-                      for line in observed["lines"] if str(line["text"]).strip() in CIRCLED_NUMBERS}
-    annotation_ids.update(_desktop_arrival_annotation_ids(source, rows))
+    # Geometrically attached date continuations also vary in old photo references.
+    annotation_ids = {line["id"] for observed in date_observations(rows) if not observed["ambiguous"]
+                      for line in observed["lines"][1:]
+                      if line.get("_kind") != "barcode" and line["id"] not in observed.get("end_offsets", {})}
+    annotation_ids.update(_desktop_date_annotation_ids(source, rows))
     return [row for row in rows if row["id"] not in annotation_ids and
             (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)]
 
@@ -498,7 +507,7 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
         short = bool(setting.get("format")) and setting["format"] in "EFGHIJKL"
         status, reason = "pass", "完整年月日格式可辨識；格式正確不代表符合本批排程。"
         try:
-            date_value = date_value_for_parsing(value, key)
+            date_value, annotation = split_date_annotation(value, setting["format"] if short else "")
             if short:
                 normal = unicodedata.normalize("NFKC", re.sub(r"\s+", "", date_value))
                 code = setting["format"]
@@ -513,9 +522,9 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                     parsed[key] = {"date": setting["expected_date"], "hour": None, "minute": 0}
                 reason = "依資料庫的短日期格式檢查；照片未印出的年份不會當成辨識結果。"
             else:
-                parsed[key] = parse_date(value, kind=key)
-            if key == "arrival" and split_arrival_marker(value)[1]:
-                reason += "到店日尾端圈數視為可變附記，不當作日期或時間數字。"
+                parsed[key] = parse_date(date_value, kind=key)
+            if annotation:
+                reason += "已保留日期尾端的印刷附記。"
         except (ValueError, TypeError):
             status, reason = "fail", "日期不完整、不合法或格式不符，請確認印字與辨識原文。"
         if not value or _field_uncertain(field):
@@ -590,9 +599,10 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
     for line in lines:
         if line["id"] in labelled_ids or line["id"] in (literal_ids or set()):
             continue
-        for number, match in enumerate(re.finditer(r"(?:民國\s*)?[0-9０-９OoIl]{3,4}\s*[年./．-]\s*[0-9０-９OoIl]{1,2}\s*[月./．-]\s*[0-9０-９OoIl]{1,2}(?:\s*日)?", line["text"])):
+        for number, value in enumerate(unlabelled_dates(line["text"])):
             confidence = float(line.get("score", 0))
-            value, status, actual_date = match[0], "pass", None
+            whole_label = standalone_date_label(line["text"], value)
+            status, actual_date = "pass", None
             try:
                 actual_date = parse_date(value)["date"]
                 reason = "年月日格式可辨識；尚未確認這個日期的業務用途。"
@@ -600,7 +610,8 @@ def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids
                 status, reason = "fail", "日期不完整或不合法，請確認數字是否錯誤。"
             if line_is_uncertain(line, MIN_CONFIDENCE):
                 status, reason = "review", "日期文字看不清楚，請對照原圖。"
-            add(f"date_line_{line['id']}_{number}", "其他日期格式", status, reason, "完整且合法的年月日", value, [line["id"]], confidence)
+            add(f"date_line_{line['id']}_{number}", (whole_label or "其他日期") + "格式", status, reason,
+                "完整且合法的年月日", value, [line["id"]], confidence, whole_date_label=whole_label)
             if base and actual_date:
                 # Unlabelled dates cannot inherit a different field's cross-year allowance.
                 add(f"date_year_{line['id']}_{number}", "其他日期年份", "review" if line_is_uncertain(line, MIN_CONFIDENCE) else "pass" if actual_date.year == base.year else "fail",
@@ -618,7 +629,7 @@ def _decorate(result, lines):
     for line in lines:
         if line["id"] in covered:
             matching = [check for check in result["checks"] if line["id"] in check.get("line_ids", [])]
-            if any(check.get("source") == "database" for check in matching):
+            if any(check.get("source") == "database" or check.get("whole_date_label") for check in matching):
                 continue
             remainder = without_date_evidence(line, result["fields"])
             remaining_checks = [check for check in matching if remainder == line["text"] or check.get("source") != "date"]

@@ -575,7 +575,8 @@ footer{font-size:.875rem;color:#61735a;padding:28px 0}.login-panel{max-width:460
 .admin-access{min-height:44px;font-size:1rem;white-space:nowrap;padding:8px 14px}
 .workflow-help{flex-basis:100%;font-size:1rem;line-height:1.8;color:#536d54;margin:4px 0}
 .history-management{padding:16px 18px;margin:0 0 20px;border:1px solid #cad8be;border-radius:14px;background:#f5f9ef}
-.history-management .edit-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}.history-management .button{flex:1 1 max-content;min-width:0;white-space:normal}
+.history-management .edit-actions{display:flex;flex-wrap:wrap;gap:10px;margin:0}.history-management .button{flex:1 1 max-content;min-width:0;white-space:normal}
+.history-today{font-weight:700;color:#173f35}.history-day{font-size:1.12rem;margin:16px 0 2px;border-bottom:1px solid #cad8be;padding-bottom:6px}
 .history-entry{display:grid;grid-template-columns:44px minmax(0,1fr);gap:8px;align-items:start}
 .history-entry>.history-row{width:100%;min-width:0}.history-select{display:flex;min-width:44px;min-height:56px;align-items:center;justify-content:center;margin:0;cursor:pointer}
 .history-select input{width:24px;height:24px;margin:0}
@@ -677,6 +678,8 @@ footer{font-size:.875rem;color:#61735a;padding:28px 0}.login-panel{max-width:460
 
 
 /* Keep unreferenced label dates visible before the photo and text. */
+.result-barcode-card > * + .barcode-traceability{border-top:1px solid #d4dfcb;padding-top:12px;margin-top:14px}
+.barcode-traceability h4{font-size:1.05rem;margin:0 0 6px}.traceability-url{overflow-wrap:anywhere;margin:8px 0}
 .result-date-first{border:1px solid #cad8c0;border-radius:12px;background:#f8faf4;padding:16px;margin:12px 0 18px;min-width:0}
 .result-date-first h3{font-size:1.25rem;margin:0 0 10px}.date-first-list{margin:0}.date-first-row{display:grid;grid-template-columns:6rem minmax(0,1fr) auto;gap:6px 12px;align-items:baseline;padding:10px 0;border-bottom:1px solid #dfe7d8}.date-first-row dt,.date-first-row dd{margin:0;min-width:0;overflow-wrap:anywhere}.date-first-value{font-size:1.25rem;font-weight:700;line-height:1.55}.date-first-status{font-size:1rem}.date-first-row.fail .date-first-status,.date-first-reason.fail{color:#a13121}.date-first-row.review .date-first-status,.date-first-reason.review{color:#775200}.date-first-row.pass .date-first-status{color:#35653d}.date-first-reason{margin:9px 0;font-size:1.0625rem;line-height:1.65;overflow-wrap:anywhere}.date-first-scope,.date-first-empty{font-size:1rem;line-height:1.7;margin:10px 0}.date-first-details{margin-top:8px}.date-first-details>summary{font-size:1rem;min-height:44px;padding:10px 0}.date-first-details p{font-size:1rem;line-height:1.7;overflow-wrap:anywhere}.date-first-details strong{display:block}
 @media(max-width:650px){.result-date-first{padding:12px}.date-first-row{grid-template-columns:5.5rem minmax(0,1fr)}.date-first-status{grid-column:2}.date-first-value{font-size:1.1875rem}}

@@ -15,7 +15,7 @@ import database as db
 import history_cleanup
 import standard_library
 import standard_reference as standards
-from barcode_checks import gtin_valid, _near_bars
+from barcode_checks import gtin_valid, is_traceability_qr, matches_decoded_gtin, _near_bars
 from label_geometry import analyze_label_scope
 from validation import line_is_uncertain, parse_date
 
@@ -55,7 +55,7 @@ def compose(rule, value):
 
 def literal_value(text):
     text=unicodedata.normalize("NFKC",str(text)).strip()
-    match=re.fullmatch(r"(?:(?:條碼|条码|Barcode|EAN|GTIN)\s*[:：]?\s*)?([0-9][0-9 \t]*)",text,re.I)
+    match=re.fullmatch(r"(?:(?:商品條碼|條碼|条码|Barcode|UPC-?A|EAN|GTIN)\s*[:：]?\s*)?([0-9][0-9 \t]*)",text,re.I)
     return re.sub(r"\s+","",match[1]) if match else ""
 
 
@@ -79,30 +79,50 @@ def _observed(original,current):
     return ocr
 
 
-def read_observations(ocr,base_date):
+def read_observations(ocr,base_date,*,allow_upca=False):
     from source_validation import _date_fields
     lines=ocr.get("lines") or []
-    decoded=[{key:item.get(key) for key in ("text","format","box")} for item in (ocr.get("barcodes") or {}).get("items",[])]
+    decoded=[{key:item.get(key) for key in ("text","format","box")} for item in (ocr.get("barcodes") or {}).get("items",[])
+             if not is_traceability_qr(item)]
     readings=[]
     for line in lines:
         value=literal_value(line.get("text",""))
-        if value and (len(value)==13 or any(_near_bars(line,code) for code in decoded if code.get("box"))):
+        if value and (len(value)==13 or (allow_upca and len(value)==12) or any(_near_bars(line,code) for code in decoded if code.get("box"))):
             readings.append({"text":line["text"],"value":value,"line_ids":[line["id"]],
                 "uncertain":line_is_uncertain(line,.65),"valid_ean13":len(value)==13 and gtin_valid(value) is True})
     values={row["value"] for row in readings}
     decoded_values={str(item.get("text") or "") for item in decoded}
+    # A zero-prefixed EAN-13 decode needs independent UPC-A print to select
+    # the 12-digit representation. Keep the raw decode with the evidence.
+    upca=""
+    if allow_upca:
+        if len(values)==1:
+            printed=next(iter(values))
+            if len(printed)==12 and gtin_valid(printed) is True:
+                upca=printed
+            elif (len(printed)==13 and printed.startswith("0") and gtin_valid(printed) is True and len(decoded)==1
+                    and str(decoded[0].get("format")).replace("-","").upper()=="UPCA" and decoded[0].get("text")==printed[1:]):
+                upca=printed[1:]
+        elif not values and len(decoded)==1 and str(decoded[0].get("format")).replace("-","").upper()=="UPCA":
+            raw=decoded[0].get("text") or ""
+            if len(raw)==12 and gtin_valid(raw) is True:upca=raw
     reason=""
     if len(decoded)>1 or len(readings)>1:
         reason="同張照片有多個條碼或數字候選，請先裁切單張並確認唯一條碼。"
+    elif upca:
+        if decoded and (str(decoded[0].get("format") or "").replace("-","").upper() not in {"UPCA","EAN13"} or not matches_decoded_gtin(upca,decoded[0])):
+            reason="解碼種類或數字與 UPC-A 印字不符，請核對原照片。"
+        elif any(row["uncertain"] for row in readings):
+            reason="UPC-A 印字辨識不確定，請先核對原照片。"
     elif any(str(item.get("format") or "").replace("-","").upper()!="EAN13" or gtin_valid(str(item.get("text") or "")) is not True or len(str(item.get("text") or ""))!=13 for item in decoded):
-        reason="目前只提供完整 EAN13 條碼公式候選，其他條碼種類不推算。"
+        reason="支援完整的 EAN13 日期條碼或固定 UPC-A 商品條碼，請核對條碼種類與印字。" if allow_upca else "此規則需要完整 EAN13 條碼。"
     elif any(row["uncertain"] or not row["valid_ean13"] for row in readings):
         reason="條碼印字不完整、不確定或檢查碼不符，請先確認實際條碼。"
     elif values and decoded_values and values!=decoded_values:
         reason="條紋解碼與辨識印字不同，請先確認，不能用衝突資料建立規則。"
-    found=values|decoded_values
+    found={upca} if upca else values|decoded_values
     if not reason and len(found)!=1:
-        reason="尚未取得唯一清楚且檢查碼有效的完整 EAN13 條碼。"
+        reason="尚未取得唯一清楚且檢查碼有效的完整條碼。"
     fields=_date_fields(lines)
     dates=[];parsed={}
     for key,field in fields.items():
@@ -156,6 +176,35 @@ def _known_prefixes(base,effective):
     return sorted({str(value) for value in values if re.fullmatch(r"[0-9]{1,10}",str(value or ""))})
 
 
+def _mark_qmc_meal_candidates(candidates, dates):
+    """Identify a B-edition meal format only when the printed expiry time corroborates it."""
+    expiry = [row for row in dates if row.get("kind") == "expiry"]
+    if len(expiry) != 1 or expiry[0].get("uncertain"):
+        return
+    try:
+        printed = parse_date(expiry[0]["value"], kind="expiry")
+    except (KeyError, TypeError, ValueError):
+        return
+    if printed["minute"] != 0:
+        return
+    for candidate in candidates:
+        rule = candidate["rule"]
+        if rule.get("day_source") != "expiry" or len(rule["prefix"]) != 8:
+            continue
+        if printed["hour"] == 3 and rule["day_width"] == 3 and rule["suffix"] == "3":
+            clause, label = "3.1.4", "統一餐盒"
+            layout = "8 碼店內碼、3 碼有效日年序、時間碼 3"
+        elif (printed["hour"] == 24 and rule["prefix"].startswith("20")
+              and rule["day_width"] == 2 and rule["suffix"] == "24"):
+            clause, label = "4.1.3", "全家餐盒"
+            layout = "20、6 碼商品代號、有效日年序末 2 碼、時間碼 24"
+        else:
+            continue
+        candidate["sop_reference"] = {"document": "QMC001", "edition": "B", "clause": clause}
+        candidate["summary"] += f"（符合{label}格式）"
+        candidate["warnings"].append(f"分段與 QMC001 B 版第 {clause} 節{label}格式相符：{layout}。請核對此商品適用的通路與品類。")
+
+
 def auto_hypotheses(entry,current_rule=None,known_candidates=()):
     """Bounded observed-date splits; a match is a proposal, never approval."""
     value=entry.get("observed_value","")
@@ -203,12 +252,14 @@ def auto_hypotheses(entry,current_rule=None,known_candidates=()):
                     "parts":[{"label":"待核准固定前綴","value":rule["prefix"]},{"label":DAY_LABELS[kind],"value":day.isoformat()},
                         {"label":f"{width}位太陽日","value":token},{"label":"待核准固定尾碼","value":rule["suffix"]},
                         {"label":"EAN13檢查碼","value":value[-1]}],"composed_value":value,"evidence":evidence,"warnings":warnings})
+    _mark_qmc_meal_candidates(candidates, entry.get("dates", []))
     preferred=[item for item in candidates if item["evidence"]["kind"]=="approved_rule"]
     # An existing approved formula may be exposing a real printing error.
     # Keep alternatives visible, but never recommend replacing it just to fit.
     if not preferred and approved is None and not entry.get("fixed_barcode_reference"):
         known=[item for item in candidates if item["evidence"]["kind"]=="catalog_structure"]
-        preferred=known if known else [item for item in candidates if item["rule"]["day_width"]==3]
+        sop=[item for item in candidates if item.get("sop_reference")]
+        preferred=known or sop or [item for item in candidates if item["rule"]["day_width"]==3]
     return candidates,preferred[0]["id"] if len(preferred)==1 else None
 
 
@@ -222,7 +273,7 @@ def _load(engine,identifier,conn=None):
         history_cleanup.ensure_active(conn,identifier);current=corrections.latest(conn,identifier)
     inputs=original.get("result",{}).get("inputs") or {}
     ocr=_observed(original,current)
-    observation,dates,value,reason=read_observations(ocr,inputs.get("base_date",""))
+    observation,dates,value,reason=read_observations(ocr,inputs.get("base_date",""),allow_upca=True)
     observation_reason=reason
     base,unsupported=standards._context(engine,original)
     if base and base.get("catalog_barcode_line_ids"):
@@ -261,9 +312,15 @@ def _load(engine,identifier,conn=None):
             if not reason:reason=str(error) if isinstance(error,ValueError) else "清單組碼證據缺少版本，請重新載入清單。"
     prefixes=[structure["prefix"]] if structure else _known_prefixes(base or {},effective)
     kind=str(((base or {}).get("barcode_config") or {}).get("kind","")).strip()
+    if len(value)==13 and value.startswith("0") and (effective.get("barcode_config") or {}).get("kind")=="2":
+        if any(literal_value(code)==value[1:] for code in effective.get("barcode_values",[])):
+            value=value[1:]
+    is_upca=len(value)==12
     manual_reason=observation_reason
     if not base or unsupported or original.get("template_id") or effective.get("source_kind")!="manual" or not str(effective.get("code","")).startswith("manual:"):
         manual_reason="手動補上組碼目前只適用仍有效的人工文字標準。"
+    elif is_upca:
+        manual_reason="本張為 12 碼固定商品條碼。"
     elif kind not in {"","1"}:
         manual_reason="此來源已指定其他條碼種類，不能以手動確認覆蓋為 EAN13。"
     elif not manual_reason and not dates:
@@ -284,6 +341,8 @@ def _load(engine,identifier,conn=None):
         if str(config.get("solar","")) not in {"2","3"} and not any(config.get(key) for key in ("front","back")) and str(config.get("price_len",""))!="4":
             fixed_values.append(config.get("barcode",""))
     manual_entry["fixed_barcode_reference"]=bool(value) and any(literal_value(item.get("value","") if isinstance(item,dict) else item)==value for item in fixed_values)
+    if is_upca and not reason:
+        reason="固定 UPC-A 商品條碼可用於人工文字標準。"
     if not reason and not kind and not observation["decoded"]:
         reason="來源尚未確認條碼種類，只有數字印字不足以認定 EAN13；請取得明確 EAN13 條紋解碼後再建立候選。"
     if not reason and not prefixes:reason="這份來源沒有已知數字前綴，不能只從完整條碼猜商品前綴。"
@@ -311,15 +370,33 @@ def _load(engine,identifier,conn=None):
                         "rule":rule,"keep_days_suggestion":suggested,"warnings":warnings}
                     if structure_evidence:candidate["evidence"]=deepcopy(structure_evidence)
                     candidates.append(candidate)
+    _mark_qmc_meal_candidates(candidates, observation["dates"])
     if not reason and not candidates:reason="已知前綴與本次可信日期無法組成相同條碼；未猜補日期或尾碼。"
+    current_rule=effective.get("web_barcode_rule")
+    if is_upca and base and not unsupported and not original.get("template_id") and effective.get("source_kind")=="manual":
+        known=[*effective.get("barcode_values",[]), *(row["text"] for row in effective.get("lines",[])
+            if len(literal_value(row.get("text",""))) in (12,13,14))]
+        config=effective.get("barcode_config") or {}
+        if current_rule or str(config.get("kind","")) not in {"","2"} or any(val for key,val in config.items() if key!="kind") or any(literal_value(code)!=value for code in known):
+            reason="現行標準另有條碼數字或組碼設定，請核對商品與標準後再調整。"
+            manual_entry["reason"]=reason
+        else:
+            rule={"version":1,"symbology":"UPCA","value":value}
+            candidates=[{"id":_digest(rule),"summary":f"固定 UPC-A 商品條碼 {value}","rule":rule,
+                "parts":[{"label":"固定商品條碼","value":value},{"label":"UPC-A 檢查碼","value":value[-1]}],
+                "evidence":{"kind":"fixed_upca","type_verification":"decoded" if observation["decoded"] else "printed_checksum"},
+                "warnings":["請對照商品確認此完整號碼為固定條碼。"]}]
+            if known and str(config.get("kind"))=="2":current_rule=rule
+            reason=""
     manual_entry["auto_candidates"],manual_entry["recommended_id"]=auto_hypotheses(manual_entry,effective.get("web_barcode_rule"),candidates)
     payload={"source":{key:effective.get(key) for key in ("code","name","source_kind")},
         "base_revision":version["revision"] if version else 0,"source_revision":str((base or {}).get("revision","")),
-        "manual_revision":current["revision"] if current else 0,"current_rule":effective.get("web_barcode_rule"),
+        "manual_revision":current["revision"] if current else 0,"current_rule":current_rule,
         "can_write":bool(candidates) and not bool(reason),"reason":reason,"observed":observation,
         "manual_entry":manual_entry,
         "keep_days":{"current":current_days,"suggested":suggested,"can_fill":current_days is None and suggested is not None,"reason":days_reason},
-        "candidates":candidates,"warnings":["只變更網站核對規則，不會改列印程式、原始文字、照片或日期排程。"]}
+        "candidates":candidates,"warnings":["核准後會把完整號碼存為這份文字標準的固定商品條碼。" if is_upca and candidates else
+            "只變更網站核對規則，不會改列印程式、原始文字、照片或日期排程。"]}
     return original,base,effective,payload
 
 
@@ -352,6 +429,8 @@ def _manual_candidate(payload,body):
         "observed_value":entry["observed_value"],"submitted_rule":deepcopy(rule)}
     if hypothesis:
         evidence["photo_date_hypothesis" if hypothesis["evidence"]["kind"]=="observed_hypothesis" else "reference_evidence"]=deepcopy(hypothesis["evidence"])
+        if hypothesis.get("sop_reference"):
+            evidence["sop_reference"] = hypothesis["sop_reference"]
     return {"id":"manual","rule":rule,"summary":f"前綴{rule['prefix']}＋{DAY_LABELS[rule['day_source']]}{width}位太陽日＋尾碼{rule['suffix'] or '無'}＋檢查碼",
         "parts":[{"label":"待核准固定前綴","value":rule["prefix"]},
             {"label":DAY_LABELS[rule["day_source"]],"value":chosen.isoformat()},
@@ -388,6 +467,8 @@ def _preview(payload,body,inspection_id):
     keys=CHOICE_KEYS|MANUAL_KEYS if body.get("candidate_id")=="manual" else CHOICE_KEYS
     signature={"inspection_id":inspection_id,"choice":{key:body[key] for key in keys},
         "observed":payload["observed"],"before":before,"after":after,"candidate_evidence":candidate.get("evidence")}
+    if candidate.get("sop_reference"):
+        signature["sop_reference"] = candidate["sop_reference"]
     return {**{key:payload[key] for key in ("base_revision","source_revision","manual_revision")},
         "preview_hash":_digest(signature),"candidate":candidate,"before":before,"after":after,
         "warnings":candidate["warnings"]+payload["warnings"]}
@@ -422,18 +503,30 @@ def save(engine,inspection_id,body):
             if revision!=body["base_revision"]:abort(409,description="另一位使用者已更新標準，請重新預覽。")
             snapshot=deepcopy(effective);snapshot.pop("standard_reference",None);snapshot.pop("base_date",None)
             snapshot["revision"]=str(base["revision"])
-            snapshot["web_barcode_rule"]=reviewed["after"]["rule"]
+            rule=reviewed["after"]["rule"]
+            if rule["symbology"]=="UPCA":
+                value=rule["value"]
+                snapshot.update(barcode_config={"kind":"2"},barcode_values=[value])
+                if not any(literal_value(row["text"])==value for row in snapshot.get("lines",[])):
+                    snapshot["lines"].append({"id":db.uid(),"text":value,"score":1.,"box":[]})
+                rule_changes={"barcode_values":[value]}
+            else:
+                snapshot["web_barcode_rule"]=rule
+                rule_changes={"web_barcode_rule":rule}
             if body["fill_keep_days"]:
                 snapshot.update(keep_days=reviewed["after"]["keep_days"],keep_days_source="confirmed_date_difference")
             evidence={"inspection_id":inspection_id,"manual_revision":payload["manual_revision"],
                 "candidate_id":body["candidate_id"],"preview_hash":body["preview_hash"],"observed":payload["observed"]}
             if reviewed["candidate"].get("evidence"):
-                evidence["manual_entry" if body["candidate_id"]=="manual" else "catalog_structure"]=deepcopy(reviewed["candidate"]["evidence"])
+                detail=reviewed["candidate"]["evidence"]
+                evidence["manual_entry" if body["candidate_id"]=="manual" else detail["kind"]]=deepcopy(detail)
+            if reviewed["candidate"].get("sop_reference"):
+                evidence["sop_reference"] = reviewed["candidate"]["sop_reference"]
             snapshot["web_barcode_rule_evidence"]=evidence
             new_revision=revision+1;created=db.now()
             conn.execute(insert(standards.versions).values(id=db.uid(),code=code,revision=new_revision,
                 source_revision=str(base["revision"]),operation="barcode_rule",snapshot=snapshot,
-                changes={"web_barcode_rule":snapshot["web_barcode_rule"],"fill_keep_days":body["fill_keep_days"],"evidence":evidence},
+                changes={**rule_changes,"fill_keep_days":body["fill_keep_days"],"evidence":evidence},
                 inspection_id=inspection_id,reviewer=reviewer,note=note,created_at=created))
             changed=conn.execute(update(standards.heads).where(standards.heads.c.code==code,standards.heads.c.revision==revision).values(revision=new_revision))
             if changed.rowcount!=1:abort(409,description="標準版本已變更，請重新預覽。")
@@ -446,4 +539,4 @@ def save(engine,inspection_id,body):
         if getattr(error.orig,"sqlite_errorcode",None) in {5,6,517}:abort(409,description="標準正在更新，請重新預覽。")
         raise
     return {"source_code":code,"base_revision":new_revision,"source_revision":str(base["revision"]),
-        "rule":snapshot["web_barcode_rule"],"keep_days":snapshot.get("keep_days"),"recheck_required":True,"replayed":False}
+        "rule":rule,"keep_days":snapshot.get("keep_days"),"recheck_required":True,"replayed":False}

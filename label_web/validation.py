@@ -7,9 +7,9 @@ import unicodedata
 from opencc import OpenCC
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
                             date_evidence_overlaps, without_date_evidence, DATE_KINDS,
-                            date_value_for_parsing, split_arrival_marker)
+                            split_date_annotation, unlabelled_dates)
 
-RULE_VERSION = "1.6"
+RULE_VERSION = "1.7"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
@@ -51,11 +51,20 @@ def traditional_display(text):
     return _traditional_converter().convert(str(text or "")).replace("臺灣", "台灣")
 
 
+def standalone_date_label(text, observed):
+    """Label a date row only if its heading and parsed value account for the whole line."""
+    text = text.strip()
+    if text == observed:
+        return "日期"
+    heading = re.match(r"^包\s*[裝装]\s*日(?:\s*期)?\s*[:：]?\s*", text)
+    return "包裝日期" if heading and text[heading.end():] == observed else ""
+
+
 def parse_date(text, *, kind=None):
-    value = unicodedata.normalize("NFKC", date_value_for_parsing(text, kind)).strip()
+    value = unicodedata.normalize("NFKC", split_date_annotation(text)[0])
     roc = value.startswith("民國")
     value = re.sub(r"^民國\s*", "", value)
-    match = re.fullmatch(r"(\d{3,4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*(?:時|时|:)(?:(\d{1,2})\s*分?)?)?", value)
+    match = re.fullmatch(r"(\d{3,4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?(?:\s*(\d{1,2})\s*(?:時|时|:)(?:\s*(\d{1,2})\s*分?)?)?", value)
     if not match:
         raise ValueError("日期須包含完整年月日；無法判讀的字元不會自動修正。")
     year, month, day = (int(match[i]) for i in (1, 2, 3))
@@ -67,8 +76,6 @@ def parse_date(text, *, kind=None):
         raise ValueError("年份超出可檢查範圍。")
     hour = int(match[4]) if match[4] is not None else None
     minute = int(match[5] or 0)
-    if hour is not None and (hour > 23 or minute > 59):
-        raise ValueError("日期的時間不合法。")
     return {"date": date(year, month, day), "hour": hour, "minute": minute}
 
 
@@ -270,6 +277,7 @@ def extract_fields(lines, expected=None):
     for observed in date_observations(ordered):
         key = observed["kind"]
         candidate = _candidate(observed["value"], observed["lines"], observed["ambiguous"])
+        candidate["value"] = observed["value"]
         candidate["evidence_spans"] = observed["evidence_spans"]
         if key in found:
             found[key]["ambiguous"] = True
@@ -438,22 +446,26 @@ def _finish_result(lines, result):
                            "score": line.get("score"), "source": "ocr",
                            "reason": ("來源行含繁簡轉換字形，繁體顯示僅供閱讀；請對照原圖確認。" if changed
                                       else "此行仍有未核對的文字，請對照原圖；已核對的欄位不代表整行都正確。")})
-    date_pattern = r"(?:民國\s*)?[0-9０-９OoIl]{3,4}\s*[年./．-]\s*[0-9０-９OoIl]{1,2}\s*[月./．-]\s*[0-9０-９OoIl]{1,2}(?:\s*日)?"
     for line in lines:
         if line["id"] in covered or not line["text"].strip():
             continue
         # Other printed dates can be checked for validity, not for their business meaning.
-        for number, match in enumerate(re.finditer(date_pattern, line["text"])):
+        whole_label = ""
+        for number, value in enumerate(unlabelled_dates(line["text"])):
+            whole_label = standalone_date_label(line["text"], value)
             status, reason = "pass", "年月日格式可辨識；未核對這個日期的業務用途。"
             try:
-                parse_date(match[0])
+                parse_date(value)
             except (ValueError, TypeError):
                 status, reason = "review", "日期不完整或不合法，請確認數字是否漏印或辨識錯誤。"
             if line_is_uncertain(line, .94):
                 status, reason = "review", "日期辨識把握不足，請對照原圖確認。"
-            checks.append({"key": f"date_line_{line['id']}_{number}", "label": "其他日期格式", "status": status,
-                           "expected": "完整且合法的年月日", "actual": match[0], "reason": reason,
+            checks.append({"key": f"date_line_{line['id']}_{number}", "label": (whole_label or "其他日期") + "格式", "status": status,
+                           "whole_date_label": whole_label,
+                           "expected": "完整且合法的年月日", "actual": value, "reason": reason,
                            "line_ids": [line["id"]], "score": line.get("score"), "source": "date"})
+        if whole_label:
+            continue
         changed = traditional_display(line["text"]) != line["text"]
         checks.append({"key": f"text_line_{line['id']}", "label": "其他辨識文字",
                        "status": "read" if not line_is_uncertain(line, .94) and not changed else "review", "expected": "",
@@ -574,8 +586,8 @@ def evaluate(lines, template, batch_date="", arrival_date="", *, base_date=""):
         status, reason = "pass", "年月日格式可辨識。"
         try:
             parsed["arrival"] = parse_date(value, kind="arrival")
-            if split_arrival_marker(value)[1]:
-                reason += "到店日尾端圈數視為可變附記，不當作日期或時間數字。"
+            if split_date_annotation(value)[1]:
+                reason += "已保留日期尾端的印刷附記。"
         except (ValueError, TypeError):
             status, reason = "review", "到店日未讀完整或日期不合法，請查看原圖。"
         if field.get("ambiguous") or not field.get("confidence_ok", field.get("score", 0) >= threshold):

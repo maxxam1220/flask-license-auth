@@ -40,6 +40,18 @@ class PartialBarcodeTests(unittest.TestCase):
         check=self.hri(data)
         self.assertEqual((check["status"],check["actual"],check["expected"]),("review","182333",VALUE))
 
+    def test_upca_human_readable_matches_zero_prefixed_ean13_only(self):
+        for digits in ("400000790039","036000291452"):
+            hri=" ".join((digits[:1], digits[1:6], digits[6:11], digits[-1]))
+            data=evidence([row(hri)],value="0"+digits)
+            checks={item["key"]:item for item in checks_for(data)}
+            self.assertEqual(checks["barcode_hri"]["status"],"pass")
+            self.assertEqual(checks["barcode_checksum_0"]["status"],"pass")
+            self.assertEqual(checks["barcode_hri"]["expected"],"0"+digits)
+            for symbology,payload in (("Code128","0"+digits),("EAN-13","1"+digits),("EAN-13","0"+digits[:-1]+"1")):
+                data["barcodes"]["items"][0].update(format=symbology,text=payload)
+                self.assertEqual(self.hri(data)["status"],"review")
+
     def test_short_digits_only_are_eligible_with_one_spatially_near_decode(self):
         for text in ("2", "182333", "182 333", "條碼：182333"):
             with self.subTest(text=text):
@@ -92,6 +104,43 @@ class PartialBarcodeTests(unittest.TestCase):
             "box":[[450,50],[750,50],[750,150],[450,150]]})
         self.assertIsNone(self.hri(data))
         self.assertEqual(next(c for c in checks_for(data) if c["key"]=="barcode_multiple")["status"],"review")
+
+    def test_traceability_qr_and_retail_bars_can_both_pass(self):
+        from barcode_rule_authoring import read_observations
+        from inspection_evidence import augment
+        retail = "4711378333473"
+        data = evidence([row("4 711378 333473", score=.99)], value=retail)
+        qr = {"text":"https://trace.example.test/?t=0000000000000001", "format":"QR Code",
+              "box":[[500,50],[580,50],[580,130],[500,130]]}
+        data["barcodes"]["items"].insert(0, qr)
+        before = deepcopy(data)
+        result = augment({"checks":[]}, data)
+        checks = {item["key"]:item for item in result["checks"]}
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(checks["barcode_hri"]["expected"], retail)
+        trace = checks["barcode_traceability_0"]
+        self.assertEqual((trace["status"], trace["actual"], trace["box"]), ("pass", qr["text"], qr["box"]))
+        _, _, found, reason = read_observations(data, "2026-11-18")
+        self.assertEqual((found, reason), (retail, ""))
+        self.assertEqual(data, before)
+        data["lines"][0].update(text="4711378333472", human_verified=True)
+        self.assertEqual(self.hri(data)["status"], "fail")
+
+    def test_traceability_url_does_not_replace_unread_product_bars(self):
+        data = evidence([row(VALUE)], decoded=False)
+        data["barcodes"]["items"].append({"text":"http://任意.example/查詢", "format":"QRCode", "box":[]})
+        checks = {item["key"]:item for item in checks_for(data)}
+        self.assertEqual(checks["barcode_unread"]["status"], "review")
+        self.assertEqual(checks["barcode_traceability_0"]["status"], "pass")
+
+    def test_url_exemption_requires_qr_with_a_web_address(self):
+        for kind, value in (("QR Code","12345678"), ("QR Code","https://"),
+                            ("QR Code","https://bad host/"), ("QR Code","https://host:abc/"),
+                            ("QR Code","mailto:name@example.test"), ("Code128","https://tqr.tw/")):
+            with self.subTest(kind=kind, value=value):
+                data = evidence([])
+                data["barcodes"]["items"].append({"text":value, "format":kind, "box":[]})
+                self.assertIn("barcode_multiple", {item["key"] for item in checks_for(data)})
 
 
 if __name__ == "__main__":

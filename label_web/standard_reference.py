@@ -53,11 +53,12 @@ def _current(engine, code):
 
 
 def apply_current(engine, base, version=None):
+    from label_source import with_printed_upca
     if base is None:
         return None
     version = _current(engine, str(base["code"])) if version is None else version
     if not version:
-        return deepcopy(base)
+        return with_printed_upca(deepcopy(base))
     stale = version["source_revision"] != str(base["revision"])
     active = not stale and version["operation"] != "reset"
     result = deepcopy(version["snapshot"] if active else base)
@@ -72,7 +73,7 @@ def apply_current(engine, base, version=None):
         result["notice"] = "使用已人工確認的網站比對標準；原列印系統資料未變更。"
     elif stale:
         result["notice"] = "原始來源已變更，舊網站標準已停用；請開啟比對標準重新確認後建立新版。"
-    return result
+    return with_printed_upca(result)
 
 
 def _text(value, label, maximum=2000):
@@ -104,7 +105,7 @@ def _product_rows(source):
 
 
 def changed_snapshot(base, current, changes):
-    from label_source import _fixed_barcodes
+    from label_source import _fixed_barcodes, with_printed_upca
     if not isinstance(changes, dict) or set(changes) - {"name", "lines", "replace_lines", "keep_days", "date_settings"}:
         abort(400, description="標準只可修改品名、既有文字列、保存天數及日期位移。")
     result = deepcopy(current)
@@ -249,7 +250,7 @@ def changed_snapshot(base, current, changes):
     if any(key in changes for key in ("date_settings","keep_days")):
         from manual_reference import validate_date_rules
         validate_date_rules(result,include_external=True)
-    return result
+    return with_printed_upca(result)
 
 
 def _inspection(engine, identifier):

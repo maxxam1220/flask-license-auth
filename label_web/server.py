@@ -823,18 +823,21 @@ def create_app(config=None, ocr=None):
         query = select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status,
                        db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result,
                        db.inspections.c.ocr).where(history_cleanup.active_filter())
-        if request.args.get("status") in {"pass", "fail", "review"}:
-            query = query.where(db.inspections.c.status == request.args["status"])
+        status = request.args.get("status")
+        status = status if status in {"pass", "fail", "review"} else None
+        if status:
+            query = query.where(db.inspections.c.status == status)
         with engine.connect() as conn:
-            rows = conn.execute(query.order_by(db.inspections.c.created_at.desc()).offset((page - 1) * 24).limit(25)).mappings().all()
+            rows = conn.execute(query.order_by(db.inspections.c.created_at.desc(), db.inspections.c.id).offset((page - 1) * 24).limit(25)).mappings().all()
             manual = corrections.latest_summaries(conn, [x["id"] for x in rows[:24]])
+            item_days, day_counts, today = history_cleanup.day_summary(conn, rows[:24], status)
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
-            version=x["template_snapshot"]["version"], created_at=x["created_at"], image=image_payload(x["image_id"]),
+            version=x["template_snapshot"]["version"], created_at=x["created_at"], day=item_days[x["id"]], image=image_payload(x["image_id"]),
             counts=x["result"].get("counts",{}), base_date=x["result"].get("inputs",{}).get("base_date",""),
             product=product_name(x),
             manual_revision=manual.get(x["id"], {}).get("revision", 0),
             manual_status=manual.get(x["id"], {}).get("status")) for x in rows[:24]],
-            has_more=len(rows) > 24, page=page)
+            has_more=len(rows) > 24, page=page, day_counts=day_counts, today=today)
 
     def inspection_payload(original):
         row = dict(original)

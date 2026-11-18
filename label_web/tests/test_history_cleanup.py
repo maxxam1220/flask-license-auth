@@ -97,6 +97,50 @@ class HistoryCleanupTests(unittest.TestCase):
         self.assertEqual([row["operation"] for row in self.rows(cleanup.audit)],["archive","restore"])
         self.assertEqual(self.rows(cleanup.batches)[0]["revision"],2)
 
+    def test_one_click_archive_moves_only_selected_and_can_restore(self):
+        body = {"ids":["first","second"]}
+        self.assertEqual(self.client.post("/api/admin/history/archive-selected",json=body).status_code,403)
+        self.assertEqual(self.post("archive-selected", {"ids":["first","missing"]}).status_code,409)
+        self.assertEqual(len(self.active()),3)
+        move = self.post("archive-selected", body)
+        self.assertEqual(move.status_code,201,move.json)
+        self.assertEqual(self.active(),["outside"])
+        self.assertEqual(self.rows(cleanup.previews),[])
+        self.assertEqual(self.post("archive-selected", body).status_code,409)
+        self.assertEqual(len(self.rows(cleanup.batches)),1)
+        self.assertEqual(self.restore(move.json["batch_id"]).status_code,200)
+        self.assertEqual(len(self.active()),3)
+
+    def test_empty_bin_requires_current_membership_and_preserves_sources(self):
+        before = self.rows(db.inspections)
+        path = "/api/admin/history/batches?scope=recycle"
+        batch = self.post("archive-selected", {"ids":["first"]}).json["batch_id"]
+        token = self.client.get(path).json["recycle_token"]
+        self.post("archive-selected", {"ids":["second"]})
+        self.assertEqual(self.post("empty", {"confirmed":True,"recycle_token":token}).status_code,409)
+        self.assertEqual(self.restore(batch).status_code,200)
+        current = self.client.get(path).json
+        self.assertEqual(current["recycle_count"],1)
+        archived = current["items"][0]["batch_id"]
+        body = {"confirmed":True,"recycle_token":current["recycle_token"]}
+        self.assertEqual(self.client.post("/api/admin/history/empty",json=body).status_code,403)
+        self.assertEqual(self.post("empty", {**body,"confirmed":False}).status_code,400)
+        with self.client.session_transaction() as saved:
+            saved["role"] = "operator"
+        self.assertEqual(self.post("empty",body).status_code,403)
+        with self.client.session_transaction() as saved:
+            saved["role"] = "admin"
+        cleared = self.post("empty",body)
+        self.assertEqual(cleared.status_code,200,cleared.json)
+        self.assertEqual(cleared.json["count"],1)
+        self.assertEqual(self.client.get(path).json["items"],[])
+        self.assertEqual(self.restore(archived).status_code,409)
+        self.assertEqual(self.client.get("/api/admin/history/batches/"+archived).status_code,410)
+        self.assertEqual(self.active(),["first","outside"])
+        self.assertEqual(self.rows(db.inspections),before)
+        self.assertEqual(self.photo.read_bytes(),b"original photo bytes")
+        self.assertEqual(self.post("empty", body).status_code,409)
+
     def test_taiwan_date_range_is_inclusive_and_status_uses_original_result(self):
         preview=self.preview({"date_from":"2026-11-13","date_to":"2026-11-13"})
         self.assertEqual([x["id"] for x in preview["items"]],["first","second"])

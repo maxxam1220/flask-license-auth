@@ -256,6 +256,16 @@ class SourceDateTests(unittest.TestCase):
         self.assertEqual(check(result, "text_line_0")["status"], "read")
         self.assertEqual(result["status"], "review")
 
+    def test_complete_packaging_date_is_covered_without_assigning_a_manufacture_date(self):
+        result = evaluate_source([line(0, "包裝日期: 2026/11/18")], None, base_date="2026-11-18")
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(check(result, "date_line_0_0")["whole_date_label"], "包裝日期")
+        self.assertEqual(check(result, "date_year_0_0")["status"], "pass")
+        self.assertNotIn("manufacture", result["fields"])
+        mixed = evaluate_source([line(0, "包裝日期: 2026/11/18 其他文字")], None)
+        self.assertEqual(check(mixed, "text_line_0")["status"], "read")
+        self.assertEqual(mixed["status"], "review")
+
     def test_schedule_and_order_errors_explain_the_difference(self):
         result = evaluate_source([line(0, "到店日：2025.11.12")], source(settings=[setting("到店日", "A", 1)]), base_date="2026-11-11")
         self.assertIn("應為 2026.11.12", check(result, "arrival_schedule")["reason"])

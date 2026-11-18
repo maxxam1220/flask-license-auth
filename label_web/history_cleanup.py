@@ -1,4 +1,4 @@
-"""Administrator-only, reversible history archiving. Never delete inspection data."""
+"""Manage the inspection list and its recycle bin while preserving source evidence."""
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
@@ -6,7 +6,7 @@ import re
 import secrets
 
 from flask import abort, jsonify, request, session
-from sqlalchemy import Table, Column, String, Integer, Boolean, JSON, Text, select, insert, update, delete, func
+from sqlalchemy import Table, Column, String, Integer, Boolean, JSON, Text, select, insert, update, delete, func, literal, union_all
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import database as db
@@ -50,7 +50,32 @@ def archive_batch_id(conn, identifier):
 
 def ensure_active(conn, identifier):
     if archive_batch_id(conn, identifier):
-        abort(404, description="這筆檢查紀錄已移至回收區；請由管理員還原後查看。")
+        abort(404, description="這筆紀錄已從檢查清單移除。")
+
+
+def day_summary(conn, rows, status):
+    """Report complete Taiwan days even when a day spans multiple pages of results."""
+    column = db.inspections.c.created_at
+    today = datetime.now(TAIWAN).date()
+    page_days = {row["id"]: datetime.fromisoformat(row["created_at"]).astimezone(TAIWAN).date() for row in rows}
+    days = set(page_days.values())
+    queries = []
+
+    def day_counts(day, key, result_filter):
+        start = datetime.combine(day, datetime.min.time(), TAIWAN).astimezone(timezone.utc)
+        query = select(literal(key).label("day"), func.count().label("records"),
+                       func.count(db.inspections.c.image_id.distinct()).label("photos")).where(
+            column >= start.isoformat(), column < (start + timedelta(days=1)).isoformat(), active_filter())
+        return query.where(db.inspections.c.status == result_filter) if result_filter else query
+
+    for day in sorted(days):
+        queries.append(day_counts(day, day.isoformat(), status))
+    if status or today not in days:
+        queries.append(day_counts(today, "today", None))
+    counts = {row.day: {"records": row.records, "photos": row.photos} for row in conn.execute(union_all(*queries))}
+    return ({key: day.isoformat() for key, day in page_days.items()},
+            {day.isoformat(): counts[day.isoformat()] for day in days},
+            {"date": today.isoformat(), **(counts["today"] if "today" in counts else counts[today.isoformat()])})
 
 
 def _digest(value):
@@ -157,6 +182,34 @@ def _lock_records(conn, ids):
         _conflict()
 
 
+def _archive_members(conn, members, filters, action_id, actor, reviewer, note):
+    batch_id, now = db.uid(), db.now()
+    for item in members:
+        values = dict(batch_id=batch_id, archived=True, revision=item["tombstone_revision"]+1, updated_at=now)
+        if item["tombstone_revision"]:
+            changed = conn.execute(update(tombstones).where(tombstones.c.inspection_id == item["id"],
+                tombstones.c.revision == item["tombstone_revision"], tombstones.c.archived.is_(False)).values(**values))
+            if changed.rowcount != 1:
+                _conflict()
+        else:
+            conn.execute(insert(tombstones).values(inspection_id=item["id"], **values))
+    conn.execute(insert(batches).values(id=batch_id, preview_id=action_id, status="archived", revision=1,
+        count=len(members), members=members, filters=filters, actor=actor, reviewer=reviewer, note=note, created_at=now))
+    conn.execute(insert(audit).values(id=db.uid(), batch_id=batch_id, operation="archive", actor=actor,
+        reviewer=reviewer, note=note, inspection_ids=[item["id"] for item in members], created_at=now))
+    return batch_id
+
+
+def _recycle_snapshot(conn, lock=False):
+    query = select(batches.c.id, batches.c.revision, batches.c.count).where(
+        batches.c.status == "archived").order_by(batches.c.id)
+    return conn.execute(query.with_for_update() if lock else query).all()
+
+
+def _recycle_token(rows):
+    return _digest([list(row) for row in rows])
+
+
 def register_routes(app, engine, require_admin):
     """Import this module before open_database so its tables join metadata.create_all."""
     def guard(write=False):
@@ -239,20 +292,7 @@ def register_routes(app, engine, require_admin):
                 fresh = _entries(conn, _projection().where(db.inspections.c.id.in_(ids), active_filter()).order_by(db.inspections.c.id))
                 if [(x["id"],x["stamp"]) for x in fresh] != [(x["id"],x["stamp"]) for x in members]:
                     _conflict()
-                batch_id, now = db.uid(), db.now()
-                for item in members:
-                    values = dict(batch_id=batch_id, archived=True, revision=item["tombstone_revision"]+1, updated_at=now)
-                    if item["tombstone_revision"]:
-                        changed = conn.execute(update(tombstones).where(tombstones.c.inspection_id == item["id"],
-                            tombstones.c.revision == item["tombstone_revision"], tombstones.c.archived.is_(False)).values(**values))
-                        if changed.rowcount != 1:
-                            _conflict()
-                    else:
-                        conn.execute(insert(tombstones).values(inspection_id=item["id"], **values))
-                conn.execute(insert(batches).values(id=batch_id, preview_id=identifier, status="archived", revision=1,
-                    count=len(members), members=members, filters=preview_row["filters"], actor=actor, reviewer=reviewer, note=note, created_at=now))
-                conn.execute(insert(audit).values(id=db.uid(),batch_id=batch_id,operation="archive",actor=actor,
-                    reviewer=reviewer,note=note,inspection_ids=ids,created_at=now))
+                batch_id = _archive_members(conn, members, preview_row["filters"], identifier, actor, reviewer, note)
         except IntegrityError:
             _conflict()
         except OperationalError as error:
@@ -260,6 +300,26 @@ def register_routes(app, engine, require_admin):
                 _conflict()
             raise
         return jsonify(batch_id=batch_id,count=len(members),status="archived",revision=1),201
+
+    @app.post("/api/admin/history/archive-selected")
+    def archive_selected():
+        actor = guard(True)
+        filters = _filters({"ids": _body({"ids"}).get("ids")})
+        ids = filters["ids"]
+        try:
+            with engine.begin() as conn:
+                _lock_records(conn, ids)
+                members = _entries(conn, _projection().where(db.inspections.c.id.in_(ids), active_filter()).order_by(db.inspections.c.id))
+                if len(members) != len(ids):
+                    _conflict()
+                batch_id = _archive_members(conn, members, filters, db.uid(), actor, actor, "手動回收所選紀錄")
+        except IntegrityError:
+            _conflict()
+        except OperationalError as error:
+            if getattr(error.orig, "sqlite_errorcode", None) in {5,6,517}:
+                _conflict()
+            raise
+        return jsonify(batch_id=batch_id, count=len(members), status="archived", revision=1), 201
 
     @app.get("/api/admin/history/batches")
     def list_batches():
@@ -270,9 +330,47 @@ def register_routes(app, engine, require_admin):
                 raise ValueError()
         except ValueError:
             abort(400, description="頁碼不正確。")
+        recycle = request.args.get("scope") == "recycle"
+        extra = {}
+        query = select(batches).where(batches.c.status != "emptied")
         with engine.connect() as conn:
-            rows = conn.execute(select(batches).order_by(batches.c.created_at.desc(),batches.c.id).offset((page-1)*20).limit(21)).mappings().all()
-        return jsonify(items=[_batch_payload(row) for row in rows[:20]],page=page,has_more=len(rows)>20)
+            if recycle:
+                query = query.where(batches.c.status == "archived")
+                snapshot = _recycle_snapshot(conn)
+                extra = {"recycle_token": _recycle_token(snapshot), "recycle_count": sum(row.count for row in snapshot)}
+            rows = conn.execute(query.order_by(batches.c.created_at.desc(),batches.c.id).offset((page-1)*20).limit(21)).mappings().all()
+        return jsonify(items=[_batch_payload(row) for row in rows[:20]],page=page,has_more=len(rows)>20, **extra)
+
+    @app.post("/api/admin/history/empty")
+    def empty_recycle():
+        actor = guard(True)
+        body = _body({"recycle_token", "confirmed"})
+        token = body.get("recycle_token")
+        if body.get("confirmed") is not True or not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
+            abort(400, description="請先查看回收區筆數並確認清空。")
+        count = 0
+        try:
+            with engine.begin() as conn:
+                snapshot = _recycle_snapshot(conn, lock=True)
+                if not secrets.compare_digest(token, _recycle_token(snapshot)):
+                    _conflict()
+                now = db.now()
+                for row in snapshot:
+                    changed = conn.execute(update(batches).where(batches.c.id == row.id,
+                        batches.c.status == "archived", batches.c.revision == row.revision).values(
+                            status="emptied", revision=row.revision+1, members=[], filters={}))
+                    if changed.rowcount != 1:
+                        _conflict()
+                    # Permanently close the restore operation. Source records and image
+                    # links may still supply approved standards, so keep their tombstones.
+                    conn.execute(insert(audit).values(id=db.uid(), batch_id=row.id, operation="empty",
+                        actor=actor, reviewer=actor, note="手動清空紀錄回收區", inspection_ids=[], created_at=now))
+                    count += row.count
+        except OperationalError as error:
+            if getattr(error.orig, "sqlite_errorcode", None) in {5,6,517}:
+                _conflict()
+            raise
+        return jsonify(count=count)
 
     @app.get("/api/admin/history/batches/<identifier>")
     def batch_detail(identifier):
@@ -281,6 +379,8 @@ def register_routes(app, engine, require_admin):
             batch = conn.execute(select(batches).where(batches.c.id == identifier)).mappings().first()
             if not batch:
                 abort(404, description="找不到清理批次。")
+            if batch["status"] == "emptied":
+                abort(410, description="這批紀錄已從回收區清除。")
             events = conn.execute(select(audit.c.operation,audit.c.actor,audit.c.reviewer,audit.c.note,audit.c.created_at)
                 .where(audit.c.batch_id==identifier).order_by(audit.c.created_at,audit.c.id)).mappings().all()
         return jsonify(batch=_batch_payload(batch),items=_public_items(batch["members"]),audit=[dict(row) for row in events])

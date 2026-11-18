@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261117-standard-draft">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261118-history">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261117-standard-draft" defer></script>
+  <script src="/static/app.js?v=20261118-history" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -118,7 +118,8 @@
     </section>
     <section id="view-history" class="view" hidden>
       <div class="heading"><div><p class="eyebrow">INSPECTION LOG</p><h1>檢查紀錄</h1><p class="lead">保留當時的標準版本、照片與人工複核結果。</p></div><select id="history-filter" aria-label="篩選檢查結果"><option value="">全部結果</option><option value="fail">有差異</option><option value="review">需複核</option><option value="pass">設定項目通過</option></select></div>
-      <div class="history-management" data-permission="cleanup_history" hidden><p class="help">管理員可將舊紀錄移至回收區；照片與完整資料保留，可還原。</p><div class="edit-actions"><button id="history-cleanup-selected" class="button secondary" type="button" disabled>整理所選 0 筆</button><button id="history-cleanup-filter" class="button secondary" type="button">依條件整理</button><button id="history-recycle" class="button secondary" type="button">紀錄回收區</button></div></div>
+      <p id="history-today" class="history-today" role="status"></p>
+      <div class="history-management" data-permission="cleanup_history" hidden><div class="edit-actions"><button id="history-cleanup-selected" class="button secondary" type="button" disabled>回收所選 0 筆</button><button id="history-cleanup-filter" class="button secondary" type="button">依條件整理</button><button id="history-recycle" class="button secondary" type="button">紀錄回收區</button></div></div>
       <div id="history-list" class="history-list"></div><div class="pagination"><button id="history-prev" class="button secondary">上一頁</button><span id="history-page">第 1 頁</span><button id="history-next" class="button secondary">下一頁</button></div>
     </section>
     <footer>以人工確認的標準逐字核對 · 辨識不確定時請對照原圖複核</footer>
@@ -277,13 +278,12 @@
 </dialog>
 <dialog id="history-cleanup-dialog" class="edit-dialog" aria-labelledby="cleanup-title">
   <div class="edit-heading"><h2 id="cleanup-title">整理檢查紀錄</h2><button id="cleanup-close" class="button secondary" type="button">關閉</button></div>
-  <p class="help">只移至可還原的回收區，保留照片、比對標準、訂正及複核紀錄。</p>
   <form id="cleanup-filter-form">
     <p id="cleanup-selection-note" class="help"></p>
     <div id="cleanup-filter-fields"><div class="form-row"><label>開始日期<input id="cleanup-from" type="date"></label><label>結束日期<input id="cleanup-to" type="date"></label></div><label>原始判定<select id="cleanup-status"><option value="">全部原始判定</option><option value="fail">有差異</option><option value="review">需人工複核</option><option value="pass">已核對項目相符</option></select></label></div>
     <button id="cleanup-preview-button" class="button secondary" type="submit">預覽符合的紀錄</button>
   </form>
-  <section id="cleanup-recycle" hidden><div id="cleanup-batches"></div><div class="pagination"><button id="cleanup-batch-prev" class="button secondary" type="button">上一頁</button><span id="cleanup-batch-page">第 1 頁</span><button id="cleanup-batch-next" class="button secondary" type="button">下一頁</button></div></section>
+  <section id="cleanup-recycle" hidden><button id="cleanup-empty" class="button secondary" type="button" disabled>清空回收區</button><div id="cleanup-batches"></div><div class="pagination"><button id="cleanup-batch-prev" class="button secondary" type="button">上一頁</button><span id="cleanup-batch-page">第 1 頁</span><button id="cleanup-batch-next" class="button secondary" type="button">下一頁</button></div></section>
   <p id="cleanup-notice" class="help" role="status"></p><p id="cleanup-summary" class="cleanup-summary"></p>
   <details class="cleanup-item-details"><summary>查看本次清單</summary><ol id="cleanup-items" class="cleanup-items"></ol></details>
   <div id="cleanup-confirm-panel" hidden><form id="cleanup-confirm-form"><label>操作人員<input id="cleanup-reviewer" maxlength="100" required autocomplete="name"></label><label>整理或還原原因<textarea id="cleanup-note" maxlength="2000" rows="2" required></textarea></label><label class="check-label"><input id="cleanup-confirm" type="checkbox" required><span id="cleanup-confirm-text"></span></label><button id="cleanup-confirm-save" class="button primary" type="submit" disabled>確認移至回收區</button></form></div>

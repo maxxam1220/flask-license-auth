@@ -1,5 +1,6 @@
 """Decode printed bars independently; checksum validity is not product identity."""
 import re
+from urllib.parse import urlsplit
 
 from PIL import Image
 from validation import line_is_uncertain
@@ -32,9 +33,48 @@ def gtin_valid(value):
     return (10-total%10)%10 == int(value[-1])
 
 
+def matches_decoded_gtin(digits, code):
+    """UPC-A bars may be reported as EAN-13 with one leading zero."""
+    format_name = str(code.get("format", "")).replace("-", "").upper()
+    kind = {"EAN13": "1", "UPCA": "2"}.get(format_name)
+    return digits == code.get("text") or typed_gtin_digits(digits, kind) == code.get("text")
+
+
+def typed_gtin_digits(digits, kind):
+    """Compare valid UPC-A / zero-prefixed EAN-13 in the declared source format."""
+    if kind == "2" and len(digits) == 13 and digits.startswith("0") and gtin_valid(digits) is True:
+        return digits[1:]
+    if kind == "1" and len(digits) == 12 and gtin_valid(digits) is True:
+        return "0" + digits
+    return digits
+
+
+def is_traceability_qr(code):
+    """Classify a decoded web link without opening it or changing its payload."""
+    format_name = re.sub(r"[\s_-]", "", str(code.get("format", ""))).casefold()
+    if format_name not in {"qrcode", "qr", "microqrcode", "rmqrcode"}:
+        return False
+    value = str(code.get("text") or "").strip()
+    if not value or any(char.isspace() or not char.isprintable() for char in value):
+        return False
+    try:
+        url = urlsplit(value)
+        # Accessing port also validates malformed and out-of-range ports.
+        _ = url.port
+        return url.scheme in {"http", "https"} and bool(url.hostname) and "\\" not in url.netloc
+    except ValueError:
+        return False
+
+
 def checks_for(ocr):
     checks=[]
-    decoded=ocr.get("barcodes",{}).get("items",[])
+    decoded=[]
+    for index, code in enumerate(ocr.get("barcodes",{}).get("items",[])):
+        if is_traceability_qr(code):
+            checks.append({"key":f"barcode_traceability_{index}", "label":"履歷 QR Code", "status":"pass",
+                           "actual":code["text"], "reason":"已讀取履歷查詢網址。", "line_ids":[], "box":code.get("box",[])})
+        else:
+            decoded.append(code)
     if len(decoded)>1:
         checks.append({"key":"barcode_multiple", "label":"條碼範圍", "status":"review", "actual":"偵測到多個條碼",
                        "reason":"請確認只核對同一張標籤，不能把不同商品的條碼混用。", "line_ids":[]})
@@ -58,7 +98,7 @@ def checks_for(ocr):
         if known_non_gtin:
             continue  # Code128 identifiers need not carry a GS1 check digit.
         # A length alone does not establish symbology. Unlabelled 8-digit rows may be SKU/date.
-        established=any(c["text"]==value and c["format"].replace("-","") in ("EAN13","EAN8","UPCA") for c in decoded)
+        established=any(matches_decoded_gtin(value,c) and c["format"].replace("-","") in ("EAN13","EAN8","UPCA") for c in decoded)
         explicit=bool(re.match(r"\s*(?:EAN|GTIN)\s*[:：]?",line["text"],re.I))
         if established or explicit:
             valid=gtin_valid(value)
@@ -77,9 +117,10 @@ def checks_for(ocr):
     if len(decoded)==1 and len(paired)==1:
         line,value=paired[0]
         uncertain=line_is_uncertain(line,.65)
-        same=value==decoded[0]["text"]
+        same=matches_decoded_gtin(value, decoded[0])
         partial=decoded[0]["text"].isascii() and decoded[0]["text"].isdigit() and len(value)<len(decoded[0]["text"])
-        reason=("條紋解碼與印出的數字一致。" if same and not uncertain else
+        reason=("UPC-A 與前置零的 EAN-13 表示相同商品碼，檢查碼相符。" if same and value!=decoded[0]["text"] and not uncertain else
+                "條紋解碼與印出的數字一致。" if same and not uncertain else
                 "條碼圖形已解碼，但下方數字可能只辨識到一部分，請對照原圖確認完整印字。" if partial and not line.get("human_verified") else
                 "條紋解碼與文字讀取不同或不確定，請查看原圖。")
         checks.append({"key":"barcode_hri", "label":"條碼與印字", "status":"review" if uncertain else "pass" if same else "fail" if line.get("human_verified") else "review",
