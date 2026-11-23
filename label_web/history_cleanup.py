@@ -6,10 +6,11 @@ import re
 import secrets
 
 from flask import abort, jsonify, request, session
-from sqlalchemy import Table, Column, String, Integer, Boolean, JSON, Text, select, insert, update, delete, func, literal, union_all
+from sqlalchemy import Table, Column, String, Integer, Boolean, JSON, Text, select, insert, update, delete, func, literal, tuple_, union_all
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 import database as db
+import history_status
 
 
 MAX_RECORDS = 500
@@ -66,7 +67,7 @@ def day_summary(conn, rows, status):
         query = select(literal(key).label("day"), func.count().label("records"),
                        func.count(db.inspections.c.image_id.distinct()).label("photos")).where(
             column >= start.isoformat(), column < (start + timedelta(days=1)).isoformat(), active_filter())
-        return query.where(db.inspections.c.status == result_filter) if result_filter else query
+        return query.where(history_status.status_column(db.inspections) == result_filter) if result_filter else query
 
     for day in sorted(days):
         queries.append(day_counts(day, day.isoformat(), status))
@@ -137,9 +138,9 @@ def _projection():
     def scalar(table, expression, *extra):
         return select(expression).where(table.c.inspection_id == db.inspections.c.id, *extra).correlate(db.inspections).scalar_subquery()
     revision = scalar(db.corrections, func.max(db.corrections.c.revision))
-    manual_status = select(db.corrections.c.status).where(db.corrections.c.inspection_id == db.inspections.c.id).order_by(
+    manual_status = select(history_status.status_column(db.corrections)).where(db.corrections.c.inspection_id == db.inspections.c.id).order_by(
         db.corrections.c.revision.desc()).limit(1).correlate(db.inspections).scalar_subquery()
-    return select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status, db.inspections.c.created_at,
+    return select(db.inspections.c.id, db.inspections.c.image_id, history_status.status_column(db.inspections).label("status"), db.inspections.c.created_at,
         db.inspections.c.template_snapshot["name"].as_string().label("name"),
         func.coalesce(revision, 0).label("manual_revision"), manual_status.label("manual_status"),
         scalar(db.reviews, func.count()).label("review_count"), scalar(db.reviews, func.max(db.reviews.c.created_at)).label("last_review_at"),
@@ -158,6 +159,23 @@ def _entries(conn, query):
 def _public_items(entries):
     keys = ("id", "name", "status", "created_at", "manual_status", "manual_revision")
     return [{key: item.get(key) for key in keys} for item in entries]
+
+
+def _batch_items(conn, members):
+    # Keep the archived membership and exact correction revision from the snapshot.
+    items = _public_items(members)
+    by_id = {item["id"]: item for item in items}
+    originals = select(db.inspections.c.id, history_status.status_column(db.inspections)).where(db.inspections.c.id.in_(by_id))
+    for identifier, status in conn.execute(originals):
+        by_id[identifier]["status"] = status
+    revisions = [(item["id"], item["manual_revision"]) for item in items if item["manual_revision"]]
+    if revisions:
+        table = db.corrections
+        query = select(table.c.inspection_id, history_status.status_column(table)).where(
+            tuple_(table.c.inspection_id, table.c.revision).in_(revisions))
+        for identifier, status in conn.execute(query):
+            by_id[identifier]["manual_status"] = status
+    return items
 
 
 def _owner(actor):
@@ -232,11 +250,12 @@ def register_routes(app, engine, require_admin):
     def preview():
         actor = guard(True)
         filters = _filters(_body({"filters"}).get("filters"))
+        history_status.ensure_index(engine)
         query = _projection().where(active_filter())
         if "ids" in filters:
             query = query.where(db.inspections.c.id.in_(filters["ids"]))
         if filters.get("status"):
-            query = query.where(db.inspections.c.status == filters["status"])
+            query = query.where(history_status.status_column(db.inspections) == filters["status"])
         for key, next_day in (("date_from", False), ("date_to", True)):
             if key in filters:
                 try:
@@ -272,6 +291,7 @@ def register_routes(app, engine, require_admin):
         supplied_hash = _text(body.get("preview_hash"), "預覽驗證", 64)
         if not re.fullmatch(r"[a-f0-9]{64}", supplied_hash):
             abort(400, description="預覽驗證格式不正確，請重新預覽。")
+        history_status.ensure_index(engine)
         try:
             with engine.begin() as conn:
                 preview_row = conn.execute(select(previews).where(previews.c.id == identifier).with_for_update()).mappings().first()
@@ -306,6 +326,7 @@ def register_routes(app, engine, require_admin):
         actor = guard(True)
         filters = _filters({"ids": _body({"ids"}).get("ids")})
         ids = filters["ids"]
+        history_status.ensure_index(engine)
         try:
             with engine.begin() as conn:
                 _lock_records(conn, ids)
@@ -375,6 +396,7 @@ def register_routes(app, engine, require_admin):
     @app.get("/api/admin/history/batches/<identifier>")
     def batch_detail(identifier):
         guard()
+        history_status.ensure_index(engine)
         with engine.connect() as conn:
             batch = conn.execute(select(batches).where(batches.c.id == identifier)).mappings().first()
             if not batch:
@@ -383,7 +405,8 @@ def register_routes(app, engine, require_admin):
                 abort(410, description="這批紀錄已從回收區清除。")
             events = conn.execute(select(audit.c.operation,audit.c.actor,audit.c.reviewer,audit.c.note,audit.c.created_at)
                 .where(audit.c.batch_id==identifier).order_by(audit.c.created_at,audit.c.id)).mappings().all()
-        return jsonify(batch=_batch_payload(batch),items=_public_items(batch["members"]),audit=[dict(row) for row in events])
+            items = _batch_items(conn, batch["members"])
+        return jsonify(batch=_batch_payload(batch),items=items,audit=[dict(row) for row in events])
 
     @app.post("/api/admin/history/batches/<identifier>/restore")
     def restore(identifier):

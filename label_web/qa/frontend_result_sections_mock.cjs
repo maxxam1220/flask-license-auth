@@ -13,11 +13,11 @@ function sample(lines,checks=[],extra={}){const result={status:"review",fields:{
 const build=s=>sections(s.inspection,s.result,s.ocr);
 let count=0;function check(name,run){run();count++;console.log(`PASS ${name}`);}
 
-check("scattered label with one heat value has no nutrition table",()=>{
+check("standalone heat is readable nutrition and other label fields keep their findings",()=>{
   const lines=[line(0,"測試蘋果單顆裝"),line(1,"55"),line(2,"價格元"),line(3,"熱量 106.2 大卡/份"),line(4,"保存收件:7℃以下冷藏"),line(5,"某某農產股份有限公司")];
   const s=sample(lines,[sourceCheck(0,lines[0].text),{...sourceCheck(4,lines[4].text,"fail"),expected:"保存條件:7℃以下冷藏"}]);
   const before=JSON.stringify(s),model=build(s);
-  assert.equal(model.hasTable,false);assert.equal(model.nutrition.length,0);assert.equal(model.content.length,6);
+  assert.equal(model.nutrition[0].text,"熱量 106.2 大卡/份");assert.equal(model.nutrition[0].status,"read");assert.equal(model.content.length,5);
   assert.equal(model.content.find(row=>row.line_ids.includes(4)).status,"fail");assert.equal(JSON.stringify(s),before);
 });
 check("date pass cannot verify unrelated words on the same original line",()=>{
@@ -74,7 +74,7 @@ function nutritionSample(){
   return sample(lines,[{key:"source_nutrition_fat",source:"database",status:"pass",expected:"脂肪 0.1公克 0.1公克",actual:"脂肪 0.1公克 0.1公克",line_ids:[1,2,3]}],{display_rows});
 }
 check("whole nutrition rows preserve both equal cells and all source IDs",()=>{
-  const model=build(nutritionSample()),fat=model.nutrition.find(row=>row.text.startsWith("脂肪"));assert.equal(fat.text,"脂肪 0.1公克 0.1公克");assert.deepEqual(plain(fat.line_ids),[1,2,3]);assert.equal(fat.status,"pass");
+  const model=build(nutritionSample()),fat=model.nutrition.find(row=>row.text.startsWith("脂肪"));assert.equal(fat.text,"脂肪 0.1公克 0.1公克");assert.deepEqual(plain(fat.line_ids),[1,2,3]);assert.equal(fat.status,"read");
 });
 check("standalone ingredient sugar remains content even beside a nutrition table",()=>{
   const model=build(nutritionSample());assert.equal(model.content.find(row=>row.text==="糖").status,"read");assert.equal(model.nutrition.some(row=>row.text==="糖"),false);
@@ -82,13 +82,28 @@ check("standalone ingredient sugar remains content even beside a nutrition table
 check("missing nutrient name remains unknown values and is never invented",()=>{
   const model=build(nutritionSample()),unknown=model.nutrition.find(row=>row.row_type==="nutrition_values");assert.equal(unknown.text,"1.4毫克 1.2毫克");assert.equal(unknown.status,"read");assert.equal(model.rows.some(row=>row.text.includes("鈉")),false);
 });
-check("math fail is separate from matching printed nutrition text",()=>{
-  const s=nutritionSample();s.result.checks.push({key:"nutrition_relation",source:"logic",status:"fail",label:"數值關係",line_ids:[1,2,3]});const model=build(s);
-  assert.equal(model.nutrition.find(row=>row.text.startsWith("脂肪")).status,"pass");assert.equal(model.nutritionChecks.length,1);assert.equal(rowStatus([...model.nutrition,...model.nutritionChecks]),"fail");assert.equal(model.content.some(row=>row.status==="fail"),false);
+check("legacy nutrition failures do not change the grade of other checks",()=>{
+  const s=nutritionSample();s.result.checks.push({key:"nutrition_relation",source:"logic",status:"fail",label:"數值關係",line_ids:[1,2,3]},
+    {key:"barcode_unread",status:"review",actual:"12345678",line_ids:[]});
+  const model=build(s);
+  assert.equal(model.nutrition.find(row=>row.text.startsWith("脂肪")).status,"read");
+  assert.deepEqual(plain(model.assessed.counts),{fail:0,review:1,read:0,pass:0});
+  assert.equal(model.assessed.checks[0].key,"barcode_unread");
 });
-check("math pass without text reference cannot make nutrition text green",()=>{
-  const s=nutritionSample();s.result.checks=[{key:"nutrition_relation",source:"logic",status:"pass",line_ids:[1,2,3]}];const model=build(s);
-  assert.equal(model.nutrition.find(row=>row.text.startsWith("脂肪")).status,"read");assert.equal(rowStatus([...model.nutrition,...model.nutritionChecks]),"read");
+check("nutrition alone has no positive assessment",()=>{
+  for(const checks of [[],[{key:"nutrition_energy",source:"logic",status:"pass",line_ids:[0]}]]){
+    const s=sample([line(0,"熱量 111.1 大卡/份")],checks,{status:"pass",source_match:{status:"matched"}});
+    const model=build(s);
+    assert.equal(model.assessed.status,"review");assert.equal(model.content.length,0);assert.equal(model.nutrition[0].status,"read");
+  }
+});
+check("projected row flags preserve ingredient text and keep nutrition readings out of counts",()=>{
+  const s=sample([line(0,"糖"),line(1,"0.1公克")],[sourceCheck(0,"糖","fail")],
+    {nutrition_policy:"excluded-v1",status:"fail",display_rows:[
+      {text:"糖",row_type:"nutrition",source_line_ids:[0],nutrition_display_only:false},
+      {text:"0.1公克",row_type:"text",source_line_ids:[1],nutrition_display_only:true}]});
+  const model=build(s);assert.equal(model.content[0].text,"糖");assert.equal(model.content[0].status,"fail");
+  assert.equal(model.nutrition[0].text,"0.1公克");assert.equal(model.assessed.status,"fail");
 });
 check("an approved manual source without extra metadata prioritizes correction instead of standard changes",()=>{
   for(const source of [{code:"manual:anonymous",name:"測試品名"},{code:"manual:anonymous",name:"測試品名",source_kind:"manual"}]){
@@ -97,14 +112,13 @@ check("an approved manual source without extra metadata prioritizes correction i
     s.result.checks[0].status="pass";s.result.status="pass";assert.equal(pick("resultStandardAction")(s.inspection,s.result),null);
   }
 });
-check("nutrition header explicitly reports math failures even when every text row matches",()=>{
-  const s=nutritionSample(),model=build(s),fat=model.nutrition.find(row=>row.text.startsWith("脂肪"));
-  for(const status of ["fail","review"]){
-    const area=new Node(),logic=[{key:"nutrition_relation",source:"logic",status,label:"營養數值關係",reason:"請確認數值關係",line_ids:[1,2,3]}];
-    pick("renderResultZone")("nutrition",[fat],logic,s.inspection,false,area);
-    const section=area.querySelector(".result-zone-nutrition"),heading=section.querySelector(".section-status-summary");
-    assert.ok(section.className.split(" ").includes(status));assert.match(heading.textContent,/✓/);assert.match(heading.textContent,status==="fail" ? /✕.*邏輯.*異常/ : /\?.*邏輯.*確認/);assert.equal(fat.status,"pass");
-  }
+check("nutrition section has neutral reading text and no warning details",()=>{
+  const s=nutritionSample(),model=build(s),area=new Node();
+  pick("renderNutritionRows")(model.nutrition,s.inspection,false,area);
+  const section=area.querySelector(".result-zone-nutrition");
+  assert.match(section.textContent,/僅供閱讀/);assert.match(section.textContent,/脂肪 0.1公克 0.1公克/);
+  assert.doesNotMatch(section.textContent,/邏輯異常|需確認|差異|熱量換算/);
+  assert.equal(section.querySelectorAll(".section-issue").length,0);
 });
 check("full Code128 payload belongs only in the barcode section",()=>{
   const s=sample([line(0,"AB:12-Z")],[{key:"source_line_0",label:"條碼",source:"database",status:"pass",expected:"AB:12-Z",actual:"AB:12-Z",line_ids:[0]}]);const model=build(s);assert.equal(model.barcodeChecks.length,1);assert.equal(model.content.length,0);

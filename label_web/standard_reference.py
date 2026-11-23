@@ -455,10 +455,9 @@ def preview_changes(engine, inspection, body):
     if source.get("source_kind")=="manual":
         from manual_reference import validate_date_rules
         validate_date_rules(source)
-    from nutrition_checks import checks_for
     return {"base_revision":revision,"source_revision":str(base["revision"]),"source":source,
             "use_inspection_photo":use_photo,
-            "nutrition_checks":checks_for({"lines":source["lines"],"context":"standard_draft"})}
+            "nutrition_checks":[]}
 
 
 def preview(engine, inspection, operation, target_revision=None):
@@ -484,8 +483,7 @@ def preview(engine, inspection, operation, target_revision=None):
         result.update(target_revision=target, source=deepcopy(previous["snapshot"]))
     elif target_revision is not None:
         abort(400, description="還原原始來源不需指定歷史版本。")
-    from nutrition_checks import checks_for
-    result["nutrition_checks"]=checks_for({"lines":result["source"]["lines"],"context":"standard_draft"})
+    result["nutrition_checks"]=[]
     return result
 
 

@@ -3,6 +3,7 @@ from copy import deepcopy
 
 from sqlalchemy import select, func
 import database as db
+import history_status
 from source_validation import evaluate_source
 from validation import evaluate, traditional_display
 
@@ -53,15 +54,18 @@ def latest_summaries(conn, identifiers):
     table = db.corrections
     maximum = select(table.c.inspection_id, func.max(table.c.revision).label("revision")).where(
         table.c.inspection_id.in_(identifiers)).group_by(table.c.inspection_id).subquery()
-    rows = conn.execute(select(table.c.inspection_id, table.c.revision, table.c.status).join(maximum,
+    rows = conn.execute(select(table.c.inspection_id, table.c.revision, history_status.status_column(table).label("status"),
+        func.coalesce(history_status.counts_column(table), table.c.result["counts"]).label("counts")).join(maximum,
         (maximum.c.inspection_id == table.c.inspection_id) & (maximum.c.revision == table.c.revision))).mappings()
     return {row["inspection_id"]:dict(row) for row in rows}
 
 
-def public_revision(row):
+def public_revision(row, snapshot):
     if not row:
         return None
     result = {key:row[key] for key in ("revision", "patches", "result", "ocr", "reviewer", "note", "created_at", "status")}
+    result["result"] = history_status.project(row["result"], row["ocr"], snapshot)
+    result["status"] = result["result"].get("status", row["status"])
     if row["change"].get("copied_from"):
         result["copied_from"] = deepcopy(row["change"]["copied_from"])
     return result
@@ -69,7 +73,7 @@ def public_revision(row):
 
 def history(conn, inspection_id, page=1, size=20):
     rows = conn.execute(select(db.corrections.c.revision, db.corrections.c.change,
-        db.corrections.c.status, db.corrections.c.reviewer, db.corrections.c.note, db.corrections.c.created_at)
+        history_status.status_column(db.corrections).label("status"), db.corrections.c.reviewer, db.corrections.c.note, db.corrections.c.created_at)
         .where(db.corrections.c.inspection_id == inspection_id).order_by(db.corrections.c.revision.desc())
         .offset((page-1)*size).limit(size+1)).mappings().all()
     return {"items":[{**dict(row["change"]), **{key:row[key] for key in
@@ -126,6 +130,7 @@ def build_revision(original, current, action, created_at):
     # until an explicit recheck resolves the source from the corrected evidence.
     result["source_match"] = deepcopy(original["result"].get("source_match"))
     augment(result, ocr)
+    ignored={identifier for row in result["display_rows"] if row["nutrition_display_only"] for identifier in row["source_line_ids"]}
     affected = set(patches)
     for check in result["checks"]:
         corrected_ids = [value for value in check.get("line_ids", []) if value in affected]
@@ -134,7 +139,7 @@ def build_revision(original, current, action, created_at):
             check["human_assessment"] = True
             check["confidence_note"] = "此結果包含人工逐字確認；顯示的信心分數仍是原始 OCR 分數。"
     for patch in patches.values():
-        if patch["kind"] == "ocr_misread":
+        if patch["kind"] == "ocr_misread" or patch["line_id"] in ignored:
             continue
         status = "fail" if patch["kind"] == "label_misprint" else "review"
         result["checks"].append({"key":f"manual_{patch['line_id']}", "label":"人工確認標籤印錯" if status == "fail" else "人工標記待確認",

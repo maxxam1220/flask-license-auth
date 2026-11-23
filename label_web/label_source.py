@@ -428,6 +428,8 @@ def _explicit_conflict(source,reliable,catalog):
 def resolve(engine, ocr_lines, source_code=""):
     """Resolve one current label; never merge fields from different database labels."""
     try:
+        from text_rows import inspection_lines
+        ocr_lines=inspection_lines(ocr_lines)
         if not available(engine):
             return _resolution("unavailable", "目前無法讀取標籤系統資料，僅提供文字辨識。")
         explicit = str(source_code or "").strip()

@@ -9,7 +9,7 @@ from label_geometry import (analyze_label_scope, scope_review_result, date_obser
                             date_evidence_overlaps, without_date_evidence, DATE_KINDS,
                             split_date_annotation, unlabelled_dates)
 
-RULE_VERSION = "1.7"
+RULE_VERSION = "1.8"
 TEXT_FIELDS = ("product", "address", "origin", "spec", "storage", "company", "phone")
 FIELD_NAMES = {"product": "品名", "address": "地址", "origin": "產地", "spec": "規格",
                "storage": "保存條件", "company": "公司名稱", "phone": "電話",
@@ -508,6 +508,8 @@ def evaluate(lines, template, batch_date="", arrival_date="", *, base_date=""):
         from source_rules import prepare_source
         source=prepare_source(approved,base_date) if base_date else approved
         return evaluate_source(lines,source,batch_date,arrival_date,base_date=base_date)
+    from text_rows import inspection_lines
+    lines = inspection_lines(lines)
     scope = analyze_label_scope(lines)
     if scope["blocked"]:
         return scope_review_result(lines, scope, RULE_VERSION, traditional_display)
@@ -632,6 +634,8 @@ def evaluate(lines, template, batch_date="", arrival_date="", *, base_date=""):
 
 def recognize_only(lines, batch_date="", arrival_date=""):
     """Date consistency is useful without a baseline; text correctness is unverified."""
+    from text_rows import inspection_lines
+    lines = inspection_lines(lines)
     scope = analyze_label_scope(lines)
     if scope["blocked"]:
         return scope_review_result(lines, scope, RULE_VERSION, traditional_display)

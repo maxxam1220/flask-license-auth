@@ -9,10 +9,10 @@ from validation import diff_parts, parse_date, standalone_date_label, traditiona
 from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
                             date_evidence_overlaps, without_date_evidence,
                             is_date_annotation, split_date_annotation, unlabelled_dates)
-from text_rows import group_observed_rows, nutrition_label, NUMBER_CELL
+from text_rows import inspection_lines
 
 
-RULE_VERSION = "1.17"
+RULE_VERSION = "1.18"
 MIN_CONFIDENCE = .65
 DATE_KEYS = ("manufacture", "expiry", "arrival")
 
@@ -24,7 +24,7 @@ def _field_uncertain(field):
 FIELD_NAMES = {"product": "品名", "origin": "產地", "address": "地址", "company": "公司名稱",
                "phone": "電話", "spec": "規格", "storage": "保存條件", "item_code": "貨號",
                "pack_count": "入數", "barcode": "條碼", "manufacture": "製造日期",
-               "expiry": "有效日期", "arrival": "到店日", "shelf_days": "保存天數", "nutrition": "營養標示"}
+               "expiry": "有效日期", "arrival": "到店日", "shelf_days": "保存天數"}
 HEADINGS = {
     "product": r"(?:產品名稱|商品名稱|產品品名|品名)",
     "origin": r"(?:原料產地|原產地|原產國|產地)",
@@ -119,7 +119,7 @@ def _groups(lines, source_fields=None):
             text = "".join(item["text"] for item in chain)
             groups.append({"lines": chain.copy(), "ids": frozenset(item["id"] for item in chain),
                            "text": text, "normal": normalize_text(text),
-                           "kind": chain[0].get("_kind") or _kind(chain[0]["text"], source_fields) or ("nutrition" if nutrition_label(chain[0]["text"]) else None),
+                           "kind": chain[0].get("_kind") or _kind(chain[0]["text"], source_fields),
                            "barcode_kind": chain[0].get("_barcode_kind"),
                            "barcode_heading": chain[0].get("_barcode_heading", False),
                            "score": min(float(item.get("score", 0)) for item in chain),
@@ -136,17 +136,6 @@ def _groups(lines, source_fields=None):
                        "barcode_kind": None, "barcode_heading": False,
                        "score": row["score"], "ambiguous": row["ambiguous"], "assembled_product": True,
                        "confidence_ok": all(not line_is_uncertain(item, MIN_CONFIDENCE) for item in row["lines"])})
-    for row in group_observed_rows(lines):
-        if row["row_type"] not in {"nutrition", "nutrition_values"}:
-            continue
-        identifiers=frozenset(row["source_line_ids"])
-        # Geometry may mark even a one-box row as conflicting. Retaining an
-        # optimistic raw singleton with the same evidence would bypass that.
-        groups=[group for group in groups if group["ids"] != identifiers]
-        groups.append({"lines": row["source_lines"], "ids": frozenset(row["source_line_ids"]),
-            "text": row["text"], "normal": normalize_text(row["text"]), "kind": row["row_type"],
-            "barcode_kind":None, "barcode_heading":False, "score":row["score"],
-            "ambiguous":row["ambiguous"], "confidence_ok":row["confidence_ok"], "assembled_nutrition":True})
     return groups
 
 
@@ -178,9 +167,6 @@ def _compatible(expected, actual):
         return True  # The explicit database barcode type owns its payload semantics.
     if a in DATE_KEYS or b in DATE_KEYS:
         return False
-    if a == "nutrition" and b in {"nutrition", "nutrition_values"}:
-        first, second = nutrition_label(expected["text"]), nutrition_label(actual["text"])
-        return not (first and second and first != second)
     if a and b and a != b:
         return False
     # Bare long numeric codes must not be mistaken for an almost-matching phone number.
@@ -280,67 +266,27 @@ def _source_rows(source):
                       for line in observed["lines"][1:]
                       if line.get("_kind") != "barcode" and line["id"] not in observed.get("end_offsets", {})}
     annotation_ids.update(_desktop_date_annotation_ids(source, rows))
-    return [row for row in rows if row["id"] not in annotation_ids and
-            (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)]
+    return inspection_lines([row for row in rows if row["id"] not in annotation_ids and
+            (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)])
 
 
 def _text_checks(lines, source):
     source_rows = _source_rows(source)
     expected_groups = _groups(source_rows, (source or {}).get("fields"))
-    assembled_expected = [group for group in expected_groups if group.get("assembled_nutrition") and len(group["lines"])>1]
-    expected_groups = [group for group in expected_groups if group.get("assembled_nutrition") or
-        not any(group["ids"] <= row["ids"] for row in assembled_expected)]
     actual_groups = _groups(lines)
-    legacy_rows, legacy_actual = [], []
-    # Older manual references saved individual OCR cells, sometimes after
-    # deduplication. A new complete observed row cannot be compared with a
-    # nutrient heading or one unassigned numeric cell as if both were rows.
-    if (source or {}).get("source_kind") == "manual" and any(_prepared(row["text"]) == "營養標示" for row in source_rows) and any(
-            re.search(r"每(?:100|一百)(?:公克|毫升|克|g|ml)", _prepared(row["text"]), re.I) for row in source_rows):
-        full_actual = [group for group in actual_groups if nutrition_label(group["text"]) and
-                       len(NUMBER_CELL.findall(_prepared(group["text"]))) >= 2 and
-                       (len(group["lines"]) == 1 or group.get("assembled_nutrition"))]
-        singleton_ids = {group["lines"][0]["id"] for group in expected_groups if len(group["lines"]) == 1}
-        inside, after_header = False, False
-        for row in source_rows:
-            if re.search(r"每(?:100|一百)(?:公克|毫升|克|g|ml)", _prepared(row["text"]), re.I):
-                inside, after_header = False, True
-                continue
-            if not after_header:
-                continue
-            label = nutrition_label(row["text"])
-            numeric = NUMBER_CELL.fullmatch(_prepared(row["text"]))
-            if label:
-                inside = True
-            elif inside and not numeric:
-                inside, after_header = False, False
-            if not inside or row["id"] not in singleton_ids or not full_actual:
-                continue
-            matches = [group for group in full_actual if nutrition_label(group["text"]) == label] if label else []
-            if numeric or (matches and len(NUMBER_CELL.findall(_prepared(row["text"]))) < 2):
-                legacy_rows.append(row)
-                legacy_actual.extend(matches)
-        legacy_ids = {row["id"] for row in legacy_rows}
-        expected_groups = [group for group in expected_groups if not group["ids"] & legacy_ids]
     used_source, used_actual, checks, fields, keys = set(), set(), [], {}, set()
 
     def usable(expected, actual):
         if actual["ids"] & used_actual or not _compatible(expected, actual):
             return False
-        if expected["kind"] == "nutrition":
-            if len(actual["lines"])>1 and not actual.get("assembled_nutrition"):
-                return False  # A vertical chain cannot fill missing table columns.
-            if any(actual["ids"] < row["ids"] for row in actual_groups if row.get("assembled_nutrition")):
-                return False
         # Once geometry establishes a complete observed product row, do not
         # accept a shorter subset and hide extra/mistyped adjacent characters.
         return expected["kind"] != "product" or not any(
             actual["ids"] < row["ids"] for row in actual_groups if row.get("assembled_product"))
 
     def record(expected, actual=None, ambiguous=False):
-        kind = expected["kind"] if len(expected["lines"]) == 1 or expected.get("assembled_nutrition") else None
-        key = (f"source_nutrition_{expected['lines'][0]['id']}" if kind == "nutrition" else
-               kind or f"source_text_{expected['lines'][0]['id']}")
+        kind = expected["kind"] if len(expected["lines"]) == 1 else None
+        key = kind or f"source_text_{expected['lines'][0]['id']}"
         if key in keys:
             key += f"_{expected['lines'][0]['id']}"
         keys.add(key)
@@ -359,7 +305,7 @@ def _text_checks(lines, source):
                 fields[kind] = {"value": text, "score": confidence, "line_ids": identifiers, "ambiguous": ambiguous or actual["ambiguous"]}
         used_source.update(expected["ids"])
         same_normal = actual is not None and _equivalent(expected, actual)
-        label=("營養標示・"+(nutrition_label(expected["text"]) or "文字列")) if kind=="nutrition" else FIELD_NAMES.get(kind,"資料庫文字")
+        label=FIELD_NAMES.get(kind,"資料庫文字")
         checks.append({"key": key, "label": label, "status": status, "reason": reason,
                        "expected": expected["text"], "actual": text, "raw_actual": text,
                        "line_ids": identifiers, "source_line_ids": [item["id"] for item in expected["lines"]],
@@ -378,7 +324,7 @@ def _text_checks(lines, source):
                 best = candidates[0]
                 ambiguous = any(not best["ids"] & other["ids"] for other in candidates[1:])
                 record(expected, best, ambiguous)
-    for expected in [group for group in expected_groups if len(group["lines"]) == 1 or group.get("assembled_nutrition")]:
+    for expected in [group for group in expected_groups if len(group["lines"]) == 1]:
         if expected["ids"] & used_source:
             continue
         ranked = []
@@ -396,18 +342,6 @@ def _text_checks(lines, source):
             record(expected, actual, ambiguous)
         else:
             record(expected)
-    if legacy_rows:
-        # No numeric fragment is assigned to a nutrient/column by value. Only
-        # matching observed nutrient names provide optional photo locations.
-        observed = {tuple(sorted(group["ids"], key=str)): group for group in legacy_actual}
-        identifiers = list(dict.fromkeys(item["id"] for group in observed.values() for item in group["lines"]))
-        checks.append({"key":"source_nutrition_legacy", "label":"舊營養標準待整理", "status":"review",
-            "reason":"舊標準未包含完整營養列，請管理員依照片重新整理並核准。",
-            "expected":"\n".join(row["text"] for row in legacy_rows),
-            "actual":"\n".join(group["text"] for group in observed.values()),
-            "line_ids":identifiers, "source_line_ids":[row["id"] for row in legacy_rows],
-            "score":None, "source":"database", "diff":[], "incomplete_standard":True})
-        used_actual.update(identifiers)
     return checks, fields, used_actual
 
 
@@ -663,6 +597,7 @@ def _decorate(result, lines):
 
 def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="", ocr_capabilities=None):
     """A source is a single database label snapshot, or None when it is unknown."""
+    lines = inspection_lines(lines)
     scope = analyze_label_scope(lines)
     if scope["blocked"]:
         return scope_review_result(lines, scope, RULE_VERSION, traditional_display)

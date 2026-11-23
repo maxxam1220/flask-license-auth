@@ -114,7 +114,7 @@ class SourceFulltextUpgradeTests(unittest.TestCase):
             self.assertEqual(conn.scalar(select(func.count()).select_from(db.manual_sources)),0)
             self.assertEqual(dict(conn.execute(select(db.inspections).where(db.inspections.c.id=="scan")).mappings().one()),self.original)
 
-    def test_future_resolution_and_comparison_use_fulltext_and_wrong_value_fails(self):
+    def test_approved_fulltext_checks_ingredients_and_excludes_nutrition(self):
         self.assertEqual(self.save().status_code,201)
         resolved=label_source.resolve(self.engine,self.ocr["lines"])
         self.assertEqual(resolved["status"],"matched",resolved);self.assertEqual(resolved["code"],CODE)
@@ -122,10 +122,13 @@ class SourceFulltextUpgradeTests(unittest.TestCase):
         lines=[row for row in self.ocr["lines"] if row["id"]<12]
         evaluated=evaluate_source(lines,source,base_date="2026-11-16")
         self.assertEqual(evaluated["verified_scope"],"approved_text")
-        self.assertTrue(any(check.get("expected")=="熱量 55大卡 55大卡" and check["status"]=="pass" for check in evaluated["checks"]))
-        wrong=deepcopy(lines);wrong[7]["text"]="熱量 55大卡 56大卡"
-        evaluated=evaluate_source(wrong,source,base_date="2026-11-16")
-        self.assertTrue(any(check.get("expected")=="熱量 55大卡 55大卡" and check["status"]=="fail" for check in evaluated["checks"]))
+        self.assertFalse(any(7 in check.get("line_ids",[]) for check in evaluated["checks"]))
+        changed=deepcopy(lines)
+        changed[7]["text"]="熱量 55大卡 56大卡"
+        self.assertEqual(evaluate_source(changed,source,base_date="2026-11-16")["checks"],evaluated["checks"])
+        changed[3]["text"]="內容物：草莓"
+        evaluated=evaluate_source(changed,source,base_date="2026-11-16")
+        self.assertTrue(any(check.get("expected")=="內容物：蘋果" and check["status"]=="fail" for check in evaluated["checks"]))
 
     def test_source_library_category_edit_remove_restore_never_falls_back_partial(self):
         self.assertEqual(self.save().status_code,201)

@@ -118,10 +118,9 @@ def preview_changes(engine, inspection, body):
         template, state = _context(conn, inspection)
         _guard(template, state, body)
         _, source, use_photo = _changed(conn, inspection, template, body)
-    from nutrition_checks import checks_for
     return {"base_revision": template["version"], "source_revision": template["id"], "source": source,
         "use_inspection_photo": use_photo,
-        "nutrition_checks": checks_for({"lines": source["lines"], "context": "standard_draft"})}
+        "nutrition_checks": []}
 
 
 def save(engine, inspection, body):

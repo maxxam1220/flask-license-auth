@@ -32,6 +32,7 @@ import corrections
 import standard_reference
 import barcode_rule_authoring
 import history_cleanup
+import history_status
 import photo_regions
 import recognition_samples
 import reference_photos
@@ -820,33 +821,41 @@ def create_app(config=None, ocr=None):
             page = max(1, int(request.args.get("page", 1)))
         except ValueError:
             abort(400, description="頁碼不正確。")
-        query = select(db.inspections.c.id, db.inspections.c.image_id, db.inspections.c.status,
+        history_status.ensure_index(engine)
+        verdict = history_status.status_column(db.inspections)
+        query = select(db.inspections.c.id, db.inspections.c.image_id, verdict.label("status"),
+                       history_status.counts_column(db.inspections).label("display_counts"),
                        db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result,
                        db.inspections.c.ocr).where(history_cleanup.active_filter())
         status = request.args.get("status")
         status = status if status in {"pass", "fail", "review"} else None
         if status:
-            query = query.where(db.inspections.c.status == status)
+            query = query.where(verdict == status)
         with engine.connect() as conn:
             rows = conn.execute(query.order_by(db.inspections.c.created_at.desc(), db.inspections.c.id).offset((page - 1) * 24).limit(25)).mappings().all()
             manual = corrections.latest_summaries(conn, [x["id"] for x in rows[:24]])
             item_days, day_counts, today = history_cleanup.day_summary(conn, rows[:24], status)
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
             version=x["template_snapshot"]["version"], created_at=x["created_at"], day=item_days[x["id"]], image=image_payload(x["image_id"]),
-            counts=x["result"].get("counts",{}), base_date=x["result"].get("inputs",{}).get("base_date",""),
+            counts=x["display_counts"] if x["display_counts"] is not None else x["result"].get("counts",{}),
+            base_date=x["result"].get("inputs",{}).get("base_date",""),
             product=product_name(x),
             manual_revision=manual.get(x["id"], {}).get("revision", 0),
-            manual_status=manual.get(x["id"], {}).get("status")) for x in rows[:24]],
+            manual_status=manual.get(x["id"], {}).get("status"),
+            manual_counts=manual.get(x["id"], {}).get("counts")) for x in rows[:24]],
             has_more=len(rows) > 24, page=page, day_counts=day_counts, today=today)
 
     def inspection_payload(original):
         row = dict(original)
         identifier = row["id"]
+        row["result"] = history_status.project(row["result"], row["ocr"], row["template_snapshot"])
+        row["status"] = row["result"].get("status", row["status"])
         row["image"] = image_payload(row["image_id"])
         row["reference_image"] = image_payload(row["template_snapshot"]["image_id"])
+        history_status.ensure_index(engine, identifier)
         with engine.connect() as conn:
             row["reviews"] = [dict(x) for x in conn.execute(select(db.reviews).where(db.reviews.c.inspection_id == identifier).order_by(db.reviews.c.created_at)).mappings()]
-            row["manual_revision"] = corrections.public_revision(corrections.latest(conn, identifier))
+            row["manual_revision"] = corrections.public_revision(corrections.latest(conn, identifier), row["template_snapshot"])
             recent = corrections.history(conn, identifier, size=10)
             row["correction_history"] = recent["items"]
             row["correction_history_has_more"] = recent["has_more"]
@@ -867,6 +876,7 @@ def create_app(config=None, ocr=None):
                 raise ValueError()
         except ValueError:
             abort(400, description="頁碼不正確。")
+        history_status.ensure_index(engine, identifier)
         with engine.connect() as conn:
             return jsonify(corrections.history(conn, identifier, page=page))
 

@@ -533,10 +533,9 @@ def preview(engine, inspection, body):
         abort(409, description=notice)
     source, digest = definition(body)
     equivalents = equivalent_references(engine, source, digest)
-    from nutrition_checks import checks_for
     return {"source": source, "preview_hash": digest, "equivalent_references": equivalents,
             "suggested_source": equivalents[0] if len(equivalents) == 1 else None,
-            "nutrition_checks": checks_for({"lines":source["lines"], "context":"standard_draft"}),
+            "nutrition_checks": [],
             "warnings": LIMITATIONS + ["日期位移直接相對本批基準日；不會自動加上保存天數。"]}
 
 

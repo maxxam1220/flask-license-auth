@@ -9,10 +9,17 @@ from validation import traditional_display, line_is_uncertain
 
 
 NUTRIENTS = ("飽和脂肪酸", "反式脂肪酸", "飽和脂肪", "反式脂肪", "碳水化合物", "膳食纖維", "總碳水化合物", "蛋白質", "膽固醇",
-             "熱量", "脂肪", "糖", "鈉", "鉀", "鈣", "鐵")
+             "熱量", "能量", "脂肪", "糖", "鈉", "鉀", "鈣", "鐵", "鎂", "鋅", "磷", "硒", "碘", "銅", "錳",
+             "葉酸", "菸鹼素", "泛酸", "生物素", "維生素A", "維生素B1", "維生素B2", "維生素B6",
+             "維生素B12", "維生素C", "維生素D", "維生素D3", "維生素E", "維生素K")
+NUTRIENT_PREFIXES = tuple(sorted(NUTRIENTS, key=len, reverse=True))
 UNIT = r"(?:大卡|千卡|公克|毫克|微克|千焦|kcal|mg|μg|µg|kj|克|g|%)"
 NUMBER_CELL = re.compile(r"[<>≤≥~約+\-]?\d+(?:[.,]\d+)?" + UNIT, re.I)
-OTHER_FIELD = re.compile(r"^(?:品名|商品名稱|產品名稱|製造|有效|到店|到貨|地址|電話|保存|產地|原產地|淨重|內容物|成分|貨號)")
+OTHER_FIELD = re.compile(r"^(?:品名|商品名稱|產品名稱|製造|有效|到店|到貨|地址|電話|保存|產地|原產地|淨重|重量|規格|內容物|成分|貨號|條碼|過敏原|公司|廠商)")
+MIXED_CONTENT = re.compile(OTHER_FIELD.pattern[1:] + r"[^:：\d]{0,4}[:：]")
+NUTRITION_HEADER = re.compile(
+    r"(?:營養(?:標示|標籤|成[分份]表?|資訊|信息)[:：]?|每一?份量[:：]?(?:約?\d+(?:[.,]\d+)?(?:公克|毫升|克|ml|g))?"
+    r"|本包裝含(?:有|約)?[:：]?(?:\d+(?:[.,]\d+)?份)?|(?:每(?:一?份|100(?:公克|毫升|克|ml|g))[|/／]*){1,2})",re.I)
 
 
 def _normal(text):
@@ -21,10 +28,61 @@ def _normal(text):
 
 def nutrition_label(text):
     value = _normal(text)
-    for key in sorted(NUTRIENTS, key=len, reverse=True):
-        if value.startswith(key) and (len(value)==len(key) or re.match(r"[:：0-9<>≤≥~約+.\-]", value[len(key):])):
+    for key in NUTRIENT_PREFIXES:
+        if value.casefold().startswith(key.casefold()) and (len(value)==len(key) or re.match(r"[:：0-9<>≤≥~約+.\-]", value[len(key):])):
             return key
     return None
+
+
+def nutrition_line_ids(lines, grouped=None):
+    """Locate display-only printed nutrition, including old unpositioned table cells."""
+    texts = [_normal(line.get("text")) for line in lines]
+    headers = [bool(NUTRITION_HEADER.fullmatch(text)) for text in texts]
+    named = [nutrition_label(text) for text in texts]
+    if not any(headers) and not any(named):
+        return set()
+    rows = group_observed_rows(lines) if grouped is None else grouped
+    table_ids = {identifier for row in rows if row.get("table_id") is not None and
+                 (row.get("row_type") == "nutrition_values" or nutrition_label(row["text"]) or
+                  len(NUMBER_CELL.findall(row["text"])) >= 2)
+                 for identifier in row["source_line_ids"]}
+    ignored = set()
+    inside = False
+    split_anchor = None
+    for line, text, header, label in zip(lines, texts, headers, named):
+        identifier = line["id"]
+        # Independent goods fields and dates in a mixed OCR box remain eligible.
+        if OTHER_FIELD.match(text) or MIXED_CONTENT.search(text) or re.match(r"^(?:高|低|無|零|富含|含有|添加)",text):
+            inside = False
+            split_anchor = None
+            continue
+        named_quantity = label and NUMBER_CELL.search(text[len(label):])
+        box = _bounds(line)
+        # In photos a detached weight belongs to the table only when geometry
+        # grouped it or it is aligned to a nutrient with missing columns.
+        beside_anchor = (split_anchor and box and abs(box[1]-split_anchor[1]) <= max(box[3]-box[1],split_anchor[3]-split_anchor[1])*.6
+                         and split_anchor[0] <= box[0] <= split_anchor[2]+max(60,(split_anchor[3]-split_anchor[1])*12))
+        if header or named_quantity or identifier in table_ids:
+            ignored.add(identifier)
+            inside = True
+        elif inside and (label or ((box is None or beside_anchor) and re.fullmatch(r"(?:" + NUMBER_CELL.pattern + r")+",text,re.I))):
+            ignored.add(identifier)
+        elif inside and len(NUMBER_CELL.findall(text)) >= 2 and re.fullmatch(
+                r"[\u4e00-\u9fff]{1,8}[:：]?(?:" + NUMBER_CELL.pattern + r"){2,}",text,re.I):
+            # A misspelt nutrient name inside a table still belongs to its numeric row.
+            ignored.add(identifier)
+        else:
+            inside = False
+        if label:
+            split_anchor = box if not named_quantity else None
+        elif not inside or header:
+            split_anchor = None
+    return ignored
+
+
+def inspection_lines(lines):
+    excluded = nutrition_line_ids(lines)
+    return [line for line in lines if line["id"] not in excluded] if excluded else lines
 
 
 def _numeric_cell(text):
@@ -70,7 +128,15 @@ def group_observed_rows(lines):
     and its printed per-100g column bound the horizontal table region; date and
     product columns outside it never participate in an assembled nutrition row.
     """
-    originals = [line for line in lines if str(line.get("text", "")).strip()]
+    originals = []
+    for line in lines:
+        if not str(line.get("text","")).strip():
+            continue
+        try:
+            score=float(line.get("score",0))
+        except (TypeError,ValueError,OverflowError):
+            score=float("nan")
+        originals.append(line if math.isfinite(score) and 0<=score<=1 else dict(line,score=0.))
     positioned = [line for line in originals if _bounds(line)]
     titles = [line for line in positioned if _normal(line["text"]) in ("營養標示", "營養標籤")]
     if len(titles)!=1:

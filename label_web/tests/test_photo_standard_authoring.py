@@ -136,17 +136,16 @@ class PhotoStandardAuthoringTests(unittest.TestCase):
         self.assertTrue(detail["supports_line_replacement"])
         self.assertEqual(detail["current_image"]["id"],"new-image")
 
-    def test_full_text_is_used_by_real_validation_and_changed_numeric_value_fails(self):
+    def test_photo_standard_retains_nutrition_text_without_scoring_changes(self):
         self.assertEqual(self.post(self.body(False)).status_code,201)
         new=self.templates()[-1]
         observed=deepcopy(self.original["ocr"]["lines"])
         good=evaluate(observed,new,base_date="2026-11-16")
-        nutrition=[check for check in good["checks"] if check["key"].startswith("source_nutrition_")]
-        self.assertEqual(len(nutrition),1)
-        self.assertEqual(nutrition[0]["status"],"pass")
+        self.assertFalse(any(check["key"].startswith("source_nutrition_") for check in good["checks"]))
         observed[8]["text"]="脂肪 0.2公克 0.1公克"
-        bad=evaluate(observed,new,base_date="2026-11-16")
-        self.assertTrue(any(check["status"]=="fail" for check in bad["checks"] if check["key"].startswith("source_nutrition_")))
+        changed=evaluate(observed,new,base_date="2026-11-16")
+        self.assertEqual(changed["checks"],good["checks"])
+        self.assertTrue(any("脂肪" in row["text"] for row in new["rules"]["approved_text_source"]["lines"]))
         self.assertEqual(new["image_id"],"old-image")
 
     def test_library_edit_uses_fulltext_contract_and_keeps_family_photo_and_date_rules(self):
@@ -163,7 +162,7 @@ class PhotoStandardAuthoringTests(unittest.TestCase):
         self.assertEqual(preview.status_code,200,preview.json)
         preview_source=preview.json["template"]["rules"]["approved_text_source"]
         self.assertEqual(preview_source["lines"][-1]["text"],"食用前請清洗")
-        self.assertIn("nutrition_checks",preview.json)
+        self.assertEqual(preview.json["nutrition_checks"], [])
         self.assertEqual(len(self.templates()),2)
         saved=self.client.post(path+"/save",json=dict(body,preview_hash=preview.json["preview_hash"],
             reviewer="QA",note="從標準庫更新全文",confirmed=True),headers=self.headers)

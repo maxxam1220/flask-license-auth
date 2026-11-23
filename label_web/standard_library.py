@@ -358,10 +358,9 @@ def preview(engine,kind,key,body):
         context=_load(conn,kind,key);_expect(context,body)
         if _removed(context):abort(409,description="請先還原標準再編輯。")
         changed=_changed(context,kind,body["changes"])
-    from nutrition_checks import checks_for
     source=changed if kind!="photo" else (changed.get("rules") or {}).get("approved_text_source")
     result={"kind":kind,"key":key,"source" if kind!="photo" else "template":changed,
-        "preview_hash":_digest(kind,key,body,changed),"nutrition_checks":checks_for({"lines":source.get("lines",[]),"context":"standard_draft"}) if source else []}
+        "preview_hash":_digest(kind,key,body,changed),"nutrition_checks":[]}
     if kind=="photo" and source:result["source"]=source
     return result
 
