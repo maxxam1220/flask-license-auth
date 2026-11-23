@@ -95,6 +95,18 @@ html[lang="vi"] .mobile-header > .brand { min-height: 44px; }
   html[lang="id"] .offline-sync-copy small,
   html[lang="vi"] .offline-sync-copy small { line-height: 14px; white-space: nowrap; overflow-wrap: normal; }
 }
+@media (max-width: 720px) {
+  .mobile-nav-simple { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mobile-nav-simple > a { flex-direction: row; justify-content: center; gap: .4rem; }
+  .mobile-nav-simple .icon { flex-shrink: 0; }
+  .mobile-nav-simple > a > span,
+  html:is([lang="id"], [lang="vi"]) .mobile-nav > a > span {
+    min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: center;
+  }
+  .simple-executor-ui.executor-issue-navigation .main-content {
+    padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+  }
+}
 @media (max-width: 600px) {
   html[lang="id"] .mobile-header > .brand,
   html[lang="vi"] .mobile-header > .brand,

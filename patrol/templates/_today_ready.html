@@ -6,6 +6,7 @@
 <section id="today-ready" class="panel ready-panel" tabindex="-1" aria-labelledby="today-ready-title" data-ready-panel
          data-ready-viewer="{{ current_user.id }}:{{ current_user.auth_version }}:{{ current_user.role }}:{{ viewer_category or '' }}:{{ viewer_team_label }}:{{ selected_inspection_team }}"
          data-ready-url="{{ url_for('dashboard_ready', category=category_filter, floor=selected_floor or none) }}">
+  {% if can_view_executor_issues %}{% include '_issue_notice.html' %}{% endif %}
   <div class="ready-heading">
     <h2 id="today-ready-title">{{ t(heading) }}</h2>
     <span class="ready-count">{{ t('{count} 個點位', count=ready_points|length) }}</span>

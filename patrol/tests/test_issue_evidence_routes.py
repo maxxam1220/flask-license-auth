@@ -1,9 +1,12 @@
 """HTTP evidence/export checks against isolated SQLite and synthetic photos."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from io import BytesIO
+from threading import Barrier
 from zipfile import ZipFile
 
 import pytest
+from PIL import Image
 from openpyxl import load_workbook
 from sqlalchemy import event, select
 
@@ -15,6 +18,7 @@ from models import (AuditLog, Inspection, InspectionIssue, InspectionPhoto, Issu
 from test_app import application  # noqa: F401
 from test_engineering_point_scope import teams, rendered  # noqa: F401
 from test_features import png
+from test_postgres_features import postgres_app, seed_clients  # noqa: F401
 
 
 EXPORT = '/issues/export.xlsx'
@@ -199,33 +203,138 @@ def test_manager_can_resolve_both_general_teams_but_not_safety_or_reopen(evidenc
     assert resolve(t.clients['peer'], t.records['general']).status_code == 403
 
 
+def test_two_general_executors_can_close_one_old_case_once_with_photo_and_no_note(evidence):
+    t, row = evidence, evidence.records['general']
+    row.created_at = row.issue.opened_at = datetime(2026, 10, 20, 4)
+    second = User(username='executor-two', display_name='Execution two', role='executor',
+                  patrol_category='general', active=True, must_change_password=False, password_hash='fixture')
+    db.session.add(second)
+    db.session.commit()
+    first_client, second_client = t.clients['executor'], t.app.test_client()
+    with second_client.session_transaction() as session:
+        session.update(user_id=second.id, auth_version=second.auth_version, csrf_token='executor-two')
+    source = '/issues?status=open&date_from=&date_to='
+    for client in (first_client, second_client):
+        cases, _ = rendered(t.app, client, '/issues')
+        assert cases['open_total'] == 1 and [record.id for record in cases['records']] == [row.id]
+        detail, _ = rendered(t.app, client, f'/records/{row.id}?return_to={source.replace("&", "%26")}')
+        assert detail['can_manage_issue'] and not detail['can_reopen_issue']
+        assert detail['back_url'] == source
+        assert client.get(f'/photos/{row.photos[0].id}').status_code == 200
+        assert client.get(f'/checkins/{row.id}').status_code == 403
+        for kind in ('safety', 'engineering'):
+            foreign = t.records[kind]
+            assert client.get(f'/issues?point_id={foreign.point_id}').status_code == 404
+            assert client.get(f'/records/{foreign.id}').status_code in (403, 404)
+            assert resolve(client, foreign, note='').status_code == 404
+        assert client.get(EXPORT).status_code == 403
+    assert resolve(first_client, row, note='x' * 2001).status_code == 400
+    assert not events_for(row)
+    assert resolve(first_client, row, note='　').status_code == 302
+    assert resolve(second_client, row, note='').status_code == 302
+    saved, = events_for(row)
+    assert saved.actor_id == t.users['executor'].id and saved.note == ''
+    assert len(saved.photos) == 1 and row.issue.status == 'resolved'
+    assert db.session.query(AuditLog).filter_by(action='issue_resolved', target=str(row.id)).count() == 1
+    for client in (first_client, second_client):
+        cases, _ = rendered(t.app, client, '/issues')
+        assert cases['open_total'] == 0 and not cases['records']
+        assert client.get(f'/issue-photos/{saved.photos[0].id}').status_code == 200
+        assert reopen(client, row, saved.id).status_code == 403
+    # Work can be assigned to either executor, independently of the original reporter.
+    next_case = add_case(t, 'general', datetime(2026, 11, 9, 3), 100, own_point=True)
+    db.session.commit()
+    assert resolve(second_client, next_case, note='').status_code == 302
+    assert events_for(next_case)[0].actor_id == second.id
+
+
+@pytest.fixture(params=['sqlite', 'postgresql'])
+def issue_race_app(tmp_path, request):
+    if request.param == 'postgresql':
+        yield request.getfixturevalue('postgres_app')
+        return
+    app = patrol.create_app({'TESTING': True, 'SECRET_KEY': 'local-test', 'CSRF_ENABLED': False,
+                             'SQLALCHEMY_DATABASE_URI': 'sqlite:///' + (tmp_path / 'issue.db').as_posix()})
+    with app.app_context():
+        db.create_all()
+    try:
+        yield app
+    finally:
+        with app.app_context():
+            db.engine.dispose()
+
+
+def test_two_phones_resolving_simultaneously_keep_only_the_winning_photo(issue_race_app):
+    app = issue_race_app
+    clients = [client for client, _, _ in seed_clients(app)]
+    widths = {}
+    entries = []
+    for index, client in enumerate(clients):
+        width = 20 + index
+        data = BytesIO()
+        Image.new('RGB', (width, 20), 'red' if index == 0 else 'blue').save(data, 'PNG')
+        data.seek(0)
+        with client.session_transaction() as session:
+            widths[session['user_id']] = width
+        entries.append((client, data))
+    with app.app_context():
+        users = db.session.scalars(select(User)).all()
+        for user in users:
+            user.role, user.patrol_category = 'executor', 'general'
+        point = db.session.scalar(select(Point))
+        point.category = 'general'
+        row = Inspection(point_id=point.id, user_id=users[0].id, created_at=datetime(2026, 11, 3, 2),
+                         period_key='2026-11-03', frequency='daily2', slot='am', category='general',
+                         workflow_mode='standard', point_code=point.code, point_name=point.name,
+                         point_floor=point.floor, user_name='Test reporter', is_abnormal=True)
+        open_issue_for(row)
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+    gate = Barrier(2)
+    def close_case(entry):
+        client, photo = entry
+        gate.wait(timeout=5)
+        return client.post(f'/issues/{row_id}/resolve', data={
+            'expected_event_id': '0', 'photos': (photo, 'evidence.png')}).status_code
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(close_case, entries)) == [302, 302]
+    with app.app_context():
+        saved = db.session.query(IssueEvent).one()
+        photo = db.session.query(IssueEventPhoto).one()
+        assert photo.event_id == saved.id and photo.width == widths[saved.actor_id]
+        assert db.session.get(InspectionIssue, row_id).resolved_by_id == saved.actor_id
+        assert db.session.query(AuditLog).filter_by(action='issue_resolved').count() == 1
+
+
 def test_resolution_photo_urls_follow_current_point_team_and_private_headers(evidence):
     t, row = evidence, evidence.records['general']
     assert resolve(t.clients['manager'], row).status_code == 302
     first, = events_for(row)
     photo = first.photos[0]
     path = f'/issue-photos/{photo.id}'
-    for kind in ('general', 'peer', 'manager', 'admin'):
+    for kind in ('general', 'peer', 'manager', 'admin', 'executor'):
         response = t.clients[kind].get(path)
         assert response.status_code == 200 and response.data == photo.data
         assert response.headers['Cache-Control'] == 'private, no-store'
         assert response.headers['X-Content-Type-Options'] == 'nosniff'
         assert response.mimetype == 'image/jpeg'
-    for kind in ('engineering', 'safety', 'executor'):
+    for kind in ('engineering', 'safety'):
         assert t.clients[kind].get(path).status_code in (403, 404)
     assert t.app.test_client().get(path).status_code == 302
     t.points['general'].inspection_team = 'engineering'
     db.session.commit()
     assert t.clients['general'].get(path).status_code == 404
+    assert t.clients['executor'].get(path).status_code in (403, 404)
     assert t.clients['engineering'].get(path).data == photo.data
     assert t.clients['manager'].get(path).data == photo.data
 
 
-@pytest.mark.parametrize('change', ['manager-to-general', 'general-to-engineering', 'general-to-executor'])
+@pytest.mark.parametrize('change', ['manager-to-general', 'general-to-engineering', 'engineering-to-executor'])
 def test_resolution_photos_recheck_changed_user_role_on_existing_session(evidence, change):
     t = evidence
-    kind = 'engineering' if change == 'manager-to-general' else 'general'
-    actor = 'manager' if change == 'manager-to-general' else 'general'
+    kind = 'general' if change == 'general-to-engineering' else 'engineering'
+    actor = 'manager' if change == 'manager-to-general' else kind
     row = t.records[kind]
     assert resolve(t.clients['manager'], row).status_code == 302
     first, = events_for(row)
@@ -238,6 +347,7 @@ def test_resolution_photos_recheck_changed_user_role_on_existing_session(evidenc
         user.engineering_inspector_title = True
     else:
         user.role = 'executor'
+        user.engineering_inspector_title = False
     # Deliberately retain the old browser session: each request must recheck
     # authority even if a legacy role change did not revoke the session.
     db.session.commit()

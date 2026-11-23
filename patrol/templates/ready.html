@@ -5,6 +5,7 @@
 {% set title = '今日待簽到' if executing else '今日待巡' %}
 {% block head %}
   <link rel="stylesheet" href="{{ url_for('static', filename='ready-list.css') }}" media="screen">
+  {% if can_view_executor_issues %}<link rel="stylesheet" href="{{ url_for('static', filename='issue-detail.css') }}">{% endif %}
   <script defer src="{{ url_for('static', filename='ready-refresh.js') }}"></script>
 {% endblock %}
 {% block content %}

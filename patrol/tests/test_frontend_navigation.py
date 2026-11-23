@@ -9,6 +9,10 @@ import pytest
 
 from test_app import application, seeded, db, login, record  # noqa: F401: shared fixtures
 from test_features import feature_point
+from test_inspector_issues import make_case
+from test_workflow_checkin import team
+from models import Point, User
+from i18n import translate
 
 
 class Anchors(HTMLParser):
@@ -24,7 +28,7 @@ class Anchors(HTMLParser):
 
 def mobile_links(response):
     assert response.status_code == 200
-    nav = re.search(r'<nav class="mobile-nav"[^>]*>(.*?)</nav>', response.get_data(as_text=True), re.S)
+    nav = re.search(r'<nav class="mobile-nav(?: [^"]+)?"[^>]*>(.*?)</nav>', response.get_data(as_text=True), re.S)
     assert nav
     return Anchors(nav.group(1)).links
 
@@ -40,6 +44,44 @@ def test_mobile_has_five_destinations_and_highlights_current_page(application, s
     assert len(active) == 1 and active[0]['href'] == page
     assert 'active' in active[0]['class'].split()
 
+
+def test_two_executor_phones_share_scoped_open_issue_alert_and_keep_navigation_after_closure(application):
+    first, _, second, _, link, engineering_link, _ = team(application)
+    actors = {user.username: user for user in db.session.scalars(db.select(User))}
+    for name, locale in (('exec', 'id'), ('peer', 'vi')):
+        user = actors[name]
+        user.role, user.simple_executor_ui, user.ui_language = 'executor', True, locale
+    point = db.session.scalar(db.select(Point).where(Point.qr_token == link[3:]))
+    engineering = db.session.scalar(db.select(Point).where(Point.qr_token == engineering_link[3:]))
+    engineering.inspection_team = 'engineering'
+    row = make_case(actors['inspect'], point, 1)
+    make_case(actors['inspect'], engineering, 2)
+    db.session.commit()
+
+    for client, locale in ((first, 'id'), (second, 'vi')):
+        home = client.get('/ready')
+        assert [link['href'] for link in mobile_links(home)] == ['/ready', '/issues']
+        assert [link['href'] for link in mobile_links(home) if link.get('aria-current') == 'page'] == ['/ready']
+        expected = translate('尚有 {count} 件未結案異常', locale, count=1)
+        for page in (home, client.get('/dashboard/ready?floor=5')):
+            assert expected in page.text
+            alert, = (a for a in Anchors(page.text).links if a.get('class') == 'dashboard-issue-notice')
+            assert parse_qs(urlsplit(alert['href']).query, keep_blank_values=True) == {
+                'status': ['open'], 'date_from': [''], 'date_to': ['']}
+        issues = client.get(alert['href'])
+        assert [link['href'] for link in mobile_links(issues) if link.get('aria-current') == 'page'] == ['/issues']
+        assert f'/records/{row.id}?' in issues.text
+
+    closed = first.post(f'/issues/{row.id}/resolve', data={'expected_event_id': '0', 'note': 'done'})
+    assert closed.status_code == 302
+    for client in (first, second):
+        assert 'dashboard-issue-notice' not in client.get('/dashboard/ready').text
+        assert [link['href'] for link in mobile_links(client.get('/ready'))] == ['/ready', '/issues']
+
+    actors['exec'].simple_executor_ui = False
+    db.session.commit()
+    assert [link['href'] for link in mobile_links(first.get('/dashboard'))] == [
+        '/dashboard', '/records', '/missed', '/issues', '/devices']
 
 @pytest.mark.parametrize('origin,expected', [('/issues?status=open', '/issues'), ('/records?abnormal=1', '/records')])
 def test_detail_navigation_tracks_validated_list_origin(application, seeded, origin, expected):

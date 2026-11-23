@@ -24,12 +24,36 @@ def issue_state(record):
     return record.issue.status if record.issue else ("open" if record.is_abnormal else "")
 
 
+def can_view_executor_issues(actor):
+    return bool(actor and actor.role == "executor" and patrol_scope(actor) == "general"
+                and actor.active and not actor.must_change_password
+                and not actor.general_manager_title and not actor.engineering_inspector_title)
+
+
+def executor_issue_scope(query, actor):
+    """Apply only to case queries. Ordinary execution and inspection access stays separate."""
+    if not can_view_executor_issues(actor):
+        return query.where(db.false())
+    return query.where(Inspection.category == "general", Inspection.point.has(
+        and_(Point.category == "general", Point.inspection_team == "general")))
+
+
+def executor_can_read_issue(actor, record, *, point=None):
+    if not can_view_executor_issues(actor) or record.category != "general":
+        return False
+    point = record.point if point is None else point
+    return bool(point and point.category == "general" and point.inspection_team == "general"
+                and (record.is_abnormal or record.issue is not None))
+
+
 def open_issue_counts(point_ids=None, user_id=None, category=None, *, actor=None, inspection_team=""):
     """Return counts only; never expose another inspector's record or note."""
     query = (select(Inspection.point_id, db.func.count(Inspection.id))
              .outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
              .where(open_issue_condition()).group_by(Inspection.point_id))
-    if actor is not None:
+    if actor is not None and actor.role == "executor":
+        query = executor_issue_scope(query, actor)
+    elif actor is not None:
         query = apply_point_scope(query, actor, Inspection, inspection_team)
     if point_ids is not None:
         if not point_ids:
@@ -56,6 +80,8 @@ def issue_version(issue):
 
 def can_resolve_issue(actor, record, *, point=None):
     """Resolution permission; it never grants reopen or point administration."""
+    if actor and actor.role == "executor" and record is not None:
+        return executor_can_read_issue(actor, record, point=point)
     if (actor is None or record is None or not actor.active or actor.must_change_password
             or actor.role not in ("admin", "inspector") or not can_access_category(actor, record.category)):
         return False
@@ -81,8 +107,9 @@ def transition_issue_event(inspection_id, target_status, actor, expected_event_i
     """
     if target_status not in ("open", "resolved"):
         raise ValueError("Unsupported issue state")
-    if (not actor.active or actor.must_change_password or actor.role not in ("admin", "inspector")
-            or (actor.role == "inspector" and (target_status != "resolved" or not patrol_scope(actor)))):
+    if (not actor.active or actor.must_change_password or actor.role not in ("admin", "inspector", "executor")
+            or (actor.role != "admin" and (target_status != "resolved" or not patrol_scope(actor)))
+            or (actor.role == "executor" and not can_view_executor_issues(actor))):
         raise IssueActionError("你沒有處理此異常案件的權限。", 403)
     owner = db.session.execute(select(Inspection.point_id, Inspection.user_id, Inspection.category).where(Inspection.id == inspection_id)).one_or_none()
     if owner is None:
@@ -91,6 +118,10 @@ def transition_issue_event(inspection_id, target_status, actor, expected_event_i
     if not can_access_category(actor, category):
         raise IssueActionError("找不到指定的巡檢紀錄。", 404)
     # Do not use the QR lookup: a disabled point still needs issue resolution.
+    if db.engine.dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE. Claim its writer reservation before reading
+        # the current issue state, as the check-in routes do for attendance.
+        db.session.execute(db.update(Point).where(Point.id == point_id).values(id=Point.id))
     point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update()
                               .execution_options(populate_existing=True))
     if category == "general" and not can_access_point_team(actor, point):
@@ -104,13 +135,17 @@ def transition_issue_event(inspection_id, target_status, actor, expected_event_i
     if record.point_id != point_id:
         raise IssueActionError("案件已由其他操作更新，請重新載入後再試。", 409)
     if not can_resolve_issue(actor, record, point=point):
+        if actor.role == "executor":
+            raise IssueActionError("找不到指定的巡檢紀錄。", 404)
         raise IssueActionError("只能結案自己回報的異常案件。", 403)
     # Authorize using the locked inspection before parsing form details or
     # materializing a legacy issue. An unauthorized POST must never reveal the
     # private record through an input-error form or leave a newly created case.
     # A browser submits CRLF for each single LF shown in the textarea.
     note = note.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not note or len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
+    if (not note and actor.role != "executor") or len(note) > 2000 or any((ord(c) < 32 and c not in "\t\r\n") or ord(c) == 127 for c in note):
+        if actor.role == "executor":
+            raise IssueActionError("處理說明最多 2,000 字，且不可包含無效控制字元。")
         raise IssueActionError("請填寫 1 至 2,000 字的處理說明，且不可包含無效控制字元。")
     if not re.fullmatch(r"[0-9]{1,10}", expected_event_id or "") or int(expected_event_id) > 2147483647:
         raise IssueActionError("案件表單已過期，請重新載入後再試。")

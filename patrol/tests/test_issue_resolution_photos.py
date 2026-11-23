@@ -209,7 +209,7 @@ def test_general_manager_can_resolve_other_reporters_in_both_teams_but_never_reo
 @pytest.mark.parametrize("actor_key,code,status", [
     ("general-manager", "SAFETY", 404), ("other", "GENERAL", 403),
     ("owner", "ENGINEERING", 404), ("engineering", "GENERAL", 404),
-    ("executor", "GENERAL", 403),
+    ("executor", "ENGINEERING", 404), ("executor", "SAFETY", 404),
 ])
 def test_unrelated_actor_cannot_resolve_or_parse_upload_form(domain, actor_key, code, status):
     class MustNotParse:

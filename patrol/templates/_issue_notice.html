@@ -1,0 +1,8 @@
+{% from '_ui.html' import icon %}
+{% if outstanding_issue_count|default(0) > 0 %}
+<a class="dashboard-issue-notice" href="{{ url_for('issues', status='open', date_from='', date_to='') }}">
+  <span class="dashboard-issue-symbol">{{ icon('alert') }}</span>
+  <span class="dashboard-issue-copy"><strong>{{ t('尚有 {count} 件未結案異常', count=outstanding_issue_count) }}</strong><small>{{ t('跨日期持續追蹤，查看待處理案件。') }}</small></span>
+  <span class="dashboard-issue-action">{{ t('查看異常') }} {{ icon('arrow') }}</span>
+</a>
+{% endif %}

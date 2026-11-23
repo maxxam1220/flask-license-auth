@@ -269,12 +269,14 @@ def test_executor_direct_receipts_are_scoped_to_submission_role_in_every_read_pa
     assert [r.id for r in dash["recent"]] == [visit.id] and [r.id for r in dash["recent_executions"]] == [first_stage.id]
     assert [p.id for p in dash["irregular_points"]] == [direct.id]
     assert context(application, client, f"/checkins/{visit.id}")["point_open_issue_count"] == 0
-    for forbidden in (old, theirs):
-        for route in (f"/records/{forbidden.id}", f"/checkins/{forbidden.id}"):
-            assert client.get(route).status_code == 403
-    assert client.get(f"/photos/{old.photos[0].id}").status_code == 403
-    assert client.get("/issues").status_code == 403
-    assert client.post(f"/issues/{old.id}/resolve", data={"note":"x","expected_event_id":"0"}).status_code == 403
+    for route in (f"/checkins/{old.id}", f"/records/{theirs.id}", f"/checkins/{theirs.id}"):
+        assert client.get(route).status_code == 403
+    # A prior general-affairs report is now available in the issue workflow.
+    # The receipt, execution list and personal inspection history stay scoped.
+    assert client.get(f"/records/{old.id}").status_code == 200
+    assert client.get(f"/photos/{old.photos[0].id}").status_code == 200
+    assert client.get("/issues").status_code == 200
+    assert client.post(f"/issues/{old.id}/resolve", data={"note":"x","expected_event_id":"0"}).status_code == 302
     admin = open_as(application, seeded["manager"])
     admin_csv = csv_rows(admin.get("/records/export?date_from=2026-11-01&date_to=2026-11-02&category=general"))
     labels = admin_csv[0]

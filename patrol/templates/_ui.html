@@ -29,7 +29,7 @@
 {% macro management_revision(item) %}<input type="hidden" name="expected_state" value="{{ management_state(item) }}">{% endmacro %}
 {% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% endmacro %}
 {% macro inspection_team_filter(selected='', enabled=false) -%}
-{% if enabled %}<label class="inspection-team-filter">巡檢負責單位<select name="inspection_team"><option value="">全部負責單位</option><option value="general"{% if selected == 'general' %} selected{% endif %}>總務</option><option value="engineering"{% if selected == 'engineering' %} selected{% endif %}>工務</option></select></label>{% endif %}
+{% if enabled %}<label class="inspection-team-filter">{{ t('巡檢負責單位') }}<select name="inspection_team"><option value="">{{ t('全部負責單位') }}</option><option value="general"{% if selected == 'general' %} selected{% endif %}>{{ t('總務') }}</option><option value="engineering"{% if selected == 'engineering' %} selected{% endif %}>{{ t('工務') }}</option></select></label>{% endif %}
 {%- endmacro %}
 {% macro inspection_team_chip(selected='', enabled=false) -%}
 {% if enabled and selected %}<span class="query-chip"><span class="query-chip-label">負責單位</span><span class="query-chip-value">{{ '工務' if selected == 'engineering' else '總務' }}</span></span>{% endif %}
@@ -38,12 +38,12 @@
 {% macro status(value) %}<span class="badge badge-{{ value }}">{% if value == 'approved' %}{{ t('已核准') }}{% elif value == 'pending' %}{{ t('待審核') }}{% elif value == 'revoked' %}{{ t('已解除') }}{% elif value == 'rejected' %}{{ t('未核准') }}{% elif value == 'done' %}{{ t('已完成') }}{% elif value == 'not_due' %}{{ t('不需巡檢') }}{% else %}{{ t('尚未綁定') }}{% endif %}</span>{% endmacro %}
 {% macro empty(title, description, name='list') %}<div class="empty-state"><span class="empty-icon">{{ icon(name) }}</span><h3>{{ t(title) }}</h3><p>{{ t(description) }}</p></div>{% endmacro %}
 
-{% macro slot_label(value) %}{{ '第 1 次' if value == 'am' else '第 2 次' if value == 'pm' else '全天' if value in ['day','daily'] else '本週' if value == 'week' else '—' }}{% endmacro %}
+{% macro slot_label(value) %}{{ t('第 1 次' if value == 'am' else '第 2 次' if value == 'pm' else '全天' if value in ['day','daily'] else '本週' if value == 'week' else '—') }}{% endmacro %}
 
 {% macro issue_status(record) -%}
-{% if record.is_abnormal %}<span class="badge {{ 'badge-issue-resolved' if issue_state(record) == 'resolved' else 'badge-abnormal' }}">{{ '異常已結案' if issue_state(record) == 'resolved' else '異常未結案' }}</span>{% else %}<span class="badge badge-neutral">一般紀錄</span>{% endif %}
+{% if record.is_abnormal %}<span class="badge {{ 'badge-issue-resolved' if issue_state(record) == 'resolved' else 'badge-abnormal' }}">{{ t('異常已結案' if issue_state(record) == 'resolved' else '異常未結案') }}</span>{% else %}<span class="badge badge-neutral">{{ t('一般紀錄') }}</span>{% endif %}
 {%- endmacro %}
 
 {% macro open_issue_badge(count, href='') -%}
-{% if count %}{% if href %}<a class="open-issue-badge" href="{{ href }}" aria-label="查看此點位目前 {{ count }} 件未結案異常">{% else %}<span class="open-issue-badge">{% endif %}{{ icon('alert') }}<span>未結案異常 <strong>{{ count }}</strong></span>{% if href %}{{ icon('arrow') }}</a>{% else %}</span>{% endif %}{% endif %}
+{% if count %}{% if href %}<a class="open-issue-badge" href="{{ href }}" aria-label="{{ t('查看此點位目前 {count} 件未結案異常', count=count) }}">{% else %}<span class="open-issue-badge">{% endif %}{{ icon('alert') }}<span>{{ t('未結案異常') }} <strong>{{ count }}</strong></span>{% if href %}{{ icon('arrow') }}</a>{% else %}</span>{% endif %}{% endif %}
 {%- endmacro %}

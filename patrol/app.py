@@ -51,8 +51,9 @@ from ready_patrol import ready_patrol_points
 from daily_rounds import daily2_anytime, next_daily2_slot
 from patrol_calendar import fixed_weekday, is_excluded_day, obligation_required, has_calendar_year, CALENDAR_COVERAGE_END
 from safety_leave import can_manage_safety_leave, get_safety_leave_dates, register_routes as register_safety_leave
-from issues import (IssueActionError, append_resolution_photos, can_resolve_issue, issue_state, issue_version,
-                    open_issue_condition, open_issue_counts as count_open_issues, open_issue_for, transition_issue_event)
+from issues import (IssueActionError, append_resolution_photos, can_resolve_issue, can_view_executor_issues,
+                    executor_can_read_issue, executor_issue_scope, issue_state, issue_version, open_issue_condition,
+                    open_issue_counts as count_open_issues, open_issue_for, transition_issue_event)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEVICE_COOKIE = "patrol_device"
@@ -173,7 +174,7 @@ def normalise_return_to(value, user):
         if parsed.scheme or parsed.netloc or parsed.fragment or parsed.path not in ("/records", "/issues"):
             return None
         executor = bool(user and user.role == "executor")
-        if parsed.path == "/issues" and (not user or executor):
+        if parsed.path == "/issues" and (not user or (executor and not can_view_executor_issues(user))):
             return None
         pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=10)
         if len({key for key, _ in pairs}) != len(pairs):
@@ -372,6 +373,7 @@ def create_app(config=None):
                 "t": t, "ui_locale": get_locale(), "ui_languages": UI_LANGUAGES,
                 "checklist_snapshot": checklist_snapshot,
                 "simple_executor_ui": uses_simple_executor_ui(user), "home_url": home_url(user),
+                "can_view_executor_issues": can_view_executor_issues(user),
                 "can_manage_safety_leave": can_manage_safety_leave(user),
                 "calendar_coverage_end": CALENDAR_COVERAGE_END,
                 "missed_start_date": app.config["MISSED_START_DATE"],
@@ -428,9 +430,9 @@ def create_app(config=None):
                                  inspection_team=selected_inspection_team())
 
     def visible_open_issue_total():
-        if not g.get("user") or g.user.role == "executor":
+        if not g.get("user"):
             return 0
-        owner = None if g.user.role == "admin" or can_view_general_team(g.user) else g.user.id
+        owner = None if g.user.role == "admin" or can_view_general_team(g.user) or can_view_executor_issues(g.user) else g.user.id
         return sum(open_issue_counts(user_id=owner, category=patrol_scope(g.user)).values())
 
     @app.url_defaults
@@ -952,6 +954,7 @@ def create_app(config=None):
                 ready_points.sort(key=lambda row: (FLOOR_ORDER.get(row["floor"], len(FLOOR_ORDER)), row["code"]))
         return dict(selected_floor=floor, selected_category=category,
                     ready_points=ready_points,
+                    outstanding_issue_count=visible_open_issue_total() if can_view_executor_issues(g.user) else 0,
                     ready_excluded=is_excluded_day(local_now.date(), category or patrol_scope(g.user) or "general", safety_leave_dates=leave_dates),
                     calendar_unavailable=not has_calendar_year(local_now.date()),
                     ready_date=local_now.date(), ready_as_of=local_now,
@@ -1024,7 +1027,7 @@ def create_app(config=None):
                     floor=floor_filter or None, category=category_filter or None)
         executor = g.user.role == "executor"
         team_view = can_view_general_team(g.user)
-        issue_counts = {} if executor else open_issue_counts(category=category_filter or scope)
+        issue_counts = open_issue_counts(category=category_filter or scope) if not executor or can_view_executor_issues(g.user) else {}
         frequencies = VIEW_FREQUENCIES[view]
         # Attribute a completed team slot exactly once to the first inspection's
         # snapshot, even if later inspectors used a renamed or relocated point.
@@ -1651,7 +1654,9 @@ def create_app(config=None):
                                point_open_issue_count=0 if record.executor_visit else
                                open_issue_counts([record.point_id], category=patrol_scope(g.user)).get(record.point_id, 0))
 
-    def require_inspection_access(record):
+    def require_inspection_access(record, *, issue_evidence=False):
+        if issue_evidence and executor_can_read_issue(g.user, record):
+            return
         if (not can_access_category(g.user, record.category) or
                 (record.category == "general" and not can_access_point_team(g.user, record.point))):
             abort(404)
@@ -1671,9 +1676,10 @@ def create_app(config=None):
     def render_record_detail(record, error=None, status=200):
         # Called after a rolled-back transition too; recheck before rendering
         # either a successful detail page or its private validation-error form.
-        require_inspection_access(record)
+        require_inspection_access(record, issue_evidence=True)
         source = request.form.get("return_to") if request.method == "POST" else request.args.get("return_to")
-        back_url = normalise_return_to(source, g.user) or url_for("records", category=record.category)
+        back_url = normalise_return_to(source, g.user) or (url_for("issues") if can_view_executor_issues(g.user)
+                                                          else url_for("records", category=record.category))
         return render_template("record_detail.html", record=record, issue_form_error=error,
                                long_period=handoff_period(record.frequency, record.period_key) if record.workflow_mode == "two_stage" or record.frequency == "three_day" else None,
                                issue_action_note=request.form.get("note", "").replace("\r\n", "\n").replace("\r", "\n"),
@@ -1732,23 +1738,31 @@ def create_app(config=None):
 
     def issue_query():
         """One authorization/filter contract for the list and its full export."""
-        if g.user.role == "executor":
-            abort(403, description="異常追蹤由巡檢員與系統管理員處理。")
+        executor = g.user.role == "executor"
+        if executor and not can_view_executor_issues(g.user):
+            abort(403)
         floor, category = scope_filters()
         state = request.args.get("status", "open")
         if state not in ("open", "resolved", "all"):
             abort(400, description="案件狀態選項不正確。")
         point_id = request.args.get("point_id", "")
-        default_week = "date_from" not in request.args and "date_to" not in request.args
+        default_week = ("date_from" not in request.args and "date_to" not in request.args
+                        and not (executor and state == "open"))
         today = local_dt(now_utc()).date()
         begin = parse_date(request.args.get("date_from"), today - timedelta(days=6) if default_week else None)
         end = parse_date(request.args.get("date_to"), today if default_week else None)
         if begin and end and begin > end:
             abort(400, description="回報日期的起日不能晚於迄日。")
+        query = (select(Inspection).outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
+                 .where(db.or_(InspectionIssue.inspection_id.is_not(None), Inspection.is_abnormal.is_(True))))
+        query = executor_issue_scope(query, g.user) if executor else private_records(query, category)
         selected_point = None
         if point_id:
             selected_id = parse_id(point_id)
             point = db.get_or_404(Point, selected_id)
+            if executor and not db.session.scalar(query.with_only_columns(Inspection.id)
+                                                 .where(Inspection.point_id == selected_id).limit(1)):
+                abort(404)
             if can_access_point(g.user, point):
                 selected_point = point
             else:
@@ -1761,9 +1775,6 @@ def create_app(config=None):
                 if not snapshot:
                     abort(404)
                 selected_point = SimpleNamespace(id=selected_id, code=snapshot.point_code, name=snapshot.point_name)
-        query = (select(Inspection).outerjoin(InspectionIssue, InspectionIssue.inspection_id == Inspection.id)
-                 .where(db.or_(InspectionIssue.inspection_id.is_not(None), Inspection.is_abnormal.is_(True))))
-        query = private_records(query, category)
         if state == "open":
             query = query.where(open_issue_condition())
         elif state == "resolved":
@@ -1808,6 +1819,8 @@ def create_app(config=None):
     @app.get("/issues/export.xlsx")
     @login_required
     def export_issues_xlsx():
+        if g.user.role == "executor":
+            abort(403)
         from issue_export import (ExportEvent, ExportImageError, ExportIssue, ExportLimitError, ExportPhoto,
                                   MAX_EXPORT_ISSUES, MAX_EXPORT_PHOTOS, MAX_SOURCE_PHOTO_BYTES, build_issue_workbook)
         query, filters, _, order_time = issue_query()
@@ -1881,7 +1894,7 @@ def create_app(config=None):
     @login_required
     def photo_file(photo_id):
         photo = db.get_or_404(InspectionPhoto, photo_id)
-        require_inspection_access(photo.inspection)
+        require_inspection_access(photo.inspection, issue_evidence=True)
         response = make_response(photo.data)
         response.headers["Content-Type"] = photo.mime_type
         response.headers["Content-Disposition"] = f'inline; filename="inspection-{photo.id}.jpg"'
@@ -1891,7 +1904,7 @@ def create_app(config=None):
     @login_required
     def issue_photo_file(photo_id):
         photo = db.get_or_404(IssueEventPhoto, photo_id)
-        require_inspection_access(photo.event.issue.inspection)
+        require_inspection_access(photo.event.issue.inspection, issue_evidence=True)
         response = make_response(photo.data)
         response.headers["Content-Type"] = photo.mime_type
         response.headers["Content-Disposition"] = f'inline; filename="resolution-{photo.id}.jpg"'

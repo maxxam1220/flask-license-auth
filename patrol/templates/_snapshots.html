@@ -3,8 +3,8 @@
 {{ row.point_code or report_point_location(row).code }}
 {%- endmacro %}
 {% macro point_name(row) -%}
-{{ row.point_name or report_point_location(row).name }}
+{{ localized_point_name(row.point_name or report_point_location(row).name) }}
 {%- endmacro %}
 {% macro record_floor(row) -%}
-{{ floor_label(row.point_floor) if row.point_floor is not none else report_point_location(row).floor }}
+{{ t(floor_label(row.point_floor) if row.point_floor is not none else report_point_location(row).floor) }}
 {%- endmacro %}

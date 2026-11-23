@@ -61,6 +61,7 @@
       const active = document.activeElement;
       const focusedPanel = active === panel;
       const focusedRefresh = active === updateLink(panel);
+      const focusedIssue = active?.closest('.dashboard-issue-notice') && panel.contains(active);
       const position = manual ? null : readingPosition(next);
       updateLink(next).href = updateLink(panel).href;
       panel.replaceWith(next);
@@ -68,8 +69,9 @@
       window.PatrolI18n?.apply(next);
       if (manual) panel.querySelector('[data-ready-feedback]').textContent = t('已更新列表。');
       scheduleShiftChange();
-      if (focusedPanel || focusedRefresh) {
-        (focusedPanel ? panel : updateLink(panel)).focus({preventScroll: true});
+      if (focusedPanel || focusedRefresh || focusedIssue) {
+        const destination = focusedRefresh ? updateLink(panel) : focusedIssue ? panel.querySelector('.dashboard-issue-notice') : panel;
+        (destination || panel).focus({preventScroll: true});
       }
       if (position) {
         const shift = position.row.getBoundingClientRect().top - position.top;
