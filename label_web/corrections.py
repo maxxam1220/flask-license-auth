@@ -64,7 +64,7 @@ def public_revision(row, snapshot):
     if not row:
         return None
     result = {key:row[key] for key in ("revision", "patches", "result", "ocr", "reviewer", "note", "created_at", "status")}
-    result["result"] = history_status.project(row["result"], row["ocr"], snapshot)
+    result["result"] = history_status.project(row["result"], row["ocr"], snapshot, row["patches"])
     result["status"] = result["result"].get("status", row["status"])
     if row["change"].get("copied_from"):
         result["copied_from"] = deepcopy(row["change"]["copied_from"])
@@ -79,6 +79,30 @@ def history(conn, inspection_id, page=1, size=20):
     return {"items":[{**dict(row["change"]), **{key:row[key] for key in
         ("revision", "status", "reviewer", "note", "created_at")}} for row in rows[:size]],
         "page":page, "has_more":len(rows)>size}
+
+
+def apply_patch_verdicts(result, patches):
+    """Apply recorded human observations after evaluating the same OCR revision."""
+    affected = set(patches)
+    for check in result["checks"]:
+        corrected_ids = [value for value in check.get("line_ids", []) if value in affected]
+        if corrected_ids:
+            check["human_corrected_line_ids"] = corrected_ids
+            check["human_assessment"] = True
+            check["confidence_note"] = "此結果包含人工逐字確認；顯示的信心分數仍是原始 OCR 分數。"
+    for patch in patches.values():
+        if patch["kind"] == "ocr_misread":
+            continue
+        status = "fail" if patch["kind"] == "label_misprint" else "review"
+        result["checks"].append({"key":f"manual_{patch['line_id']}", "label":"人工確認標籤印錯" if status == "fail" else "人工標記待確認",
+            "status":status, "expected":"", "actual":patch["text"], "raw_actual":patch["text"],
+            "display_actual":traditional_display(patch["text"]), "display_expected":"", "line_ids":[patch["line_id"]],
+            "diff":[], "score":None, "source":"human", "human_assessment":True,
+            "reason":"訂正人員確認標籤本身印錯；不會因文字與標準相同而自動改判通過。" if status == "fail" else "訂正人員表示照片看不清楚，仍需人工確認。"})
+    result["counts"] = {status:sum(check["status"]==status for check in result["checks"]) for status in ("pass", "fail", "review", "read")}
+    counts = result["counts"]
+    result["status"] = "fail" if counts["fail"] else "review" if not result["checks"] or counts["review"] or counts["read"] else "pass"
+    return result
 
 
 def build_revision(original, current, action, created_at):
@@ -130,26 +154,7 @@ def build_revision(original, current, action, created_at):
     # until an explicit recheck resolves the source from the corrected evidence.
     result["source_match"] = deepcopy(original["result"].get("source_match"))
     augment(result, ocr)
-    ignored={identifier for row in result["display_rows"] if row["nutrition_display_only"] for identifier in row["source_line_ids"]}
-    affected = set(patches)
-    for check in result["checks"]:
-        corrected_ids = [value for value in check.get("line_ids", []) if value in affected]
-        if corrected_ids:
-            check["human_corrected_line_ids"] = corrected_ids
-            check["human_assessment"] = True
-            check["confidence_note"] = "此結果包含人工逐字確認；顯示的信心分數仍是原始 OCR 分數。"
-    for patch in patches.values():
-        if patch["kind"] == "ocr_misread" or patch["line_id"] in ignored:
-            continue
-        status = "fail" if patch["kind"] == "label_misprint" else "review"
-        result["checks"].append({"key":f"manual_{patch['line_id']}", "label":"人工確認標籤印錯" if status == "fail" else "人工標記待確認",
-            "status":status, "expected":"", "actual":patch["text"], "raw_actual":patch["text"],
-            "display_actual":traditional_display(patch["text"]), "display_expected":"", "line_ids":[patch["line_id"]],
-            "diff":[], "score":None, "source":"human", "human_assessment":True,
-            "reason":"訂正人員確認標籤本身印錯；不會因文字與標準相同而自動改判通過。" if status == "fail" else "訂正人員表示照片看不清楚，仍需人工確認。"})
-    result["counts"] = {status:sum(check["status"]==status for check in result["checks"]) for status in ("pass", "fail", "review", "read")}
-    counts = result["counts"]
-    result["status"] = "fail" if counts["fail"] else "review" if not result["checks"] or counts["review"] or counts["read"] else "pass"
+    apply_patch_verdicts(result, patches)
     result.update(inputs=inputs, human_revision=revision, human_assessment=True,
                   original_inspection_id=original["id"], original_status=original["status"],
                   source_match=deepcopy(original["result"].get("source_match")),

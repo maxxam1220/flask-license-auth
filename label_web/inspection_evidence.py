@@ -2,9 +2,10 @@
 from collections import Counter
 from barcode_checks import checks_for
 from text_rows import group_observed_rows, nutrition_line_ids
+from validation import traditional_display
 
 
-NUTRITION_POLICY = "excluded-v1"
+NUTRITION_POLICY = "literal-text-v2"
 
 
 def _recount(result):
@@ -13,7 +14,30 @@ def _recount(result):
     result["status"]="fail" if counts["fail"] else "review" if not result["checks"] or counts["review"] or counts["read"] else "pass"
 
 
-def without_nutrition(result, ocr, source=None):
+def _group_unverified_nutrition(checks, rows):
+    """Count one unreferenced printed row while retaining every OCR cell and its location."""
+    by_cell = {check["line_ids"][0]:check for check in checks if check.get("source") == "ocr"
+               and str(check.get("key", "")).startswith("text_line_") and len(check.get("line_ids", [])) == 1}
+    replacements = {}
+    for row in rows:
+        ids = row.get("source_line_ids") or []
+        if not row["nutrition_text"] or len(ids) < 2 or not all(i in by_cell for i in ids):
+            continue
+        cells = [by_cell[i] for i in ids]
+        representative = next((check for check in cells if check["status"] == "review"), cells[0])
+        text = row["text"]
+        display = traditional_display(text)
+        grouped = dict(representative, key=cells[0]["key"], actual=text, raw_actual=text, display_actual=display,
+                       conversion_changed=text != display, line_ids=ids, score=None,
+                       source_lines=[line for check in cells for line in check.get("source_lines",[])])
+        if not row.get("confidence_ok"):
+            grouped.update(status="review", reason="這行的文字或分欄位置不清楚，請對照原圖確認。")
+        replacements.update({cell["key"]: None for cell in cells})
+        replacements[cells[0]["key"]] = grouped
+    return [replacement for check in checks if (replacement := replacements.get(check.get("key"), check)) is not None]
+
+
+def project_nutrition_text(result, ocr, source=None, recovered_checks=None):
     """Project saved or current evidence without changing its raw snapshot."""
     result=dict(result or {},nutrition_policy=NUTRITION_POLICY)
     # Early snapshots sometimes contain text with no stable OCR identifier.
@@ -31,36 +55,38 @@ def without_nutrition(result, ocr, source=None):
         ignored.update(nutrition_line_ids(original).intersection(line["id"] for line in lines
             if (line.get("human_correction") or {}).get("kind") in {"label_misprint","uncertain"}))
     result["display_rows"]=[{**{key:row[key] for key in ("id","text","source_line_ids","box","confidence_ok","row_type") if key in row},
-                             "nutrition_display_only":bool(row.get("nutrition_display_only") or
+                             "nutrition_text":bool(row.get("nutrition_text") or row.get("nutrition_display_only") or
                                 row.get("source_line_ids") and ignored.issuperset(row["source_line_ids"]))}
                             for row in rows]
     if not isinstance(result.get("checks"),list):
         return result
-    # _source_rows used its stored list index when legacy standard text had no ID.
-    reference_lines=[dict(line,id=line.get("id",i)) for i,line in enumerate((source or {}).get("lines",[]))
-                     if isinstance(line,dict) and isinstance(line.get("text"),str)]
-    reference_ids=nutrition_line_ids(reference_lines)
-    def counted(check):
-        key=str(check.get("key") or "")
-        if key.startswith(("nutrition_", "source_nutrition_")) or check.get("incomplete_standard"):
-            return False
-        expected_ids=check.get("source_line_ids") or []
-        if expected_ids and reference_ids.issuperset(expected_ids):
-            return False
-        actual_ids=check.get("line_ids") or []
-        if not lines and not rows and not reference_lines and key.startswith(("text_line_","source_line_","source_text_","cloud_word_","manual_")):
-            text=check.get("expected") or check.get("actual")
-            if text and nutrition_line_ids([{"id":0,"text":text}]):
-                return False
-        return not (actual_ids and ignored.issuperset(actual_ids) and
-                    (not expected_ids or not reference_lines))
-    result["checks"]=[check for check in result["checks"] if isinstance(check,dict) and counted(check)]
-    if isinstance(result.get("fields"),dict):
-        result["fields"]={k:v for k,v in result["fields"].items() if k!="nutrition"}
-    if ignored and "coverage" in result:
-        eligible={line["id"] for line in lines}-ignored
-        covered={identifier for check in result["checks"] for identifier in check.get("line_ids",[])}
-        result["coverage"]={"total_lines":len(eligible),"covered_lines":len(eligible & covered)}
+
+    def literal(check):
+        return isinstance(check,dict) and not (str(check.get("key") or "").startswith("nutrition_") and
+                                                check.get("source") in (None,"","logic"))
+    checks=[check for check in result["checks"] if literal(check)]
+    if recovered_checks is not None:
+        # An excluded-v1 snapshot omitted the literal checks. Replace only checks
+        # about the nutrition rows of this observation or its contemporary standard.
+        reference_lines=[dict(line,id=line.get("id",i)) for i,line in enumerate((source or {}).get("lines",[]))
+                         if isinstance(line,dict) and isinstance(line.get("text"),str)]
+        reference_ids=nutrition_line_ids(reference_lines)
+        def nutrition_text_check(check):
+            key=str(check.get("key") or "")
+            if key.startswith(("source_nutrition_", "nutrition_")) or check.get("incomplete_standard"):
+                return True
+            expected=check.get("source_line_ids") or []
+            if expected and reference_lines:
+                return reference_ids.issuperset(expected)
+            actual=check.get("line_ids") or []
+            return bool(actual and ignored.issuperset(actual))
+        checks=[check for check in checks if not nutrition_text_check(check)]
+        checks.extend(check for check in recovered_checks if literal(check) and nutrition_text_check(check))
+    result["checks"]=checks
+    if lines and "coverage" in result:
+        identifiers={line["id"] for line in lines}
+        covered={i for check in checks for i in check.get("line_ids",[])}
+        result["coverage"]={"total_lines":len(lines),"covered_lines":len(identifiers & covered)}
     _recount(result)
     return result
 
@@ -78,17 +104,17 @@ def augment(result, ocr):
             "expected":selected.get("name", ""), "source":"source_selection", "score":None,
             "line_ids":list(dict.fromkeys(identifier for item in evidence for identifier in item.get("line_ids", []))),
             "reason":match.get("reason") or "照片品名與選用標準衝突，請改回自動對應或重新選擇；尚未套用該標準。"})
-    projected=without_nutrition(dict(result,checks=checks),ocr)
-    checks=projected["checks"]
+    projected=project_nutrition_text(dict(result,checks=checks),ocr)
+    checks=_group_unverified_nutrition(projected["checks"],projected["display_rows"])
     result.update(projected)
-    ignored={identifier for row in projected["display_rows"] if row["nutrition_display_only"] for identifier in row["source_line_ids"]}
+    ignored={identifier for row in projected["display_rows"] if row["nutrition_text"] for identifier in row["source_line_ids"]}
     lines=[line for line in ocr.get("lines",[]) if line["id"] not in ignored]
     checks.extend(checks_for(dict(ocr,lines=lines)))
     if ocr.get("label_scope",{}).get("status")=="multiple":
         checks.append({"key":"photo_scope", "label":"標籤範圍", "status":"review", "actual":"偵測到多張可能的貼紙",
             "reason":"請裁切要檢查的那一張，避免混用不同貼紙的文字。", "line_ids":[]})
     for index,line in enumerate(ocr.get("lines",[])):
-        if line["id"] not in ignored and line.get("suspected_typo") and not line.get("human_verified"):
+        if line.get("suspected_typo") and not line.get("human_verified"):
             checks.append({"key":f"cloud_word_{index}", "label":"文字疑點", "status":"review", "actual":line["text"],
                 "reason":"雲端辨識提出可能錯字，請核對原圖與實際標準；未自動改字。", "line_ids":[line.get("id")]})
     if ocr.get("label_scope",{}).get("status")=="multiple":

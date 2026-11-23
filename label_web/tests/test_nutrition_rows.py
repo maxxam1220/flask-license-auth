@@ -73,15 +73,48 @@ class NutritionRowTests(unittest.TestCase):
         self.assertEqual(orphan["text"],"1.4毫克 1.2毫克")
         self.assertNotIn("鈉",orphan["text"])
 
-    def test_missing_swapped_or_uncertain_nutrition_cells_do_not_affect_product(self):
+    def test_matching_row_passes_but_swapped_columns_and_changed_digits_fail(self):
         original=table_lines();source=self.source(original)
-        baseline=self.checks(original,source)
-        self.assertEqual([check["expected"] for check in baseline],["品名：測試蘋果"])
-        for extra in ({"text":"57.3大卡"},{"score":.3},{"ambiguous":True},{"human_uncertain":True}):
-            lines=deepcopy(original);lines[4].update(extra)
-            self.assertEqual(self.checks(lines,source),baseline)
-        reduced=[row for row in original if row["id"]!=11]
-        self.assertEqual(self.checks(reduced,source),baseline)
+        check=next(c for c in self.checks(original,source) if c["expected"].startswith("熱量"))
+        self.assertEqual(check["status"],"pass",check)
+        for changes in (("57.3大卡","68.5大卡"),("68.6大卡","57.3大卡")):
+            lines=deepcopy(original);lines[4]["text"],lines[5]["text"]=changes
+            check=next(c for c in self.checks(lines,source) if c["expected"].startswith("熱量"))
+            self.assertEqual(check["status"],"fail",check)
+            self.assertEqual(check["line_ids"],[3,4,5])
+
+    def test_missing_value_cannot_borrow_equal_value_from_another_row(self):
+        original=table_lines();source=self.source(original)
+        lines=[row for row in original if row["id"]!=11]
+        lines[12]["text"]="0.1公克"  # A later numeric row is not the missing column.
+        check=next(c for c in self.checks(lines,source) if c["expected"].startswith("脂肪"))
+        self.assertIn(check["status"],("fail","review"),check)
+        self.assertNotEqual(check["status"],"pass")
+        self.assertNotIn(13,check["line_ids"])
+
+    def test_unnamed_reference_values_never_infer_the_nutrient(self):
+        original=table_lines()
+        source=self.source(original)
+        checks=self.checks(original+[cell(20,"鈉",0,230)],source)
+        orphan=next(c for c in checks if "1.4毫克" in c["expected"])
+        self.assertEqual(orphan["status"],"review",orphan)
+        self.assertFalse(orphan["line_ids"])
+
+    def test_unreferenced_split_cells_count_once_per_printed_row(self):
+        from inspection_evidence import augment
+        lines=table_lines()
+        result=augment(evaluate_source(lines,None),{"lines":lines})
+        fat=[c for c in result["checks"] if set(c.get("line_ids",[])) & {9,10,11}]
+        self.assertEqual(len(fat),1)
+        self.assertEqual((fat[0]["status"],fat[0]["actual"]),("read","脂肪 0.1公克 0.1公克"))
+        self.assertEqual([line["id"] for line in fat[0]["source_lines"]],[9,10,11])
+
+    def test_low_confidence_and_conflicting_cells_remain_review(self):
+        original=table_lines();source=self.source(original)
+        for extra in ({"score":.3},{"ambiguous":True},{"human_uncertain":True}):
+            lines=deepcopy(original);lines[10].update(extra)
+            check=next(c for c in self.checks(lines,source) if c["expected"].startswith("脂肪"))
+            self.assertEqual(check["status"],"review",check)
 
     def test_no_title_or_two_tables_do_not_generate_cross_table_rows(self):
         lines=table_lines()[1:]
@@ -93,7 +126,7 @@ class NutritionRowTests(unittest.TestCase):
         lines=table_lines();lines[2]["text"]="每份 每100毫升"
         self.assertIn("脂肪 0.1公克 0.1公克",[row["text"] for row in group_observed_rows(lines)])
 
-    def test_overlapping_full_rows_preserve_geometry_without_reporting_an_anomaly(self):
+    def test_overlapping_full_rows_cannot_bypass_geometry_ambiguity(self):
         lines=[cell(0,"營養標示",0,0,200),cell(1,"每一份量100公克",0,35,200),
             cell(2,"每份 每100公克",100,70,210),cell(3,"蛋白質 0.2公克 0.2公克",0,110,280),
             cell(4,"脂肪 0.1公克 0.1公克",120,110,280),cell(5,"品名：測試蘋果",450,110,250)]
@@ -101,9 +134,10 @@ class NutritionRowTests(unittest.TestCase):
         grouped=group_observed_rows(lines)
         self.assertTrue(all(row["ambiguous"] for row in grouped if row["id"] in (3,4)))
         checks=[check for check in self.checks(lines,source) if check["expected"].startswith(("蛋白質","脂肪"))]
-        self.assertEqual(checks,[])
+        self.assertEqual(len(checks),2)
+        self.assertTrue(all(check["status"]=="review" for check in checks),checks)
 
-    def test_augmentation_preserves_all_eight_nutrition_rows_for_reading(self):
+    def test_augmentation_preserves_all_eight_database_nutrition_checks(self):
         from inspection_evidence import augment
         names=("熱量","蛋白質","脂肪","飽和脂肪","反式脂肪","碳水化合物","糖","鈉")
         values=("50大卡","0.2公克","0.1公克","0公克","0公克","10公克","5公克","1.4毫克")
@@ -113,12 +147,14 @@ class NutritionRowTests(unittest.TestCase):
         lines.append(cell(99,"品名：測試蘋果",450,110,220))
         source=self.source(lines)
         result=evaluate_source(lines,source,base_date="2026-11-16")
-        self.assertEqual([check["key"] for check in result["checks"]],["product"])
+        original=[c for c in result["checks"] if c["key"].startswith("source_nutrition_")]
+        self.assertEqual(len(original),8)
+        self.assertTrue(all(c["status"]=="pass" for c in original),original)
         augment(result,{"lines":lines})
-        only_text=[row["text"] for row in result["display_rows"] if row["nutrition_display_only"]]
-        self.assertTrue(all(f"{name} {value} {value}" in only_text for name,value in zip(names,values)))
-        self.assertEqual([check["key"] for check in result["checks"]],["product"])
-        self.assertEqual(result["counts"],{"pass":1,"fail":0,"review":0,"read":0})
+        after=[c for c in result["checks"] if c["key"].startswith("source_nutrition_")]
+        self.assertEqual(after,original)
+        self.assertTrue(all(c["source"]=="database" for c in after))
+        self.assertEqual({c["label"] for c in after},{"營養標示・"+name for name in names})
         once=deepcopy(result);augment(result,{"lines":lines})
         self.assertEqual(result,once)
 

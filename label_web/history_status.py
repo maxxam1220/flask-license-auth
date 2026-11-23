@@ -14,13 +14,36 @@ summaries = Table("labelcheck_history_status", db.metadata,
     Column("counts", JSON, nullable=False))
 
 
-def project(result, ocr, snapshot):
+def project(result, ocr, snapshot, patches=()):
     if not isinstance(result, dict):
         return {}
     if result.get("nutrition_policy") == inspection_evidence.NUTRITION_POLICY:
         return result
     source = snapshot.get("source") or (snapshot.get("rules") or {}).get("approved_text_source")
-    return inspection_evidence.without_nutrition(result, ocr, source)
+    recovered = None
+    if result.get("nutrition_policy") == "excluded-v1" and isinstance(result.get("checks"), list):
+        recovered = _recover_checks(result, ocr, snapshot, patches)
+    return inspection_evidence.project_nutrition_text(result, ocr, source, recovered_checks=recovered)
+
+
+def _recover_checks(result, ocr, snapshot, patches):
+    """Recreate candidates from this scan/revision only; the caller merges nutrition text only."""
+    from source_validation import evaluate_source
+    from validation import evaluate
+
+    inputs = result.get("inputs") or {}
+    dates = {key: inputs.get(key, "") for key in ("batch_date", "arrival_date", "base_date")}
+    lines = ocr.get("lines") or []
+    if snapshot.get("mode") == "system_label" or "source" in snapshot:
+        evaluated = evaluate_source(lines, snapshot.get("source"), **dates, ocr_capabilities=ocr.get("capabilities"))
+    else:
+        evaluated = evaluate(lines, snapshot, **dates)
+    evaluated["source_match"] = result.get("source_match")
+    inspection_evidence.augment(evaluated, ocr)
+    if patches:
+        from corrections import apply_patch_verdicts
+        apply_patch_verdicts(evaluated, {patch["line_id"]: patch for patch in patches})
+    return evaluated["checks"]
 
 
 def _entry(table):
@@ -46,7 +69,8 @@ def ensure_index(engine, identifier=None):
         pending = select(table.c.id, table.c.status, table.c.result, table.c.ocr,
                          db.inspections.c.template_snapshot)
         if table is db.corrections:
-            pending = pending.select_from(table.join(db.inspections, db.inspections.c.id == table.c.inspection_id))
+            pending = pending.add_columns(table.c.patches).select_from(
+                table.join(db.inspections, db.inspections.c.id == table.c.inspection_id))
         if identifier is not None:
             pending = pending.where(db.inspections.c.id == identifier)
         pending = pending.where(~select(summaries.c.row_id).where(*_entry(table)).correlate(table).exists())
@@ -64,7 +88,7 @@ def ensure_index(engine, identifier=None):
                 break
             values = []
             for row in rows:
-                result = project(row["result"], row["ocr"], row["template_snapshot"])
+                result = project(row["result"], row["ocr"], row["template_snapshot"], row.get("patches") or ())
                 values.append(dict(policy=inspection_evidence.NUTRITION_POLICY, source_table=table.name,
                                    row_id=row["id"], status=result.get("status", row["status"]),
                                    counts=result.get("counts", {})))

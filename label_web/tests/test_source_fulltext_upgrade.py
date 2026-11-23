@@ -114,7 +114,7 @@ class SourceFulltextUpgradeTests(unittest.TestCase):
             self.assertEqual(conn.scalar(select(func.count()).select_from(db.manual_sources)),0)
             self.assertEqual(dict(conn.execute(select(db.inspections).where(db.inspections.c.id=="scan")).mappings().one()),self.original)
 
-    def test_approved_fulltext_checks_ingredients_and_excludes_nutrition(self):
+    def test_approved_fulltext_checks_ingredients_and_printed_nutrition(self):
         self.assertEqual(self.save().status_code,201)
         resolved=label_source.resolve(self.engine,self.ocr["lines"])
         self.assertEqual(resolved["status"],"matched",resolved);self.assertEqual(resolved["code"],CODE)
@@ -122,10 +122,14 @@ class SourceFulltextUpgradeTests(unittest.TestCase):
         lines=[row for row in self.ocr["lines"] if row["id"]<12]
         evaluated=evaluate_source(lines,source,base_date="2026-11-16")
         self.assertEqual(evaluated["verified_scope"],"approved_text")
-        self.assertFalse(any(7 in check.get("line_ids",[]) for check in evaluated["checks"]))
+        expected_energy = "熱量 55大卡 55大卡"
+        self.assertTrue(any(check.get("expected")==expected_energy and check["status"]=="pass"
+                            for check in evaluated["checks"]))
         changed=deepcopy(lines)
         changed[7]["text"]="熱量 55大卡 56大卡"
-        self.assertEqual(evaluate_source(changed,source,base_date="2026-11-16")["checks"],evaluated["checks"])
+        different=evaluate_source(changed,source,base_date="2026-11-16")["checks"]
+        self.assertTrue(any(check.get("expected")==expected_energy and check["status"]=="fail"
+                            and check.get("actual")==changed[7]["text"] for check in different))
         changed[3]["text"]="內容物：草莓"
         evaluated=evaluate_source(changed,source,base_date="2026-11-16")
         self.assertTrue(any(check.get("expected")=="內容物：蘋果" and check["status"]=="fail" for check in evaluated["checks"]))

@@ -20,25 +20,33 @@ def standard(texts):
 
 
 class LegacyNutritionTests(unittest.TestCase):
-    def test_old_headings_partial_row_and_orphan_values_are_display_only(self):
+    def test_old_headings_partial_row_and_orphan_values_are_one_review_not_false_fail(self):
         texts=["營養標示","每一份量120公克","每份 每100公克","熱量","熱量 68.5大卡 57.3大卡",
                "57.3大卡","蛋白質","蛋白質 0.2公克 0.2公克","脂肪","脂肪 0.1公克 0.1公克",
                "飽和脂肪","0公克","反式脂肪","13.9公克","碳水化合物 16.7公克","糖",
                "13.3公克","11.1公克","1.4毫克","1.2毫克"]
         source=standard(texts);lines=observed();before_source=deepcopy(source);before_lines=deepcopy(lines)
         result=evaluate_source(lines,source,base_date="2026-11-16")
-        self.assertEqual(result["checks"],[])
+        database=[c for c in result["checks"] if c.get("source")=="database"]
+        self.assertFalse(any(c["status"]=="fail" for c in database),database)
+        legacy=[c for c in database if c.get("incomplete_standard")]
+        self.assertEqual(len(legacy),1)
+        self.assertEqual(legacy[0]["status"],"review")
+        self.assertEqual(set(legacy[0]["source_line_ids"]),{3,5,6,8,10,11,12,13,14,15,16,17,18,19})
+        for expected in ("熱量 68.5大卡 57.3大卡","蛋白質 0.2公克 0.2公克","脂肪 0.1公克 0.1公克"):
+            self.assertEqual(next(c for c in database if c["expected"]==expected)["status"],"pass")
         augment(result,{"lines":lines})
-        self.assertTrue(all(row["nutrition_display_only"] for row in result["display_rows"]))
-        self.assertEqual(result["status"],"review")
+        self.assertEqual(sum(c.get("incomplete_standard",False) for c in result["checks"]),1)
         self.assertEqual(source,before_source);self.assertEqual(lines,before_lines)
 
-    def test_full_row_numeric_and_label_errors_are_not_counted(self):
+    def test_full_row_numeric_and_label_errors_still_fail(self):
         lines=observed();source=standard([row["text"] for row in lines])
         for wrong in ("脂肪 0.2公克 0.1公克","脂坊 0.1公克 0.1公克"):
             changed=deepcopy(lines);changed[5]["text"]=wrong
             result=evaluate_source(changed,source,base_date="2026-11-16")
-            self.assertEqual(result["checks"],[])
+            check=next(c for c in result["checks"] if c.get("expected")=="脂肪 0.1公克 0.1公克")
+            self.assertEqual(check["status"],"fail",check)
+        self.assertFalse(any(c.get("incomplete_standard") for c in result["checks"]))
 
     def test_compatibility_is_limited_to_manual_nutrition_context(self):
         lines=observed()

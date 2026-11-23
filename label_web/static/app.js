@@ -1393,8 +1393,8 @@ function buildResultRows(checks, ocrLines) {
   checks.forEach(check => (check.source_lines || []).forEach(line => sources.set(line.id, {...sources.get(line.id),...line})));
   for (const line of sources.values()) rows.set(`line-${line.id}`, {id:`line-${line.id}`,status:"read",text:line.display_text ?? line.text,checks:[],line_ids:[line.id],source_lines:[line]});
   checks.forEach((check, index) => {
-    if(isNutritionCheck(check))return;
-    const ids = (check.line_ids || []).filter(id => sources.has(id));
+    if(isNutritionCalculation(check))return;
+    const ids = check.incomplete_standard ? [] : (check.line_ids || []).filter(id => sources.has(id));
     const targets = ids.length ? ids.map(id => rows.get(`line-${id}`)) : [{id:`check-${index}`,status:"read",text:check.display_actual ?? check.display_text ?? check.actual,checks:[],line_ids:[]}];
     for (const row of targets) {
       row.checks.push(check);
@@ -1410,8 +1410,8 @@ function buildResultRows(checks, ocrLines) {
   }
   return [...rows.values()].sort((a,b) => rank[a.status] - rank[b.status]);
 }
-function isNutritionCheck(check){
-  return check?.incomplete_standard===true || /^(?:source_)?nutrition(?:_|$)/.test(check?.key || "");
+function isNutritionCalculation(check){
+  return (check?.source==="logic" || !check?.source) && /^nutrition_/.test(check?.key || "");
 }
 function groupedResultRows(rows,displayRows){
   if(!Array.isArray(displayRows) || !displayRows.length)return rows;
@@ -1421,7 +1421,7 @@ function groupedResultRows(rows,displayRows){
     const ids=Array.isArray(display?.source_line_ids) ? [...new Set(display.source_line_ids)] : [];
     if(!ids.length || !display.text || ids.some(id=>!byId.has(id) || used.has(id)))continue;
     const parts=[...new Set(ids.map(id=>byId.get(id)))],checks=[...new Set(parts.flatMap(row=>row.checks))],status=parts.reduce((value,row)=>rank[row.status]<rank[value] ? row.status : value,"pass");
-    grouped.push({id:`display-${index}`,status,text:display.display_text || display.text,row_type:display.row_type,nutrition_display_only:display.nutrition_display_only,box:display.box,checks,line_ids:ids,source_lines:parts.flatMap(row=>row.source_lines || []),partialPass:status==="read" && parts.some(row=>row.status==="pass" || row.partialPass)});ids.forEach(id=>used.add(id));
+    grouped.push({id:`display-${index}`,status,text:display.display_text || display.text,row_type:display.row_type,nutrition_text:display.nutrition_text ?? display.nutrition_display_only,box:display.box,checks,line_ids:ids,source_lines:parts.flatMap(row=>row.source_lines || []),partialPass:status==="read" && parts.some(row=>row.status==="pass" || row.partialPass)});ids.forEach(id=>used.add(id));
   }
   grouped.push(...rows.filter(row=>!row.line_ids.length || !row.line_ids.some(id=>used.has(id))));
   return grouped.sort((a,b)=>rank[a.status]-rank[b.status]);
@@ -1457,7 +1457,7 @@ function resultLine(item) {
   const content = element("div", "scan-line-content");
   const text = item.text || `${item.label || "內容"}：未辨識到`;
   content.append(element("p", "scan-line-text", item.label && item.text ? `${item.label}：${text}` : text));
-  if (item.status === "read" && !item.nutrition_display_only) content.append(element("small", "line-note", item.partialPass ? "部分內容已核對，其餘文字尚無比對依據" : "僅辨識，尚無比對依據"));
+  if (item.status === "read") content.append(element("small", "line-note", item.partialPass ? "部分內容已核對，其餘文字尚無比對依據" : "僅辨識，尚無比對依據"));
   const reasons = [...new Set(item.checks.filter(check => check.status === item.status).map(check => check.reason).filter(Boolean))];
   if(item.status==="review" && hasLocalRetryDifference(item))reasons.unshift("局部重讀結果不同，請對照原圖。");
   if (expandable && reasons.length) content.append(element("p", "line-reason", reasons[0]));
@@ -1714,31 +1714,20 @@ function barcodeOnlyEvidence(line,result,checks){
   return values.some(value=>value===observed || (/^[0-9\s]{8,}$/.test(observed) && /^[0-9\s]{8,}$/.test(value) && observed.replace(/\s/g,"")===value.replace(/\s/g,"")));
 }
 function buildResultSections(inspection,result,ocr){
-  const projected=result.nutrition_policy==="excluded-v1";
-  const allChecks=result.checks || [],dateChecks=allChecks.filter(dateResultCheck),barcodeChecks=allChecks.filter(barcodeResultCheck);
-  const contentChecks=allChecks.filter(check=>!dateResultCheck(check) && !barcodeResultCheck(check) && !isNutritionCheck(check) && !["photo_scope","source_identity_conflict"].includes(check.key));
+  const allChecks=result.checks || [],checks=allChecks.filter(check=>!isNutritionCalculation(check));
+  const dateChecks=checks.filter(dateResultCheck),barcodeChecks=checks.filter(barcodeResultCheck);
+  const textChecks=checks.filter(check=>!dateResultCheck(check) && !barcodeResultCheck(check) && !["photo_scope","source_identity_conflict"].includes(check.key));
   const lines=(ocr.lines || []).filter(line=>!dateOnlyEvidence(line,result) && !barcodeOnlyEvidence(line,result,barcodeChecks));
-  const observations=groupedResultRows(buildResultRows(contentChecks,lines),result.display_rows);
-  const compact=observations.map(row=>String(row.text || "").replace(/\s+/g,""));
+  const rows=groupedResultRows(buildResultRows(textChecks,lines),result.display_rows);
+  const compact=rows.map(row=>String(row.text || "").replace(/\s+/g,""));
   const hasTable=compact.some(nutritionHeader) || compact.filter(fullNutrientRow).length>=2;
-  const content=[],nutrition=[],readingIds=new Set(),missingNutrition=new Set();
-  for(const row of observations){
-    // New scans and projected history carry the server's row classification.
-    // Older responses may have only the OCR text and grouped row type.
-    const fallbackText=row.text || row.checks.find(check=>check.expected)?.expected;
-    const readingOnly=row.nutrition_display_only ?? (classifyTextSection({...row,text:fallbackText},hasTable)==="nutrition" || (hasTable && row.row_type==="nutrition_values"));
-    if(!readingOnly){content.push(row);continue;}
-    row.line_ids.forEach(id=>readingIds.add(id));
-    // A retained check may compare a required non-nutrition reference with the wrong OCR row.
-    if(projected && row.checks.some(check=>["fail","review"].includes(check.status)))content.push({...row,id:row.id+"-comparison"});
-    if(row.text)nutrition.push({...row,status:"read",partialPass:false,nutrition_display_only:true,checks:[]});
-    if(!row.line_ids.length)row.checks.forEach(check=>missingNutrition.add(check));
+  const content=[],nutrition=[];
+  for(const row of rows){
+    const referenceRow=row.checks.some(check=>check.incomplete_standard || /^(?:source_)?nutrition(?:_|$)/.test(check.key || ""));
+    const comparisonText=row.text || row.checks.find(check=>check.expected)?.expected;
+    const inNutrition=referenceRow || (row.nutrition_text ?? (classifyTextSection({...row,text:comparisonText},hasTable)==="nutrition" || (hasTable && row.row_type==="nutrition_values")));
+    (inNutrition ? nutrition : content).push(row);
   }
-  const checks=projected ? allChecks : allChecks.filter(check=>{
-    if(isNutritionCheck(check) || missingNutrition.has(check))return false;
-    if(!contentChecks.includes(check))return true;
-    return !check.line_ids?.length || !check.line_ids.every(id=>readingIds.has(id));
-  });
   let assessed=result;
   if(checks.length!==allChecks.length || (!checks.length && nutrition.length && result.status==="pass")){
     const counts={fail:0,review:0,read:0,pass:0};
@@ -1746,7 +1735,7 @@ function buildResultSections(inspection,result,ocr){
     const status=counts.fail ? "fail" : counts.review || counts.read || !counts.pass ? "review" : "pass";
     assessed={...result,checks,counts,status};
   }
-  return {content,nutrition,dateChecks,barcodeChecks,rows:content,hasTable:hasTable || nutrition.length>0,assessed};
+  return {content,nutrition,dateChecks,barcodeChecks,rows,hasTable:hasTable || nutrition.length>0,assessed};
 }
 function resultPhotoBounds(inspection,row,image){
   const width=image?.naturalWidth || Number(inspection.image?.width),height=image?.naturalHeight || Number(inspection.image?.height);
@@ -2038,39 +2027,33 @@ function appendRowCorrection(actions,row,inspection){
   const menu=element("details","line-correction-options"),summary=element("summary","button primary","訂正辨識");summary.setAttribute("aria-label","選擇要訂正的原始文字片段");menu.append(summary,element("p","help","選擇讀錯的片段；整列數值不會寫入單一原始欄位。"));
   for(const id of ids){const line=inspection.ocr.lines.find(item=>item.id===id),button=element("button","button secondary",line.text || "未讀到文字");button.type="button";button.dataset.correctLine=String(id);button.disabled=state.busy;button.onclick=()=>openCorrectionDialog(id);menu.append(button);}actions.append(menu);
 }
-function renderSectionIssue(row,inspection,manual){
+function renderSectionIssue(row,inspection,manual,kind){
   const item=element("article",`section-issue ${row.status}`);item.dataset.lineId=row.id;
   if((row.line_ids || []).length)item.append(resultPhotoButton(inspection,row));
-  const copy=element("div","section-issue-copy");copy.append(element("strong","issue-status",row.status==="fail" ? "✕ 與依據有差異" : "? 辨識或內容需確認"),element("p","issue-observed",row.text ? `讀到：${row.text}` : row.label || "未辨識到文字"));
-  const expected=[...new Set((row.checks || []).filter(check=>!dateResultCheck(check) && !isNutritionCheck(check) && check.expected).map(check=>check.display_expected || check.expected))];if(expected.length)copy.append(element("p","issue-expected",`標準：${expected.join("；")}`));
+  const copy=element("div","section-issue-copy");copy.append(element("strong","issue-status",row.status==="fail" ? "✕ 與依據有差異" : "? 辨識或內容需確認"),element("p","issue-observed",row.text ? `讀到：${row.text}` : "讀到：未辨識到文字"));
+  const expected=[...new Set((row.checks || []).filter(check=>!dateResultCheck(check) && !isNutritionCalculation(check) && check.expected).map(check=>check.display_expected || check.expected))];if(expected.length || kind==="nutrition")copy.append(element("p","issue-expected",`標準：${expected.join("；") || "未提供可比對的標準文字"}`));
   const reasons=[...new Set((row.checks || []).filter(check=>["fail","review"].includes(check.status)).map(check=>check.reason).filter(Boolean))];if(reasons.length)copy.append(element("p","check-reason",reasons[0]));
   const actions=element("div","section-row-actions");appendRowCorrection(actions,row,inspection);copy.append(actions);
   const more=element("details","section-evidence");more.append(element("summary","","查看判定依據與原文"));const detail=resultLine({...row,originalLines:manual ? inspection.ocr.lines : null}).querySelector(".scan-line-detail");if(detail)more.append(detail);if(reasons.length>1)more.append(element("p","help",reasons.slice(1).join(" ")));copy.append(more);item.append(copy);return item;
 }
-function renderNutritionRows(rows,inspection,manual,area){
-  if(!rows.length)return;
-  const section=element("section","result-zone result-zone-nutrition read");section.id="result-zone-nutrition";
-  const heading=element("div","result-zone-heading");heading.append(element("h3","","營養標示"),element("p","section-status-summary",`僅供閱讀 · ${rows.length} 行`));section.append(heading);
-  const details=element("details","section-normal-text");details.append(element("summary","","查看營養標示原文"));
-  renderResultLines(rows,details,inspection,manual,{id:"nutrition-normal-lines",standardTools:false});
-  section.append(element("p","section-text-preview",rows.slice(0,2).map(row=>row.text).join(" · ")),details);area.append(section);
-}
-function renderResultZone(rows,inspection,manual,area){
-  const status=resultRowStatus(rows),section=element("section",`result-zone result-zone-content ${status}`);section.id="result-zone-content";
-  const heading=element("div","result-zone-heading");heading.append(element("h3","","標籤內容"));
+function renderResultZone(kind,rows,inspection,manual,area){
+  const nutrition=kind==="nutrition";
+  if(nutrition && !rows.length)return;
+  const status=resultRowStatus(rows),section=element("section",`result-zone result-zone-${kind} ${status}`);section.id=`result-zone-${kind}`;
+  const heading=element("div","result-zone-heading");heading.append(element("h3","",nutrition ? "營養標示" : "標籤內容"));
   const counts={pass:0,fail:0,review:0,read:0};rows.forEach(row=>counts[row.status]++);
   const phrases=[];if(counts.fail)phrases.push(`✕ ${counts.fail} 處差異`);if(counts.review)phrases.push(`? ${counts.review} 處需確認`);if(counts.pass)phrases.push(`✓ ${counts.pass} 行相符`);if(counts.read)phrases.push(`${counts.read} 行僅辨識`);
   heading.append(element("p","section-status-summary",phrases.join(" · ") || "尚無可核對文字"));section.append(heading);
-  const problems=rows.filter(row=>["fail","review"].includes(row.status));problems.forEach(row=>section.append(renderSectionIssue(row,inspection,manual)));
+  const problems=rows.filter(row=>["fail","review"].includes(row.status));problems.forEach(row=>section.append(renderSectionIssue(row,inspection,manual,kind)));
   const remaining=rows.filter(row=>!["fail","review"].includes(row.status));
-  if(remaining.length){const normal=element("details","section-normal-text");normal.append(element("summary","",`查看${counts.pass && !counts.read ? "已核對相符" : "其他已辨識"}文字 · ${remaining.length} 行`));renderResultLines(remaining,normal,inspection,manual,{id:"content-normal-lines",standardTools:false});section.append(normal);if(!problems.length)section.append(element("p","section-text-preview",remaining.slice(0,2).map(row=>row.text).join(" · ")));}
+  if(remaining.length){const normal=element("details","section-normal-text");normal.open=nutrition;normal.append(element("summary","",`查看${counts.pass && !counts.read ? "已核對相符" : "其他已辨識"}文字 · ${remaining.length} 行`));renderResultLines(remaining,normal,inspection,manual,{id:`${kind}-normal-lines`,standardTools:false});section.append(normal);if(!nutrition && !problems.length)section.append(element("p","section-text-preview",remaining.slice(0,2).map(row=>row.text).join(" · ")));}
   if(!rows.length)section.append(element("p","help","沒有可顯示的標籤內容，請確認照片與標籤範圍。"));area.append(section);
 }
 function renderInspection(inspection) {
   state.resultRenderEpoch=(state.resultRenderEpoch || 0)+1;
   const area = $("#result-area"); area.replaceChildren(); area.hidden = false; $("#result-placeholder").hidden = true;
   const manual=!!(state.manualView && inspection.manual_revision), originalResult=manual ? inspection.manual_revision.result : inspection.result;
-  const ocr=manual ? inspection.manual_revision.ocr : inspection.ocr,model=buildResultSections(inspection,originalResult,ocr),result=model.assessed,visible={...inspection,result,ocr},rows=model.content,coverage=resultCoverage(visible,result,rows), header = element("div", `scan-result-header ${coverage.status}`);
+  const ocr=manual ? inspection.manual_revision.ocr : inspection.ocr,model=buildResultSections(inspection,originalResult,ocr),result=model.assessed,visible={...inspection,result,ocr},rows=model.rows,coverage=resultCoverage(visible,result,rows), header = element("div", `scan-result-header ${coverage.status}`);
   header.append(element("h2", "", manual ? `人工訂正後 · 第 ${currentRevision(inspection)} 版` : inspection.manual_revision ? "原始辨識結果" : "掃描結果"), element("p", "", when(inspection.created_at)));
   const counts = element("div", "result-counts");
   for (const [status,label] of [["fail","✕ 文字差異"],["review","? 文字需確認"],["read","· 文字尚無依據"]]) {
@@ -2092,7 +2075,7 @@ function renderInspection(inspection) {
   renderResultHero(visible,result,area);
   const logicCards=element("div","result-quick-checks");if(coverage.matched && model.dateChecks.length)renderUnmatchedDates(inspection,result,logicCards,true);renderBarcodeCard(model,result,logicCards,inspection);if(logicCards.children.length)area.append(logicCards);
   renderPendingStandardOffer(inspection,result,area);
-  const textDetails=element("div","result-text-details");textDetails.id="result-text-details";const sections=element("div","result-sections");sections.id="result-lines";renderResultZone(model.content,inspection,manual,sections);renderNutritionRows(model.nutrition,inspection,manual,sections);textDetails.append(sections);area.append(textDetails);
+  const textDetails=element("div","result-text-details");textDetails.id="result-text-details";const sections=element("div","result-sections");sections.id="result-lines";renderResultZone("content",model.content,inspection,manual,sections);renderResultZone("nutrition",model.nutrition,inspection,manual,sections);textDetails.append(sections);area.append(textDetails);
   const other=element("details","result-other-operations");other.id="result-other-operations";other.open=!!state.resultDirty;other.append(element("summary","","其他操作與原始資料"));renderSourceMatch(result.source_match,other,result.inputs?.base_date);renderRecheckControls(other);
   renderLogicChecks(result,other);renderRecognitionInfo(inspection,result,rows,other);
   if (result.notes?.length) { const notes = element("div", "result-notes");notes.append(element("h3","","本次判定說明")); result.notes.forEach(note => notes.append(element("p", "", note))); other.append(notes); }

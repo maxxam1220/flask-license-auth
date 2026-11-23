@@ -22,14 +22,14 @@ class HistoryNutritionTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.headers = {"X-CSRF-Token":self.client.get("/api/session").json["csrf"]}
         self.source = {"image_id":"", "name":"蜜香木瓜切片", "version":1,
-                       "source":{"lines":[{"id":3, "text":"鈉 50 毫克"}]}}
+                       "source":{"lines":[{"id":3, "text":"鈉 9 毫克"}]}}
         self.ocr = {"lines":[{"id":0, "text":"品名：蜜香木瓜切片", "box":[], "score":1},
                              {"id":1, "text":"鈉 9 毫克", "box":[], "score":1}]}
         self.old = {"checks":[{"key":"product", "status":"pass", "line_ids":[0]},
                               {"key":"nutrition_sodium", "status":"fail", "line_ids":[1]},
-                              {"key":"source_line_3", "status":"review", "source_line_ids":[3], "line_ids":[]}],
+                              {"key":"source_nutrition_3", "status":"pass", "source_line_ids":[3], "line_ids":[1]}],
                     "fields":{"product":{"value":"蜜香木瓜切片"}}, "status":"fail",
-                    "counts":{"pass":1,"fail":1,"review":1,"read":0}}
+                    "counts":{"pass":2,"fail":1,"review":0,"read":0}}
         with self.engine.begin() as conn:
             conn.execute(insert(db.images).values(id="photo", created_at=db.now()))
 
@@ -57,8 +57,8 @@ class HistoryNutritionTests(unittest.TestCase):
                 change={}, patches=[], result=self.old, ocr=self.ocr, status="fail", reviewer="A", note="", created_at=db.now()))
         original = self.get("/api/inspections/original")
         self.assertEqual(original["status"], "pass")
-        self.assertEqual(original["result"]["counts"], {"pass":1, "fail":0, "review":0, "read":0})
-        self.assertEqual([item["key"] for item in original["result"]["checks"]], ["product"])
+        self.assertEqual(original["result"]["counts"], {"pass":2, "fail":0, "review":0, "read":0})
+        self.assertEqual(original["result"]["checks"], [self.old["checks"][0], self.old["checks"][2]])
         self.assertEqual(original["manual_revision"]["status"], "pass")
         self.assertEqual(original["manual_revision"]["result"]["checks"], original["result"]["checks"])
         self.assertEqual(original["correction_history"][0]["status"], "pass")
@@ -98,3 +98,60 @@ class HistoryNutritionTests(unittest.TestCase):
             result = self.get("/api/inspections?status=pass&page=2")
             self.assertEqual(result["day_counts"]["2026-11-23"]["records"],28)
             self.assertEqual(project.call_count,1)
+
+    def test_pre_policy_text_mismatch_keeps_its_original_judgment_and_reason(self):
+        old = deepcopy(self.old)
+        literal = dict(old["checks"][2], key="source_text_3", source="database", status="fail",
+                       expected="鈉 9 毫克", actual="鈉 19 毫克", reason="原始逐字比對發現不同")
+        old["checks"][2] = literal
+        old["counts"].update({"fail":2, "pass":1})
+        self.seed("saved-text", old)
+        shown = self.get("/api/inspections/saved-text")
+        self.assertEqual(shown["status"], "fail")
+        self.assertEqual(shown["result"]["checks"], [old["checks"][0], literal])
+        self.assertEqual(shown["result"]["counts"]["fail"], 1)
+        self.assertEqual([row["id"] for row in self.get("/api/inspections?status=fail")["items"]], ["saved-text"])
+
+    def test_excluded_revision_restores_only_omitted_text_from_its_own_snapshot(self):
+        from test_source_validation import line, source
+
+        correct = "熱量 135大卡 270大卡"
+        wrong = "熱量 100大卡 270大卡"
+        labels = ("品名：蜜香木瓜切片", "營養標示", "每一份量 50 公克", correct)
+        self.source.update(mode="system_label", source=source(*labels))
+        self.ocr = {"lines":[line(i, wrong if i == 3 else text, score=1) for i, text in enumerate(labels)]}
+        old_check = {"key":"preserved_product","line_ids":[0],"status":"pass","reason":"當時的核對依據"}
+        old = {"nutrition_policy":"excluded-v1", "fields":{"product":{"value":"當時的品名"}},
+               "inputs":{"base_date":"2025-08-19"},"checks":[old_check],"status":"pass",
+               "counts":{"pass":1,"fail":0,"review":0,"read":0}}
+        self.seed("hidden", old)
+        corrected = deepcopy(self.ocr)
+        corrected["lines"][3].update(text=correct, human_verified=True, original_ocr_text=wrong)
+        with self.engine.begin() as conn:
+            for revision, kind in ((1,"label_misprint"), (2,"ocr_misread")):
+                patch_data = {"line_id":3,"kind":kind,"text":correct,"reviewer":"A","note":"人工確認"}
+                corrected["lines"][3]["human_correction"] = patch_data
+                conn.execute(insert(db.corrections).values(id=f"revision-{revision}", inspection_id="hidden",
+                    revision=revision, change={}, patches=[patch_data], result=old, ocr=corrected, status="pass",
+                    reviewer="A", note="人工確認", created_at=db.now()))
+            conn.execute(insert(history_status.summaries).values(policy="excluded-v1", source_table=db.inspections.name,
+                row_id="hidden", status="pass", counts=old["counts"]))
+        shown = self.get("/api/inspections/hidden")
+        self.assertEqual(shown["result"]["inputs"], old["inputs"])
+        self.assertEqual(shown["result"]["fields"]["product"], old["fields"]["product"])
+        self.assertIn(old_check, shown["result"]["checks"])
+        self.assertEqual(shown["status"], "fail")
+        self.assertTrue(any(check.get("expected")==correct and check.get("actual")==wrong and check["status"]=="fail"
+                            for check in shown["result"]["checks"]))
+        self.assertEqual(shown["manual_revision"]["status"],"pass")
+        self.assertTrue(any(check.get("expected")==correct and check.get("actual")==correct and check["status"]=="pass"
+                            for check in shown["manual_revision"]["result"]["checks"]))
+        self.assertEqual([item["status"] for item in shown["correction_history"]], ["pass","fail"])
+        items = self.get("/api/inspections?status=fail")["items"]
+        self.assertEqual([(item["id"],item["status"],item["manual_status"]) for item in items],[("hidden","fail","pass")])
+        self.assertEqual(self.get("/api/inspections?status=pass")["items"],[])
+        preview = self.client.post("/api/admin/history/preview", json={"filters":{"status":"fail"}}, headers=self.headers)
+        self.assertEqual(preview.json["items"][0]["id"],"hidden")
+        with self.engine.connect() as conn:
+            stored = conn.execute(select(db.inspections.c.result,db.inspections.c.ocr,db.inspections.c.template_snapshot)).one()
+            self.assertEqual((stored.result,stored.ocr,stored.template_snapshot),(old,self.ocr,self.source))

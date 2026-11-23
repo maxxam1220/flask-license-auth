@@ -35,7 +35,7 @@ def nutrition_label(text):
 
 
 def nutrition_line_ids(lines, grouped=None):
-    """Locate display-only printed nutrition, including old unpositioned table cells."""
+    """Locate printed nutrition rows, including old unpositioned table cells."""
     texts = [_normal(line.get("text")) for line in lines]
     headers = [bool(NUTRITION_HEADER.fullmatch(text)) for text in texts]
     named = [nutrition_label(text) for text in texts]
