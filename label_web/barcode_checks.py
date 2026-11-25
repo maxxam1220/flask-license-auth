@@ -1,5 +1,6 @@
 """Decode printed bars independently; checksum validity is not product identity."""
 import re
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 
 from PIL import Image
@@ -12,8 +13,12 @@ def decode_barcodes(path):
     except ImportError:
         return {"state":"unavailable", "items":[]}
     try:
-        with Image.open(path) as photo:
-            decoded = zxingcpp.read_barcodes(photo.convert("RGB"))
+        with (nullcontext(path) if isinstance(path, Image.Image) else Image.open(path)) as photo:
+            if photo.mode == "RGB":
+                decoded = zxingcpp.read_barcodes(photo)
+            else:
+                with photo.convert("RGB") as rgb:
+                    decoded = zxingcpp.read_barcodes(rgb)
         items=[]
         for code in decoded[:12]:
             if not code.valid:

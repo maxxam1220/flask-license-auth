@@ -13,6 +13,7 @@ function setup(){t.applySession(admin);t.state.inspection=null;t.state.inspectSo
 function api(handler){calls=[];context.capture=async(url,options)=>{calls.push({url,options,body:options?.body instanceof context.FormData ? Object.fromEntries(options.body.entries()) : options?.body});if(handler)return handler(url,options);if(url.startsWith("/api/inspections/"))return plain(records[url.split("/").pop()]);throw new Error("Unexpected request: "+url);};vm.runInContext("api=async(url,options)=>capture(url,options)",context);}
 async function scan(target,file={name:target+".jpg",size:1000}){api((url)=>url==="/api/jobs" ? {id:target} : plain(records[url.split("/").pop()]));await pick("upload")(file,"inspection");return calls.find(call=>call.url==="/api/jobs").body;}
 async function main(){
+ const poll=pick("pollJob");
  setup();const first=await scan("papaya"),second=await scan("apple");
  check("sequential papaya then apple scans both use automatic source matching",()=>{assert.equal(first.source_code,"");assert.equal(second.source_code,"");assert.equal(second.template_id,"");assert.equal(t.state.inspectSource.code,apple.code);assert.equal(t.state.nextScanChoice,null);assert.equal($("#next-scan-status").textContent,"下一張：自動對應");});
  setup();api();await pick("loadInspection")("old");const fromHistory=await scan("apple");
@@ -49,6 +50,26 @@ async function main(){
  check("independent OCR issues still appear when a source conflict also exists",()=>{const typo={key:"cloud_word_0",status:"review",reason:"文字不清楚",actual:textLine.text,line_ids:[0]},rows=pick("buildResultRows")([identityCheck,typo],[textLine]);assert.equal(rows[0].status,"review");assert.equal(rows[0].checks.length,1);assert.equal(rows[0].checks[0].key,"cloud_word_0");});
  api((url,options)=>options?.method==="POST" ? {inspection_id:"apple"} : plain(records.apple));await area.querySelector("button").onclick();
  check("source-conflict action rechecks automatically without another paid recognition",()=>{assert.match(calls[0].url,/\/recheck$/);assert.equal(calls[0].body.source_code,"");assert.equal("template_id" in calls[0].body,false);assert.ok(!calls.some(call=>/jobs|recognize/.test(call.url)));});
+ setup();vm.runInContext("loadScanConfig=async()=>{};loadFailedJobs=async()=>{}",context);
+ const done={id:"job",state:"done",result:{inspection_id:"papaya"}},statusUrl="/api/jobs/job?include=inspection";
+ for(const embedded of [records.papaya,undefined,records.apple]){
+   api(url=>url===statusUrl ? {...done,inspection:embedded} : plain(records.papaya));
+   await poll("job","recognition");
+   check(embedded===records.papaya ? "completed scan displays its matching inspection in one response" : `missing or different embedded inspection (${embedded?.id || "legacy"}) reads the exact job result`,()=>{
+     assert.deepEqual(calls.map(call=>call.url),embedded===records.papaya ? [statusUrl] : [statusUrl,"/api/inspections/papaya"]);
+     assert.equal(t.state.inspection.id,"papaya");assert.equal(t.state.historyNutrition,null);
+   });
+ }
+ api(url=>{if(url===statusUrl)return done;throw new Error("offline");});
+ context.sessionStorage.setItem("labelcheck-pending","job");
+ await assert.rejects(poll("job","recognition"),/offline/);
+ check("a failed result download retains its job for refresh",()=>assert.equal(context.sessionStorage.getItem("labelcheck-pending"),"job"));
+ api();await pick("loadInspection")("old",true,true);
+ check("opening a history entry resets its nutrition disclosure",()=>assert.deepEqual(plain(t.state.historyNutrition),{inspectionId:"old",open:false}));
+ t.state.historyNutrition.open=true;await pick("loadInspection")("old",false);
+ check("refreshing the current history revision keeps its open panel",()=>assert.equal(t.state.historyNutrition.open,true));
+ await pick("loadInspection")("old",true,true);
+ check("returning through history collapses the same record again",()=>assert.equal(t.state.historyNutrition.open,false));
  t.state.nextScanChoice={source:papaya,templateId:"",name:"木瓜",pinned:true};t.applySession({...admin,authenticated:false,role:"anonymous"});check("logout removes any pinned next-scan selection",()=>assert.equal(t.state.nextScanChoice,null));
  console.log(`${count} scan-selection frontend checks passed`);
 }

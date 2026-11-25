@@ -6,6 +6,9 @@ import database as db
 import inspection_evidence
 
 
+SUMMARY_POLICY = inspection_evidence.NUTRITION_POLICY + "/issues-v1"
+
+
 summaries = Table("labelcheck_history_status", db.metadata,
     Column("policy", String(40), primary_key=True),
     Column("source_table", String(48), primary_key=True),
@@ -47,7 +50,7 @@ def _recover_checks(result, ocr, snapshot, patches):
 
 
 def _entry(table):
-    return (summaries.c.policy == inspection_evidence.NUTRITION_POLICY,
+    return (summaries.c.policy == SUMMARY_POLICY,
             summaries.c.source_table == table.name, summaries.c.row_id == table.c.id)
 
 
@@ -58,8 +61,33 @@ def status_column(table):
     return func.coalesce(cached, table.c.status)
 
 
-def counts_column(table):
+def summary_column(table):
     return select(summaries.c.counts).where(*_entry(table)).correlate(table).scalar_subquery()
+
+
+def result_summary(result):
+    """Store the small list-view payload alongside the verdict in the versioned index."""
+    checks = [check for check in result.get("checks") or [] if isinstance(check, dict)]
+    matched_numbers = set()
+    for check in checks:
+        if check.get("key") == "web_barcode_rule" and check.get("source") == "database" and check.get("status") == "pass":
+            digits = "".join(str(check.get("actual") or "").split())
+            if digits == "".join(str(check.get("expected") or "").split()):
+                matched_numbers.add(digits)
+    candidates = [check for check in checks if check.get("status") in ("fail", "review")]
+    def priority(check):
+        key = str(check.get("key") or "")
+        rule = "barcode" in key or check.get("source") == "date" or key in {"manufacture", "expiry", "arrival", "keep_days"}
+        return (check["status"] != "fail", not rule)
+    reasons = []
+    for check in sorted(candidates, key=priority)[:3]:
+        issue = {key: check.get(key, "") for key in ("status", "key", "label", "reason")}
+        if issue["key"] == "barcode_unread":
+            number = "".join(str(check.get("actual") or "").split())
+            if number.isascii() and number.isdigit() and number in matched_numbers:
+                issue["printed_match"] = True
+        reasons.append(issue)
+    return {"counts": result.get("counts", {}), "issue_reasons": reasons}
 
 
 def ensure_index(engine, identifier=None):
@@ -89,9 +117,9 @@ def ensure_index(engine, identifier=None):
             values = []
             for row in rows:
                 result = project(row["result"], row["ocr"], row["template_snapshot"], row.get("patches") or ())
-                values.append(dict(policy=inspection_evidence.NUTRITION_POLICY, source_table=table.name,
+                values.append(dict(policy=SUMMARY_POLICY, source_table=table.name,
                                    row_id=row["id"], status=result.get("status", row["status"]),
-                                   counts=result.get("counts", {})))
+                                   counts=result_summary(result)))
             with engine.begin() as conn:
                 conn.execute(dialect.insert(summaries).on_conflict_do_nothing(), values)
             after = rows[-1]["id"]

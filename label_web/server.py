@@ -778,6 +778,21 @@ def create_app(config=None, ocr=None):
 
     @app.get("/api/jobs/<identifier>")
     def job_status(identifier):
+        if request.args.get("include") == "inspection":
+            job = db.jobs.c
+            with engine.connect() as conn:
+                progress = conn.execute(select(job.kind, job.state, job.result["inspection_id"].as_string().label("inspection_id"))
+                                        .where(job.id == identifier)).mappings().first()
+            if progress is None:
+                abort(404, description="找不到這筆資料。")
+            if progress["kind"] in {"inspection", "recognition"}:
+                summary = dict(id=identifier, kind=progress["kind"], state=progress["state"])
+                if progress["state"] in {"pending", "running"}:
+                    return jsonify(summary)
+                if progress["state"] == "done" and progress["inspection_id"]:
+                    inspection_id = progress["inspection_id"]
+                    details = inspection_payload(get_one(db.inspections, inspection_id))
+                    return jsonify(**summary, result={"inspection_id":inspection_id}, inspection=details)
         row = get_one(db.jobs, identifier)
         if row["kind"] == "reference":
             access.require_admin()
@@ -824,7 +839,7 @@ def create_app(config=None, ocr=None):
         history_status.ensure_index(engine)
         verdict = history_status.status_column(db.inspections)
         query = select(db.inspections.c.id, db.inspections.c.image_id, verdict.label("status"),
-                       history_status.counts_column(db.inspections).label("display_counts"),
+                       history_status.summary_column(db.inspections).label("display_summary"),
                        db.inspections.c.template_snapshot, db.inspections.c.created_at, db.inspections.c.result,
                        db.inspections.c.ocr).where(history_cleanup.active_filter())
         status = request.args.get("status")
@@ -837,12 +852,13 @@ def create_app(config=None, ocr=None):
             item_days, day_counts, today = history_cleanup.day_summary(conn, rows[:24], status)
         return jsonify(items=[dict(id=x["id"], status=x["status"], name=x["template_snapshot"]["name"],
             version=x["template_snapshot"]["version"], created_at=x["created_at"], day=item_days[x["id"]], image=image_payload(x["image_id"]),
-            counts=x["display_counts"] if x["display_counts"] is not None else x["result"].get("counts",{}),
+            **(x["display_summary"] or history_status.result_summary(x["result"])),
             base_date=x["result"].get("inputs",{}).get("base_date",""),
             product=product_name(x),
             manual_revision=manual.get(x["id"], {}).get("revision", 0),
             manual_status=manual.get(x["id"], {}).get("status"),
-            manual_counts=manual.get(x["id"], {}).get("counts")) for x in rows[:24]],
+            manual_counts=manual.get(x["id"], {}).get("counts"),
+            manual_issue_reasons=manual.get(x["id"], {}).get("issue_reasons", [])) for x in rows[:24]],
             has_more=len(rows) > 24, page=page, day_counts=day_counts, today=today)
 
     def inspection_payload(original):
@@ -852,13 +868,17 @@ def create_app(config=None, ocr=None):
         row["status"] = row["result"].get("status", row["status"])
         row["image"] = image_payload(row["image_id"])
         row["reference_image"] = image_payload(row["template_snapshot"]["image_id"])
-        history_status.ensure_index(engine, identifier)
         with engine.connect() as conn:
             row["reviews"] = [dict(x) for x in conn.execute(select(db.reviews).where(db.reviews.c.inspection_id == identifier).order_by(db.reviews.c.created_at)).mappings()]
-            row["manual_revision"] = corrections.public_revision(corrections.latest(conn, identifier), row["template_snapshot"])
-            recent = corrections.history(conn, identifier, size=10)
-            row["correction_history"] = recent["items"]
-            row["correction_history_has_more"] = recent["has_more"]
+            latest_revision = corrections.latest(conn, identifier)
+        row["manual_revision"] = corrections.public_revision(latest_revision, row["template_snapshot"])
+        recent = {"items": [], "has_more": False}
+        if latest_revision:
+            history_status.ensure_index(engine, identifier)
+            with engine.connect() as conn:
+                recent = corrections.history(conn, identifier, size=10)
+        row["correction_history"] = recent["items"]
+        row["correction_history_has_more"] = recent["has_more"]
         row["manual_standard_eligibility"] = draft_eligibility(row.get("ocr"),
             (row.get("manual_revision") or {}).get("patches"), row.get("result"))
         return row

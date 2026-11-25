@@ -157,4 +157,38 @@ check("late original image load cannot repaint the next inspection",()=>{
   t.state.resultRenderEpoch=1;t.state.resultPhotoCache=null;draw(canvas(),{image:{url:"/old",width:1000,height:800},ocr:{lines:[]}});
   t.state.resultRenderEpoch=2;draw(canvas(),{image:{url:"/new",width:1000,height:800},ocr:{lines:[]}});images[0].onload();assert.equal(painted.length,0);images[1].onload();assert.equal(painted.length,1);assert.equal(painted[0][0].src,"/new");
 });
+check("the verdict names unread bars separately from proven matching print and unrelated rules",()=>{
+  const unread={key:"barcode_unread",label:"條碼圖形",status:"review",actual:"2834 6654 32931"};
+  const rule={key:"web_barcode_rule",source:"database",status:"pass",expected:"2834665432931",actual:"2834665432931"};
+  const date={key:"date_order",source:"date",status:"fail",label:"日期先後",reason:"有效日早於製造日。"};
+  const s=sample([], [unread,rule,date],{status:"fail",source_match:{status:"matched"}});
+  Object.assign(s.inspection,{reviews:[],created_at:"2026-11-25T01:00:00Z"});
+  t.renderInspection(s.inspection);
+  const header=context.document.querySelector("#result-area").querySelector(".scan-result-header");
+  assert.match(header.querySelector(".count-review").textContent,/1 個檢查點.*條碼圖形未讀到，印字與標準相符。請實際掃碼/);
+  assert.match(header.querySelector(".count-fail").textContent,/日期先後.*有效日早於製造日/);
+  assert.doesNotMatch(pick("checkIssueText")(unread,[{...rule,actual:"1234"}]),/印字與標準相符/);
+  assert.doesNotMatch(pick("checkIssueText")(unread,[{...rule,key:"barcode_checksum_0"}]),/印字與標準相符/);
+});
+check("history uses the reasons from the same revision as the counts",()=>{
+  const original={counts:{fail:0,review:1},issue_reasons:[{status:"review",key:"barcode_unread",printed_match:true}]};
+  assert.match(t.historyProblemSummary(original),/差異 0 項.*待確認 1 個檢查點\n條碼圖形未讀到，印字與標準相符/);
+  const revised={...original,manual_revision:1,manual_counts:{fail:1,review:0},manual_issue_reasons:[{status:"fail",key:"date_order",label:"日期先後",reason:"日期顛倒。"}]};
+  assert.match(t.historyProblemSummary(revised),/差異 1 項.*\n日期先後：日期顛倒/);
+  assert.doesNotMatch(t.historyProblemSummary({...revised,manual_issue_reasons:undefined}),/條碼|日期顛倒/);
+  assert.doesNotMatch(t.historyProblemSummary({...revised,manual_counts:{fail:0,review:0}}),/日期顛倒|條碼/);
+});
+check("history nutrition starts fully collapsed with its mixed verdict visible and opens all rows in one step",()=>{
+  const print=[line(0,"熱量 51大卡"),line(1,"脂肪 0.1公克"),line(2,"蛋白質 0.2公克")];
+  const s=sample(print,print.map((row,index)=>({...sourceCheck(row.id,row.text,["pass","fail","review"][index]),key:`source_nutrition_${index}`})));
+  t.state.historyNutrition={inspectionId:s.inspection.id,open:false};
+  try{
+    const area=new Node();pick("renderResultZone")("nutrition",build(s).nutrition,s.inspection,false,area);
+    const section=area.querySelector(".result-zone-nutrition"),summary=section.children[0];
+    assert.equal(section.tagName,"DETAILS");assert.equal(section.open,false);assert.equal(summary.tagName,"SUMMARY");
+    assert.match(summary.textContent,/營養標示.*1 處差異.*1 處需確認.*1 行相符/);
+    assert.equal(summary.querySelector(".issue-observed"),null);assert.equal(section.querySelector(".section-normal-text"),null);
+    assert.equal(section.querySelectorAll(".section-issue").length,2);assert.ok(section.querySelector(".line-mark"));
+  }finally{t.state.historyNutrition=null;}
+});
 console.log(`PASS ${count} independent result section checks`);

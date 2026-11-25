@@ -1,6 +1,6 @@
 """Conservative label surface detection; keep evidence in the original coordinates."""
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import tempfile
 
@@ -20,10 +20,11 @@ def _surface_candidate(contour, gray, brightness, sx, sy, width, height):
     rw, rh = cv2.minAreaRect(polygon)[1]
     if min(rw, rh) < 50 or max(rw, rh) / min(rw, rh) > 6 or area / max(1, rw * rh) < .78:
         return None
-    interior = np.zeros(gray.shape, np.uint8)
-    cv2.fillConvexPoly(interior, polygon, 255)
-    dark = ((gray < min(135, brightness)) & (interior > 0)).astype(np.uint8)
-    density = float(dark.sum()) / max(1, int((interior > 0).sum()))
+    x, y, w, h = cv2.boundingRect(polygon)
+    interior = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(interior, polygon - np.array([x, y], dtype=polygon.dtype), 255)
+    dark = ((gray[y:y+h, x:x+w] < min(135, brightness)) & (interior > 0)).astype(np.uint8)
+    density = cv2.countNonZero(dark) / max(1, cv2.countNonZero(interior))
     _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     ink_components = sum(1 for stat in stats[1:] if 3 <= stat[4] <= area * .1)
     if not .015 <= density <= .55 or ink_components < 8:
@@ -47,7 +48,13 @@ def detect_sticker(path):
     import numpy as np
     with Image.open(path) as original:
         width, height = original.size
-        thumb = original.convert("RGB")
+        if original.mode == "RGB":
+            # Decode at full resolution before thumbnail(), as convert() did.
+            # JPEG draft downsampling would yield different surface boundaries.
+            original.load()
+            thumb = original
+        else:
+            thumb = original.convert("RGB")
         thumb.thumbnail((960, 960))
         rgb = np.asarray(thumb)
         hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
@@ -110,23 +117,21 @@ def translate_lines(lines, x, y):
 
 
 @contextmanager
-def _masked_region_file(path, region):
-    """Use one transient, polygon-masked crop without altering the source."""
-    with Image.open(path) as image:
-        with image.convert("RGB") as rgb:
-            crop = rgb.crop((region["x"], region["y"],
-                             region["x"]+region["width"], region["y"]+region["height"]))
-    try:
-        with Image.new("L", crop.size) as mask, Image.new("RGB", crop.size, "white") as white:
+def _masked_region(path, region):
+    """Provide the exact full-resolution pixels of the polygon on white."""
+    bounds = (region["x"], region["y"], region["x"]+region["width"], region["y"]+region["height"])
+    with closing(Image.open(path)) as image:
+        if image.mode == "RGB":
+            crop = image.crop(bounds)
+        else:
+            with closing(image.convert("RGB")) as rgb:
+                crop = rgb.crop(bounds)
+    with closing(crop):
+        with closing(Image.new("L", crop.size, 255)) as mask:
             ImageDraw.Draw(mask).polygon(
-                [(p[0]-region["x"], p[1]-region["y"]) for p in region["polygon"]], fill=255)
-            white.paste(crop, mask=mask)
-            with tempfile.TemporaryDirectory(prefix="label-scope-") as folder:
-                target = Path(folder)/"label.png"
-                white.save(target)
-                yield target
-    finally:
-        crop.close()
+                [(p[0]-region["x"], p[1]-region["y"]) for p in region["polygon"]], fill=0)
+            crop.paste("white", (0, 0, *crop.size), mask)
+        yield crop
 
 
 def recognize_scoped(path, recognizer, scope="sticker"):
@@ -150,8 +155,8 @@ def recognize_scoped(path, recognizer, scope="sticker"):
         # ambiguous panels. There is deliberately no second-call fallback.
         region = deepcopy(result["label_region"])
         detection = {"status":"selected", "candidates":[region], "region":region}
-        with _masked_region_file(path, region) as target:
-            codes = decode_barcodes(target)
+        with _masked_region(path, region) as crop:
+            codes = decode_barcodes(crop)
         codes["items"] = translate_lines(codes["items"], region["x"], region["y"])
         result["label_region"] = region
         result["label_scope"] = detection
@@ -164,9 +169,12 @@ def recognize_scoped(path, recognizer, scope="sticker"):
     detection = detect_sticker(path) if scope == "sticker" else {"status":"full", "candidates":[], "region":None}
     region = detection["region"]
     if region:
-        with _masked_region_file(path, region) as target:
+        with tempfile.TemporaryDirectory(prefix="label-scope-") as folder:
+            target = Path(folder)/"label.png"
+            with _masked_region(path, region) as crop:
+                crop.save(target, compress_level=1)
+                codes = decode_barcodes(crop)
             result = recognizer.recognize(target)
-            codes = decode_barcodes(target)
         result["lines"] = translate_lines(result["lines"],region["x"],region["y"])
         codes["items"] = translate_lines(codes["items"],region["x"],region["y"])
         result["label_region"] = region

@@ -57,6 +57,11 @@ class APITests(unittest.TestCase):
         identifier=job["result"]["inspection_id"]
         result=self.client.get("/api/inspections/"+identifier).json
         self.assertEqual(result["status"],"pass")
+        completed = self.client.get(f"/api/jobs/{job['id']}?include=inspection")
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json["inspection"], result)
+        self.assertEqual(completed.json["result"], {"inspection_id":identifier})
+        self.assertIn("ocr", job["result"])
         review=self.client.post(f"/api/inspections/{identifier}/reviews",json={"decision":"confirmed_bad","reviewer":"複核員","note":"人工對照發現問題"},headers=self.headers)
         self.assertEqual(review.status_code,201)
         updated=self.standard(supersedes_id=standard.json["id"])

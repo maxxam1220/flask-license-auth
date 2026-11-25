@@ -3,11 +3,10 @@ import hashlib
 import json
 import re
 import unicodedata
-from copy import deepcopy
 from difflib import SequenceMatcher
 from sqlalchemy import text
-from validation import extract_fields, TEXT_FIELDS, traditional_display
-from source_validation import normalize_text, _kind
+from validation import extract_fields, TEXT_FIELDS
+from source_validation import normalize_text, _kind, _prepared
 import reference_catalog
 import standard_reference
 import manual_reference
@@ -20,8 +19,7 @@ _IDENTIFIER = r"[A-Za-z0-9][A-Za-z0-9._/\-]*"
 
 def _identity_text(value):
     """Normalization locates one source only; it never changes validation evidence."""
-    value = unicodedata.normalize("NFKC", str(value or ""))
-    return re.sub(r"\s+", "", traditional_display(value).replace("臺", "台")).casefold()
+    return _prepared(value).casefold()
 
 
 def _identifiers(value, label, normalize=_identity_text):
@@ -286,7 +284,7 @@ def raw_catalog(engine):
                          "text": set(), "source_kind": "catalog", "barcode_kind":str(row.get("barcode_type") or "").strip(),"catalog_record": row}
     for row in manual_reference.records(engine):
         source = row["snapshot"]
-        catalog[row["code"]] = _manual_catalog_item(source)
+        catalog[row["code"]] = dict(_manual_catalog_item(source), _manual_snapshot=source)
     return catalog
 
 
@@ -320,12 +318,20 @@ def _catalog(engine):
     for code, version in standard_reference.current_versions(engine).items():
         if code not in catalog:
             continue
-        base = raw_draft(engine, code)
+        # The bulk read already includes each current manual/list base. The
+        # selected source is still read afresh by resolve before it is used.
+        item = catalog[code]
+        if "_manual_snapshot" in item:
+            base = item["_manual_snapshot"]
+        elif "revision" in item.get("catalog_record", {}):
+            base = reference_catalog.build_draft(item["catalog_record"])
+        else:
+            base = raw_draft(engine, code)
         if base is None:
             catalog.pop(code, None)
             continue
         source = standard_reference.apply_current(engine, base, version)
-        item = deepcopy(catalog[code])
+        item = dict(item)
         item["name"] = source["name"]
         if source.get("source_kind") == "manual" or source.get("web_text_approved"):
             item = _manual_catalog_item(source)
@@ -378,8 +384,10 @@ def _explicit_conflict(source,reliable,catalog):
     fields=extract_fields(reliable)
     product=fields.get("product",{})
     selected_name=_identity_text(source["name"])
+    normalized_names={code:_identity_text(item["name"]) for code,item in catalog.items()}
     observed=product.get("value","") if not product.get("ambiguous") else ""
-    targets={code for code,item in catalog.items() if observed and _identity_text(item["name"])==_identity_text(observed)}
+    observed_name=_identity_text(observed)
+    targets={code for code,name in normalized_names.items() if observed and name==observed_name}
     name_rows=_name_observations(reliable,fields)
     if observed and not any(_identity_text(row["value"])==_identity_text(observed) for row in name_rows):
         observed="";targets=set()
@@ -387,12 +395,14 @@ def _explicit_conflict(source,reliable,catalog):
         # Short bare names can be deliberately absent from generic field
         # extraction. The same exact known-name evidence used by auto mode is
         # still usable here; never use fuzzy/substrings to override selection.
-        known=[row for row in name_rows if any(_identity_text(item["name"])==_identity_text(row["value"]) for item in catalog.values())]
+        available_names=set(normalized_names.values())
+        known=[row for row in name_rows if _identity_text(row["value"]) in available_names]
         names={_identity_text(row["value"]) for row in known}
         if len(names)==1:
             observed=known[0]["value"]
             product={"line_ids":list(dict.fromkeys(identifier for row in known for identifier in row["line_ids"]))}
-            targets={code for code,item in catalog.items() if _identity_text(item["name"])==_identity_text(observed)}
+            observed_name=_identity_text(observed)
+            targets={code for code,name in normalized_names.items() if name==observed_name}
     evidence=[];candidates=set()
     if targets and _identity_text(observed)!=selected_name:
         candidates=targets
@@ -402,7 +412,7 @@ def _explicit_conflict(source,reliable,catalog):
         # at least two independent contradictions, including SKU or barcode,
         # that affirmatively identify the same different known source.
         selected=_manual_catalog_item(source)
-        peers={code:item for code,item in catalog.items() if code!=source["code"] and _identity_text(item["name"])==selected_name}
+        peers={code:catalog[code] for code,name in normalized_names.items() if code!=source["code"] and name==selected_name}
         for code,item in peers.items():
             proof={}
             for key in ("spec","origin"):

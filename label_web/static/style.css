@@ -705,3 +705,12 @@ footer{font-size:.875rem;color:#61735a;padding:28px 0}.login-panel{max-width:460
 .barcode-rule-manual{margin:16px 0;padding:14px;border:1px solid #d4deca;border-radius:10px;background:#f8faf4;min-width:0}.barcode-manual-observed{font-weight:700;letter-spacing:.04em;overflow-wrap:anywhere}.barcode-manual-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.barcode-rule-dialog select{width:100%;min-width:0;min-height:46px;font-size:1.0625rem}.barcode-rule-manual .check-label{margin-top:16px}.barcode-rule-manual input:not([type=checkbox]){min-height:46px}#barcode-rule-unlock{width:100%;margin:10px 0}
 @media(max-width:650px){.barcode-manual-grid{grid-template-columns:minmax(0,1fr)}.barcode-rule-manual{padding:10px}}
 #barcode-rule-manual-fields{margin:14px 0;border-top:1px solid #dce4d5;padding-top:8px}#barcode-rule-manual-fields>summary{min-height:46px;padding:10px 0;font-weight:650;font-size:1.0625rem;cursor:pointer}#barcode-rule-manual-fields .barcode-manual-grid{padding-top:12px}#barcode-rule-auto-summary{margin-top:12px}.barcode-hypothesis-warning{display:block;color:#785820;background:#fff1d0;padding:10px;border-radius:7px;font-size:1.0625rem;line-height:1.7;overflow-wrap:anywhere}.barcode-auto-composed{font-weight:700;overflow-wrap:anywhere}#barcode-rule-auto-choice{max-width:100%}
+.scan-result-header .rule-issue-summary{flex-basis:100%;min-width:0}
+.rule-issue-summary p{margin:2px 0;font-size:1rem;line-height:1.6;overflow-wrap:anywhere}
+#history-list .history-problems{white-space:pre-line;overflow-wrap:anywhere}
+details.result-zone-nutrition>summary.result-zone-heading{display:list-item;min-height:44px;color:var(--ink)}
+details.result-zone-nutrition:not([open])>summary{padding-bottom:0;margin-bottom:0;border-bottom:none}
+details.result-zone-nutrition>summary h3{display:inline}
+details.result-zone-nutrition>summary .section-status-summary{display:inline-block;margin-inline-start:12px;font-weight:500}
+details.result-zone-nutrition.fail>summary .section-status-summary{color:#923b2c}
+details.result-zone-nutrition.review>summary .section-status-summary{color:#805513}

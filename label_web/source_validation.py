@@ -1,6 +1,7 @@
 """Compare OCR with one selected database label, without global fixed-text rules."""
 from datetime import date, timedelta
 from difflib import SequenceMatcher
+from functools import lru_cache
 import math
 import re
 import unicodedata
@@ -42,14 +43,24 @@ ALL_HEADINGS = "|".join(HEADINGS.values())
 
 
 def _prepared(text):
-    value = unicodedata.normalize("NFKC", str(text or ""))
+    value = str(text or "")
+    # Catalogs repeat the same printed lines across hundreds of standards.
+    # Cache only the short literal string, never a source snapshot or verdict.
+    return _prepare_short_text(value) if len(value) <= 256 else _prepare_text(value)
+
+
+def _prepare_text(text):
+    value = unicodedata.normalize("NFKC", text)
     return re.sub(r"\s+", "", traditional_display(value).replace("臺", "台"))
+
+
+_prepare_short_text = lru_cache(maxsize=512)(_prepare_text)
+_HEADING_PATTERNS = [(key, re.compile(pattern + r":?")) for key, pattern in HEADINGS.items()]
 
 
 def _heading(text):
     value = _prepared(text)
-    matches = [(match.end(), key) for key, pattern in HEADINGS.items()
-               if (match := re.match(pattern + r":?", value))]
+    matches = [(match.end(), key) for key, pattern in _HEADING_PATTERNS if (match := pattern.match(value))]
     return max(matches)[1] if matches else None
 
 
@@ -117,11 +128,13 @@ def _groups(lines, source_fields=None):
     groups = []
     for line in lines:
         chain = [line]
+        kind = line.get("_kind") or _kind(line["text"], source_fields) or (
+            "nutrition" if line["id"] in nutrient_ids and nutrition_label(line["text"]) else None)
         for _ in range(6):
             text = "".join(item["text"] for item in chain)
             groups.append({"lines": chain.copy(), "ids": frozenset(item["id"] for item in chain),
                            "text": text, "normal": normalize_text(text),
-                           "kind": chain[0].get("_kind") or _kind(chain[0]["text"], source_fields) or ("nutrition" if line["id"] in nutrient_ids and nutrition_label(line["text"]) else None),
+                           "kind": kind,
                            "barcode_kind": chain[0].get("_barcode_kind"),
                            "barcode_heading": chain[0].get("_barcode_heading", False),
                            "score": min(float(item.get("score", 0)) for item in chain),
@@ -301,8 +314,7 @@ def _source_rows(source):
             (row.get("_kind") == "barcode" or _heading(row["text"]) not in DATE_KEYS)]
 
 
-def _text_checks(lines, source):
-    source_rows = _source_rows(source)
+def _text_checks(lines, source, source_rows):
     expected_groups = _groups(source_rows, (source or {}).get("fields"))
     assembled_expected = [group for group in expected_groups if group.get("assembled_nutrition") and len(group["lines"])>1]
     expected_groups = [group for group in expected_groups if group.get("assembled_nutrition") or
@@ -500,8 +512,10 @@ def _date_settings(source, base):
     return settings
 
 
-def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids=None):
-    fields, checks, notes, parsed, uncertain = _date_fields(lines), [], [], {}, set()
+def _date_checks(lines, source, batch_date, arrival_date, base_date, literal_ids=None, *, fields=None):
+    if fields is None:
+        fields = _date_fields(lines)
+    checks, notes, parsed, uncertain = [], [], {}, set()
     base = date.fromisoformat(base_date) if base_date else None
     settings = _date_settings(source, base)
     for key, explicit in (("manufacture", batch_date), ("arrival", arrival_date)):
@@ -694,13 +708,14 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
     if scope["blocked"]:
         return scope_review_result(lines, scope, RULE_VERSION, traditional_display)
     # An explicit Code128 payload can look like a date, but it remains barcode data.
-    barcode_groups = [group for group in _groups(_source_rows(source)) if group["kind"] == "barcode" and len(group["lines"]) == 1]
+    source_rows = _source_rows(source)
+    barcode_groups = [group for group in _groups(source_rows) if group["kind"] == "barcode" and len(group["lines"]) == 1]
     literal_barcodes = {line["id"] for line in lines if any(_compared_text(group, line["text"]) == _compared_text(group, group["text"]) for group in barcode_groups)}
     date_lines = [line for line in lines if line["id"] not in literal_barcodes]
     identified_dates = _date_fields(date_lines)
     date_ids = {identifier for field in identified_dates.values() for identifier in field["line_ids"]}
     text_lines = [line for line in lines if line["id"] not in date_ids]
-    checks, fields, literal_ids = _text_checks(text_lines, source) if source else ([], {}, set())
+    checks, fields, literal_ids = _text_checks(text_lines, source, source_rows) if source else ([], {}, set())
     if (source or {}).get("source_kind")=="catalog":
         expected_length={"1":13,"2":12,"3":8}.get(str((source.get("barcode_config") or {}).get("kind","")))
         incomplete={re.sub(r"\s+","",str(value)) for value in source.get("barcode_values",[]) if expected_length
@@ -708,7 +723,8 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
         for check in checks:
             if check.get("label")=="條碼" and re.sub(r"\s+","",check.get("expected","")) in incomplete:
                 check.update(status="review",reason="清單只提供部分條碼資料，未提供完整碼的組成規則；無法據此確認完整條碼，不會推算或補碼。")
-    date_checks, date_fields, notes = _date_checks(date_lines, source, batch_date, arrival_date, base_date, literal_ids)
+    date_checks, date_fields, notes = _date_checks(date_lines, source, batch_date, arrival_date, base_date, literal_ids,
+                                                  fields=identified_dates)
     fields.update(date_fields)
     checks.extend(date_checks)
     if (source or {}).get("web_barcode_rule"):

@@ -48,7 +48,7 @@ function purgeAdminData() {
   state.failedJobs=state.failedJobs.filter(item=>item.kind!=="reference"); renderFailedJobs();
   selectedStandard(); updateCleanupSelection();
 }
-function applySession(session) {
+function applySession(session,refreshHistory=true) {
   const role=session.authenticated ? session.role || "operator" : "anonymous";
   const changed=state.role!==role || state.authenticated!==!!session.authenticated;
   if(changed)state.authEpoch++;
@@ -76,7 +76,7 @@ function applySession(session) {
   }
   if(!allowed() && ["library","standard"].includes(location.hash.slice(1)))showView("inspect");
   if(changed && state.inspection)renderInspection(state.inspection);
-  if(changed && location.hash==="#history")loadHistory().catch(error=>toast(error.message,true));
+  if(changed && refreshHistory && location.hash==="#history")loadHistory().catch(error=>toast(error.message,true));
 }
 function openAdminDialog() {
   if(state.busy)return toast("請等待目前工作完成，再切換管理權限。");
@@ -513,14 +513,18 @@ function fillReference(job) {
 async function pollJob(jobId, kind) {
   for (let attempts = 0; attempts < 600; attempts++) {
     if(kind==="reference" && !allowed())throw new Error("標準照片已保留，請管理員解鎖後再接續處理。");
-    const job = await api(`/api/jobs/${encodeURIComponent(jobId)}`);
+    const job = await api(`/api/jobs/${encodeURIComponent(jobId)}${kind==="reference" ? "" : "?include=inspection"}`);
     if (job.state === "failed") { rememberFailedJob({...job,id:job.id || jobId}, kind); sessionStorage.removeItem("labelcheck-pending");loadScanConfig().catch(()=>{}); throw new Error(job.error || "照片辨識未完成，可以使用已保留的照片重試。"); }
     if (job.state === "done") {
-      sessionStorage.removeItem("labelcheck-pending");
-      setRetryJob(kind); setUploadError(kind); loadFailedJobs();
-      loadScanConfig().catch(()=>{});
-      if (kind === "reference") fillReference(job);
-      else await loadInspection(job.result.inspection_id);
+      try {
+        if (kind === "reference") fillReference(job);
+        else if (job.inspection && job.inspection.id === job.result.inspection_id) displayInspection(job.inspection);
+        else await loadInspection(job.result.inspection_id);
+        sessionStorage.removeItem("labelcheck-pending");
+        setRetryJob(kind); setUploadError(kind);
+      } finally {
+        loadFailedJobs(); loadScanConfig().catch(()=>{});
+      }
       return;
     }
     if (kind === "reference") { $("#reference-preview").src = job.image.url; $("#reference-preview").hidden = false; }
@@ -741,8 +745,14 @@ function openLibraryCategory(target="filter"){if(!requireAdmin() || state.busy |
 function closeLibraryCategory(force=false){if(state.busy && !force)return;state.libraryCategoryContext=null;if($("#library-category-dialog").open)$("#library-category-dialog").close();$("#library-category-name").value="";setDialogError("#library-category-error");}
 async function saveLibraryNewCategory(event){event.preventDefault();const context=state.libraryCategoryContext;if(!requireAdmin() || state.busy || !context)return;const name=$("#library-category-name").value.trim();if(!name){setDialogError("#library-category-error","請填寫分類名稱。");return;}setBusy(true);$("#library-category-save").disabled=true;setDialogError("#library-category-error");try{const data=await api("/api/standard-library/categories",{method:"POST",body:{name}});if(state.libraryCategoryContext!==context || !allowed())return;await loadLibraryCategories();if(context.target==="detail" && state.libraryDetail===context.detail){$("#library-detail-category").value=data.id;$("#library-detail-notice").textContent="分類已建立；按「儲存分類」將此標準加入。";}else{await loadManualLibrary(manualLibraryPage);if(state.libraryCategoryContext!==context || !allowed())return;const message="分類已建立，開啟標準內容可指定分類。";$("#standard-library-status").textContent=message;toast(message);}closeLibraryCategory(true);}catch(error){if(state.libraryCategoryContext===context)setDialogError("#library-category-error",error.message);}finally{setBusy(false);$("#library-category-save").disabled=false;}}
 async function useLibraryStandard(){const context=state.libraryDetail,data=context?.data;if(!requireAdmin() || state.busy || !data || data.removed)return;if(data.kind!=="photo")selectInspectSource({code:data.key,name:data.name,source_kind:data.source_kind || data.source?.source_kind || "manual"});else{await loadTemplates(data.template?.id);if(state.libraryDetail!==context || !allowed())return;state.inspectSource=null;$("#template-select").value=data.template.id;renderInspectSource();selectedStandard();rememberExplicitNextChoice();markResultChanged();}closeLibraryDetail();showView("inspect");}
-async function loadInspection(id, restoreSettings = true) {
-  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`); state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
+async function loadInspection(id, restoreSettings = true, fromHistory = false) {
+  const inspection = await api(`/api/inspections/${encodeURIComponent(id)}`);
+  displayInspection(inspection,restoreSettings,fromHistory);
+}
+function displayInspection(inspection, restoreSettings = true, fromHistory = false) {
+  if (fromHistory) state.historyNutrition = {inspectionId:inspection.id,open:false};
+  else if (restoreSettings || state.historyNutrition?.inspectionId !== inspection.id) state.historyNutrition = null;
+  state.inspection = inspection; state.resultDirty = false; state.standardSaved=false;
   state.manualView = true;
   if (restoreSettings) restoreInspectionSettings(inspection);
   renderInspection(inspection); showView("inspect"); $("#result-area").scrollIntoView({block:"start",behavior:"instant"});
@@ -1695,6 +1705,18 @@ function renderLogicChecks(result,area){
 }
 function dateResultCheck(check){return check?.source==="date" || /^(manufacture|expiry|arrival)(_|$)|^date_|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check?.key || "");}
 function barcodeResultCheck(check){return /barcode/i.test(check?.key || "") || check?.source==="barcode" || check?.label==="條碼";}
+function checkIssueText(check,allChecks=[]){
+  if(check.key==="barcode_unread" && check.status==="review"){
+    const digits=String(check.actual || "").replace(/\s/g,"");
+    const printedMatch=check.printed_match===true || (/^\d+$/.test(digits) && allChecks.some(other=>
+      other.key==="web_barcode_rule" && other.source==="database" && other.status==="pass" &&
+      String(other.actual || "").replace(/\s/g,"")===digits && String(other.expected || "").replace(/\s/g,"")===digits));
+    return `條碼圖形未讀到，${printedMatch ? "印字與標準相符。" : ""}請實際掃碼確認。`;
+  }
+  const label=check.label || "",reason=check.reason || "";
+  if(!reason) return label || "請查看判定明細";
+  return label && !reason.startsWith(label) ? `${label}：${reason}` : reason;
+}
 function resultRowStatus(rows){return rows.some(row=>row.status==="fail") ? "fail" : rows.some(row=>row.status==="review") ? "review" : !rows.length || rows.some(row=>row.status==="read") ? "read" : "pass";}
 function approvedTextReference(inspection,result){const source=inspection.template_snapshot?.source || {};return result.verified_scope==="approved_text" || source.web_text_approved===true || !!inspection.template_id || !!inspection.template_snapshot?.rules?.approved_text_source || source.source_kind==="manual" || String(source.code || "").startsWith("manual:") || (source.source_kind==="desktop" && (source.lines || []).length>0);}
 function dateOnlyEvidence(line,result){
@@ -2039,14 +2061,28 @@ function renderSectionIssue(row,inspection,manual,kind){
 function renderResultZone(kind,rows,inspection,manual,area){
   const nutrition=kind==="nutrition";
   if(nutrition && !rows.length)return;
-  const status=resultRowStatus(rows),section=element("section",`result-zone result-zone-${kind} ${status}`);section.id=`result-zone-${kind}`;
-  const heading=element("div","result-zone-heading");heading.append(element("h3","",nutrition ? "營養標示" : "標籤內容"));
+  const historyPanel=nutrition && state.historyNutrition?.inspectionId===inspection.id ? state.historyNutrition : null;
+  const status=resultRowStatus(rows),section=element(historyPanel ? "details" : "section",`result-zone result-zone-${kind} ${status}`);section.id=`result-zone-${kind}`;
+  const heading=element(historyPanel ? "summary" : "div","result-zone-heading");
   const counts={pass:0,fail:0,review:0,read:0};rows.forEach(row=>counts[row.status]++);
   const phrases=[];if(counts.fail)phrases.push(`✕ ${counts.fail} 處差異`);if(counts.review)phrases.push(`? ${counts.review} 處需確認`);if(counts.pass)phrases.push(`✓ ${counts.pass} 行相符`);if(counts.read)phrases.push(`${counts.read} 行僅辨識`);
-  heading.append(element("p","section-status-summary",phrases.join(" · ") || "尚無可核對文字"));section.append(heading);
+  const title=element("h3","",nutrition ? "營養標示" : "標籤內容"),summary=element("span","section-status-summary",phrases.join(" · ") || "尚無可核對文字");
+  if(historyPanel){
+    title.append(summary);heading.append(title);section.open=historyPanel.open;
+    section.ontoggle=()=>{if(document.getElementById(section.id)===section)historyPanel.open=section.open;};
+  }else heading.append(title,summary);
+  section.append(heading);
   const problems=rows.filter(row=>["fail","review"].includes(row.status));problems.forEach(row=>section.append(renderSectionIssue(row,inspection,manual,kind)));
   const remaining=rows.filter(row=>!["fail","review"].includes(row.status));
-  if(remaining.length){const normal=element("details","section-normal-text");normal.open=nutrition;normal.append(element("summary","",`查看${counts.pass && !counts.read ? "已核對相符" : "其他已辨識"}文字 · ${remaining.length} 行`));renderResultLines(remaining,normal,inspection,manual,{id:`${kind}-normal-lines`,standardTools:false});section.append(normal);if(!nutrition && !problems.length)section.append(element("p","section-text-preview",remaining.slice(0,2).map(row=>row.text).join(" · ")));}
+  if(remaining.length){
+    let target=section;
+    if(!historyPanel){
+      target=element("details","section-normal-text");target.open=nutrition;
+      target.append(element("summary","",`查看${counts.pass && !counts.read ? "已核對相符" : "其他已辨識"}文字 · ${remaining.length} 行`));section.append(target);
+    }
+    renderResultLines(remaining,target,inspection,manual,{id:`${kind}-normal-lines`,standardTools:false});
+    if(!nutrition && !problems.length)section.append(element("p","section-text-preview",remaining.slice(0,2).map(row=>row.text).join(" · ")));
+  }
   if(!rows.length)section.append(element("p","help","沒有可顯示的標籤內容，請確認照片與標籤範圍。"));area.append(section);
 }
 function renderInspection(inspection) {
@@ -2060,8 +2096,15 @@ function renderInspection(inspection) {
     const count = rows.filter(row => row.status === status).length;
     if (count) counts.append(element("span", `count-${status}`, `${label} ${count}`));
   }
-  const ruleChecks=[...new Set([...model.dateChecks,...model.barcodeChecks])];
-  for(const [status,label] of [["fail","✕ 規則差異"],["review","? 規則需確認"]]){const count=ruleChecks.filter(check=>check.status===status).length;if(count)counts.append(element("span",`count-${status}`,`${label} ${count} 個檢查點`));}
+  const ruleChecks=(result.checks || []).filter(check=>dateResultCheck(check) || barcodeResultCheck(check) || ["photo_scope","source_identity_conflict"].includes(check.key));
+  for(const [status,label] of [["fail","✕ 規則差異"],["review","? 規則需確認"]]){
+    const problems=ruleChecks.filter(check=>check.status===status);
+    if(!problems.length)continue;
+    const group=element("div",`rule-issue-summary count-${status}`);
+    group.append(element("strong","",`${label} ${problems.length} 個檢查點`));
+    for(const reason of new Set(problems.map(check=>checkIssueText(check,ruleChecks))))group.append(element("p","",reason));
+    counts.append(group);
+  }
   header.append(element("strong","result-verdict",coverage.title),counts,element("p","result-coverage",coverage.note)); area.append(header);
   renderSourceConflict(inspection,result,area);
   if(!coverage.matched)renderUnmatchedDates(inspection,result,area);
@@ -2088,7 +2131,12 @@ function renderInspection(inspection) {
     reference.append(element("figcaption", "", "標準照片"), refScroll); pair.append(reference);
   }
   const canvas = element("canvas"); canvas.setAttribute("role", "img"); canvas.setAttribute("aria-label", "待檢照片；紅框為差異，黃框為待確認文字"); observedScroll.append(canvas);
-  observed.append(element("figcaption", "", "待檢照片 · 紅框差異／黃框複核"), observedScroll); pair.append(observed); evidence.append(pair); drawEvidence(canvas, visible);
+  observed.append(element("figcaption", "", "待檢照片 · 紅框差異／黃框複核"), observedScroll); pair.append(observed); evidence.append(pair);
+  const evidenceEpoch=state.resultRenderEpoch;
+  evidence.ontoggle=()=>{
+    if(!evidence.open || state.resultRenderEpoch!==evidenceEpoch)return;
+    drawEvidence(canvas,visible,false,()=>state.resultRenderEpoch===evidenceEpoch);evidence.ontoggle=null;
+  };
   const details = element("details"), raw = element("div", "ocr-lines"); details.append(element("summary", "", "查看完整辨識原文"), raw); renderOCR(inspection.ocr.lines, raw,ocrLowScoreThreshold(inspection.ocr)); evidence.append(details);
   const reviewList = element("div"); inspection.reviews.forEach(review => { const row = element("div", "review-record"); row.append(element("strong", "", reviewLabels[review.decision]), element("p", "", review.note), element("small", "", `${review.reviewer} · ${when(review.created_at)}`)); reviewList.append(row); }); evidence.append(reviewList);
   const review = element("form", "review-form"); review.append(element("h3", "", "人工複核"), element("p", "help", "複核紀錄會另外保留，原始辨識結果不會被覆蓋。"));
@@ -2154,7 +2202,10 @@ function historyPresentation(item) {
 function historyProblemSummary(item){
   const counts=item.manual_counts || item.counts,prefix=item.manual_revision && !item.manual_counts ? "原始：" : "";
   if(!counts || !Number.isInteger(counts.fail) || !Number.isInteger(counts.review))return "展開查看判定明細";
-  return counts.fail || counts.review ? `${prefix}差異 ${counts.fail} 項 · 待確認 ${counts.review} 個檢查點` : counts.read>0 ? `${prefix}${counts.read} 項尚無比對依據` : `${prefix}已核對項目無差異`;
+  if(!counts.fail && !counts.review)return counts.read>0 ? `${prefix}${counts.read} 項尚無比對依據` : `${prefix}已核對項目無差異`;
+  const checks=(item.manual_counts ? item.manual_issue_reasons : item.issue_reasons) || [];
+  const reasons=new Set(checks.filter(check=>check && counts[check.status]>0 && ["fail","review"].includes(check.status)).map(check=>checkIssueText(check)));
+  return [`${prefix}差異 ${counts.fail} 項 · 待確認 ${counts.review} 個檢查點`,...reasons].join("\n");
 }
 async function loadHistory() {
   const filter = $("#history-filter").value, page = state.page, request = ++historyRequest;
@@ -2170,7 +2221,7 @@ async function loadHistory() {
       const totals = data.day_counts[item.day];
       list.append(element("h2","history-day",`${item.day} · ${filter ? "符合篩選 " : ""}${totals.photos} 張照片 · ${totals.records} 筆檢查`));
     }
-    const row = element("button", "history-row"), img = element("img"), text = element("span","history-copy"),statuses=element("span","history-statuses"),display=historyPresentation(item); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy";text.append(element("strong", "", display.name), element("small", "", `${item.base_date ? `本批 ${item.base_date}` : when(item.created_at)} · ${display.reference}`),element("span","history-problems",historyProblemSummary(item)));statuses.append(badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));statuses.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));}row.append(img,text,statuses); row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id).catch(e=>toast(e.message,true)); };
+    const row = element("button", "history-row"), img = element("img"), text = element("span","history-copy"),statuses=element("span","history-statuses"),display=historyPresentation(item); img.src=item.image.thumbnail; img.alt="待檢標籤縮圖"; img.loading="lazy";text.append(element("strong", "", display.name), element("small", "", `${item.base_date ? `本批 ${item.base_date}` : when(item.created_at)} · ${display.reference}`),element("span","history-problems",historyProblemSummary(item)));statuses.append(badge(item.status,`原始：${statusLabels[item.status] || item.status}`));if(item.manual_revision){text.append(element("small","manual-tag",`已訂正 · 第 ${item.manual_revision} 版`));statuses.append(badge(item.manual_status,`訂正後：${statusLabels[item.manual_status] || "已保存"}`));}row.append(img,text,statuses); row.onclick=() => { if(state.busy) return toast("請等待目前辨識完成。"); loadInspection(item.id,true,true).catch(e=>toast(e.message,true)); };
     if(allowed("cleanup_history")){
       const wrap=element("div","history-entry"),label=element("label","history-select"),select=element("input");select.type="checkbox";select.checked=state.historySelection.has(item.id);select.setAttribute("aria-label",`選取紀錄：${display.name}，${when(item.created_at)}`);
       select.onchange=()=>{if(select.checked)state.historySelection.set(item.id,item.name);else state.historySelection.delete(item.id);updateCleanupSelection();};label.append(select);wrap.append(label,row);list.append(wrap);
@@ -2313,7 +2364,7 @@ async function commitHistoryCleanup(event){
   finally{cleanupBusy(false);}
 }
 async function initialize() {
-  const session = await api("/api/session"); applySession(session);
+  const session = await api("/api/session"); applySession(session,false);
   if (!session.authenticated) return;
   await Promise.all([loadTemplates(),loadScanConfig(),loadFailedJobs()]); restoreRetryJobs(); showView(location.hash.slice(1));
   const stored = sessionStorage.getItem("labelcheck-pending");

@@ -55,9 +55,15 @@ def latest_summaries(conn, identifiers):
     maximum = select(table.c.inspection_id, func.max(table.c.revision).label("revision")).where(
         table.c.inspection_id.in_(identifiers)).group_by(table.c.inspection_id).subquery()
     rows = conn.execute(select(table.c.inspection_id, table.c.revision, history_status.status_column(table).label("status"),
-        func.coalesce(history_status.counts_column(table), table.c.result["counts"]).label("counts")).join(maximum,
+        func.coalesce(history_status.summary_column(table), table.c.result).label("summary")).join(maximum,
         (maximum.c.inspection_id == table.c.inspection_id) & (maximum.c.revision == table.c.revision))).mappings()
-    return {row["inspection_id"]:dict(row) for row in rows}
+    items = {}
+    for row in rows:
+        summary = row["summary"] or {}
+        if "issue_reasons" not in summary:
+            summary = history_status.result_summary(summary)
+        items[row["inspection_id"]] = dict(revision=row["revision"], status=row["status"], **summary)
+    return items
 
 
 def public_revision(row, snapshot):

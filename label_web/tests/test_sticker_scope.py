@@ -200,13 +200,12 @@ class CloudPanelScopeTests(unittest.TestCase):
         recognizer = PanelRecognizer(self.payload)
         before = self.path.read_bytes()
         seen = {}
-        def decode(target):
-            seen["path"] = Path(target)
-            with Image.open(target) as crop:
-                seen["size"] = crop.size
-                seen["nutrition_ink"] = crop.getpixel((35,55))
-                seen["corner"] = crop.getpixel((0,0))
-                self.assertNotEqual(crop.getpixel((300,299)), (220,20,30))
+        def decode(crop):
+            seen["crop"] = crop
+            seen["size"] = crop.size
+            seen["nutrition_ink"] = crop.getpixel((35,55))
+            seen["corner"] = crop.getpixel((0,0))
+            self.assertNotEqual(crop.getpixel((300,299)), (220,20,30))
             return deepcopy(self.codes)
         with patch("sticker_scope.detect_sticker", side_effect=AssertionError("must not pre-crop")), \
              patch("barcode_checks.decode_barcodes", side_effect=decode) as decode_mock:
@@ -226,8 +225,8 @@ class CloudPanelScopeTests(unittest.TestCase):
         self.assertEqual(result["barcodes"]["items"][0]["box"],
                          [[440,290],[670,290],[670,370],[440,370]])
         self.assertEqual(self.codes["items"][0]["box"][0], [340,190])
-        self.assertFalse(seen["path"].exists())
-        self.assertFalse(seen["path"].parent.exists())
+        with self.assertRaises(ValueError):
+            seen["crop"].getpixel((0, 0))
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_full_mode_uses_full_recognition_and_decodes_original(self):
@@ -245,6 +244,26 @@ class CloudPanelScopeTests(unittest.TestCase):
         self.assertEqual(result["label_scope"]["status"], "full")
         self.assertNotIn("label_region", result)
 
+    def test_in_memory_panel_and_lossless_file_decode_identical_barcode_positions(self):
+        import numpy as np
+        import zxingcpp
+        from barcode_checks import decode_barcodes
+        from sticker_scope import _masked_region
+
+        with Image.open(self.path) as photo:
+            for payload, kind, position in (("https://example.test/lot/15", zxingcpp.QRCode, (130,130)),
+                                            ("0400000790039", zxingcpp.EAN13, (320,245))):
+                code = zxingcpp.create_barcode(payload, kind)
+                pixels = np.asarray(zxingcpp.write_barcode_to_image(code, scale=2))
+                photo.paste(Image.fromarray(pixels), position)
+            photo.save(self.folder/"codes.png")
+        with _masked_region(self.folder/"codes.png", self.region) as panel:
+            panel.save(self.folder/"crop.png")
+            actual = decode_barcodes(panel)
+            self.assertEqual(actual, decode_barcodes(self.folder/"crop.png"))
+            self.assertEqual({item["text"] for item in actual["items"]}, {"https://example.test/lot/15","0400000790039"})
+            self.assertEqual(panel.getpixel((0,0)), (255,255,255))
+
     def test_cloud_failure_never_retries_with_full_or_local_crop(self):
         recognizer = PanelRecognizer(self.payload)
         error = RuntimeError("ambiguous panel")
@@ -261,17 +280,17 @@ class CloudPanelScopeTests(unittest.TestCase):
     def test_barcode_failure_still_cleans_transient_crop_without_repeating_ocr(self):
         recognizer = PanelRecognizer(self.payload)
         seen = []
-        def failed_decode(target):
-            seen.append(Path(target))
-            self.assertTrue(Path(target).is_file())
+        def failed_decode(crop):
+            seen.append(crop)
+            self.assertEqual(crop.mode, "RGB")
             raise RuntimeError("local decoder failure")
         with patch("barcode_checks.decode_barcodes", side_effect=failed_decode):
             with self.assertRaisesRegex(RuntimeError, "local decoder failure"):
                 recognize_scoped(self.path, recognizer)
         self.assertEqual(recognizer.panel_calls, [self.path])
         self.assertEqual(recognizer.full_calls, [])
-        self.assertFalse(seen[0].exists())
-        self.assertFalse(seen[0].parent.exists())
+        with self.assertRaises(ValueError):
+            seen[0].getpixel((0, 0))
         self.assertTrue(self.path.is_file())
 
     def test_dynamic_mock_attribute_is_not_a_panel_capability(self):

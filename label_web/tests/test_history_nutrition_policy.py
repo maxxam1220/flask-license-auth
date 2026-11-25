@@ -68,6 +68,7 @@ class HistoryNutritionTests(unittest.TestCase):
         listed = self.get("/api/inspections?status=pass")["items"][0]
         self.assertEqual((listed["status"],listed["manual_status"]),("pass","pass"))
         self.assertEqual(listed["counts"],listed["manual_counts"])
+        self.assertEqual((listed["issue_reasons"],listed["manual_issue_reasons"]),([],[]))
         self.assertEqual(self.get("/api/inspections?status=fail")["items"], [])
         for verdict, count in (("fail",0), ("pass",1)):
             preview = self.client.post("/api/admin/history/preview", json={"filters":{"status":verdict}}, headers=self.headers)
@@ -98,6 +99,23 @@ class HistoryNutritionTests(unittest.TestCase):
             result = self.get("/api/inspections?status=pass&page=2")
             self.assertEqual(result["day_counts"]["2026-11-23"]["records"],28)
             self.assertEqual(project.call_count,1)
+
+    def test_summary_explains_the_unread_stripes_and_uses_each_revisions_printed_number(self):
+        result = deepcopy(self.old)
+        result["checks"] = [
+            {"key":"web_barcode_rule","source":"database","status":"pass","actual":"2 834665 432931","expected":"2834665432931"},
+            {"key":"barcode_unread","status":"review","actual":"2834665432931","label":"條碼圖形","reason":"未解碼"},
+        ]
+        self.seed("papaya", result)
+        manual = deepcopy(result)
+        manual["checks"][0]["actual"] = "2834665430000"
+        with self.engine.begin() as conn:
+            conn.execute(insert(db.corrections).values(id="revision", inspection_id="papaya", revision=1,
+                change={}, patches=[], result=manual, ocr=self.ocr, status="review", reviewer="A", note="", created_at=db.now()))
+        listed = self.get("/api/inspections")["items"][0]
+        self.assertEqual(listed["issue_reasons"], [dict(key="barcode_unread",status="review",label="條碼圖形",reason="未解碼",printed_match=True)])
+        self.assertNotIn("printed_match", listed["manual_issue_reasons"][0])
+        self.assertEqual(listed["counts"], {"pass":1,"fail":0,"review":1,"read":0})
 
     def test_pre_policy_text_mismatch_keeps_its_original_judgment_and_reason(self):
         old = deepcopy(self.old)

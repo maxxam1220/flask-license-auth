@@ -279,6 +279,17 @@ class ManualReferenceTests(unittest.TestCase):
         self.assertEqual([row["code"] for row in label_source.search(self.engine, "ABC-001")], [code])
         self.assertEqual(label_source.search(self.engine, "NEW-001"), [])
 
+    def test_matching_reads_catalog_in_bulk_then_rereads_only_the_selected_source(self):
+        chosen = self.create().json["code"]
+        self.add_inspection("another-source", [])
+        other = dict(self.definition, name="台灣梨", sku="PEAR-2",
+                     lines=[{"text":"品名：台灣梨"}, {"text":"貨號：PEAR-2"}])
+        self.assertEqual(self.create(other, "another-source").status_code, 201)
+        with patch.object(manual, "draft", wraps=manual.draft) as fetch:
+            matched = label_source.resolve(self.engine, [line(0, "品名：日本蘋果")])
+        self.assertEqual((matched["status"], matched["code"]), ("matched", chosen))
+        fetch.assert_called_once_with(self.engine, chosen)
+
     def test_resolution_rejects_revision_changed_after_identity_selection(self):
         code = self.create().json["code"]
         self.add_inspection("concurrent-edit", [], label_source.draft(self.engine, code))
