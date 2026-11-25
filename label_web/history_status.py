@@ -6,7 +6,7 @@ import database as db
 import inspection_evidence
 
 
-SUMMARY_POLICY = inspection_evidence.NUTRITION_POLICY + "/issues-v1"
+SUMMARY_POLICY = f"{inspection_evidence.NUTRITION_POLICY}/{inspection_evidence.BARCODE_POLICY}/i1"
 
 
 summaries = Table("labelcheck_history_status", db.metadata,
@@ -20,13 +20,13 @@ summaries = Table("labelcheck_history_status", db.metadata,
 def project(result, ocr, snapshot, patches=()):
     if not isinstance(result, dict):
         return {}
-    if result.get("nutrition_policy") == inspection_evidence.NUTRITION_POLICY:
-        return result
-    source = snapshot.get("source") or (snapshot.get("rules") or {}).get("approved_text_source")
-    recovered = None
-    if result.get("nutrition_policy") == "excluded-v1" and isinstance(result.get("checks"), list):
-        recovered = _recover_checks(result, ocr, snapshot, patches)
-    return inspection_evidence.project_nutrition_text(result, ocr, source, recovered_checks=recovered)
+    if result.get("nutrition_policy") != inspection_evidence.NUTRITION_POLICY:
+        source = snapshot.get("source") or (snapshot.get("rules") or {}).get("approved_text_source")
+        recovered = None
+        if result.get("nutrition_policy") == "excluded-v1" and isinstance(result.get("checks"), list):
+            recovered = _recover_checks(result, ocr, snapshot, patches)
+        result = inspection_evidence.project_nutrition_text(result, ocr, source, recovered_checks=recovered)
+    return inspection_evidence.project_barcode(result)
 
 
 def _recover_checks(result, ocr, snapshot, patches):
@@ -68,25 +68,13 @@ def summary_column(table):
 def result_summary(result):
     """Store the small list-view payload alongside the verdict in the versioned index."""
     checks = [check for check in result.get("checks") or [] if isinstance(check, dict)]
-    matched_numbers = set()
-    for check in checks:
-        if check.get("key") == "web_barcode_rule" and check.get("source") == "database" and check.get("status") == "pass":
-            digits = "".join(str(check.get("actual") or "").split())
-            if digits == "".join(str(check.get("expected") or "").split()):
-                matched_numbers.add(digits)
     candidates = [check for check in checks if check.get("status") in ("fail", "review")]
     def priority(check):
         key = str(check.get("key") or "")
         rule = "barcode" in key or check.get("source") == "date" or key in {"manufacture", "expiry", "arrival", "keep_days"}
         return (check["status"] != "fail", not rule)
-    reasons = []
-    for check in sorted(candidates, key=priority)[:3]:
-        issue = {key: check.get(key, "") for key in ("status", "key", "label", "reason")}
-        if issue["key"] == "barcode_unread":
-            number = "".join(str(check.get("actual") or "").split())
-            if number.isascii() and number.isdigit() and number in matched_numbers:
-                issue["printed_match"] = True
-        reasons.append(issue)
+    reasons = [{key: check.get(key, "") for key in ("status", "key", "label", "reason")}
+               for check in sorted(candidates, key=priority)[:3]]
     return {"counts": result.get("counts", {}), "issue_reasons": reasons}
 
 

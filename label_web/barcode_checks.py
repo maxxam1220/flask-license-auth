@@ -135,9 +135,6 @@ def checks_for(ocr):
             "actual":"；".join(value for _,value in paired), "expected":decoded[0]["text"],
             "reason":"條碼附近讀到多段數字，無法唯一配對；請對照原圖確認完整印字，未自動拼接或補字。",
             "line_ids":[line.get("id") for line,_ in paired]})
-    elif candidates and not decoded:
-        checks.append({"key":"barcode_unread", "label":"條碼圖形", "status":"review", "actual":candidates[0][1],
-            "reason":"只讀到疑似條碼數字，尚未成功解碼條紋，不能確認可掃描或檢查碼。", "line_ids":[x[0].get("id") for x in candidates]})
     return checks
 
 

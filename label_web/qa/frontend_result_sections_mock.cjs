@@ -84,11 +84,11 @@ check("missing nutrient name remains unknown values and is never invented",()=>{
 });
 check("legacy nutrition failures do not change the grade of other checks",()=>{
   const s=nutritionSample();s.result.checks.push({key:"nutrition_relation",source:"logic",status:"fail",label:"數值關係",line_ids:[1,2,3]},
-    {key:"barcode_unread",status:"review",actual:"12345678",line_ids:[]});
+    {key:"barcode_hri",status:"review",actual:"12345678",line_ids:[]});
   const model=build(s);
   assert.equal(model.nutrition.find(row=>row.text.startsWith("脂肪")).status,"pass");
   assert.deepEqual(plain(model.assessed.counts),{fail:0,review:1,read:0,pass:1});
-  assert.deepEqual(plain(model.assessed.checks.map(check=>check.key)),["source_nutrition_fat","barcode_unread"]);
+  assert.deepEqual(plain(model.assessed.checks.map(check=>check.key)),["source_nutrition_fat","barcode_hri"]);
 });
 check("nutrition without an actual standard never has a positive assessment",()=>{
   for(const checks of [[],[{key:"nutrition_energy",source:"logic",status:"pass",line_ids:[0]}]]){
@@ -157,7 +157,7 @@ check("late original image load cannot repaint the next inspection",()=>{
   t.state.resultRenderEpoch=1;t.state.resultPhotoCache=null;draw(canvas(),{image:{url:"/old",width:1000,height:800},ocr:{lines:[]}});
   t.state.resultRenderEpoch=2;draw(canvas(),{image:{url:"/new",width:1000,height:800},ocr:{lines:[]}});images[0].onload();assert.equal(painted.length,0);images[1].onload();assert.equal(painted.length,1);assert.equal(painted[0][0].src,"/new");
 });
-check("the verdict names unread bars separately from proven matching print and unrelated rules",()=>{
+check("an old unread-bars warning cannot add a review to a correct print or hide an unrelated error",()=>{
   const unread={key:"barcode_unread",label:"條碼圖形",status:"review",actual:"2834 6654 32931"};
   const rule={key:"web_barcode_rule",source:"database",status:"pass",expected:"2834665432931",actual:"2834665432931"};
   const date={key:"date_order",source:"date",status:"fail",label:"日期先後",reason:"有效日早於製造日。"};
@@ -165,14 +165,19 @@ check("the verdict names unread bars separately from proven matching print and u
   Object.assign(s.inspection,{reviews:[],created_at:"2026-11-25T01:00:00Z"});
   t.renderInspection(s.inspection);
   const header=context.document.querySelector("#result-area").querySelector(".scan-result-header");
-  assert.match(header.querySelector(".count-review").textContent,/1 個檢查點.*條碼圖形未讀到，印字與標準相符。請實際掃碼/);
+  assert.equal(header.querySelector(".count-review"),null);
   assert.match(header.querySelector(".count-fail").textContent,/日期先後.*有效日早於製造日/);
-  assert.doesNotMatch(pick("checkIssueText")(unread,[{...rule,actual:"1234"}]),/印字與標準相符/);
-  assert.doesNotMatch(pick("checkIssueText")(unread,[{...rule,key:"barcode_checksum_0"}]),/印字與標準相符/);
+  assert.doesNotMatch(context.document.querySelector("#result-area").textContent,/條碼圖形未讀到|實際掃碼|條紋已解碼/);
+  const only=sample([],[unread,rule],{status:"review",source_match:{status:"matched"}}),model=build(only);
+  assert.deepEqual(plain(model.assessed.counts),{pass:1,read:0,fail:0,review:0});assert.equal(model.assessed.status,"pass");
+  const unsupported=sample([],[unread],{status:"review",source_match:{status:"unmatched"}});
+  assert.equal(build(unsupported).assessed.status,"review");assert.equal(build(unsupported).assessed.counts.pass,0);
 });
 check("history uses the reasons from the same revision as the counts",()=>{
-  const original={counts:{fail:0,review:1},issue_reasons:[{status:"review",key:"barcode_unread",printed_match:true}]};
-  assert.match(t.historyProblemSummary(original),/差異 0 項.*待確認 1 個檢查點\n條碼圖形未讀到，印字與標準相符/);
+  const original={counts:{fail:0,review:0},issue_reasons:[]};
+  assert.equal(t.historyProblemSummary(original),"已核對項目無差異");
+  const uncertain={counts:{fail:0,review:1},issue_reasons:[{status:"review",key:"barcode_hri",label:"條碼與印字",reason:"數字不完整。"}]};
+  assert.match(t.historyProblemSummary(uncertain),/待確認 1 個檢查點\n條碼與印字：數字不完整/);
   const revised={...original,manual_revision:1,manual_counts:{fail:1,review:0},manual_issue_reasons:[{status:"fail",key:"date_order",label:"日期先後",reason:"日期顛倒。"}]};
   assert.match(t.historyProblemSummary(revised),/差異 1 項.*\n日期先後：日期顛倒/);
   assert.doesNotMatch(t.historyProblemSummary({...revised,manual_issue_reasons:undefined}),/條碼|日期顛倒/);

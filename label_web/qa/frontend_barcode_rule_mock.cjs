@@ -79,7 +79,10 @@ async function main(){
  check("unlocking after changing inspections cannot reopen the previous barcode modal",()=>{assert.equal(requests.length,1);assert.equal(t.state.barcodeRule,null);assert.equal($("#barcode-rule-dialog").open,false);});
  context.originalLoadTemplates=actualLoadTemplates;vm.runInContext("loadTemplates=originalLoadTemplates",context);
  const formulaCheck={key:"web_barcode_rule",source:"database",status:"pass",actual:"2803993832539",expected:"2803993832539",reason:"依已核准日期規則相符"},unread={key:"barcode_unread",status:"review",actual:"2803993832539",reason:"尚未成功解碼條紋，不能確認可掃描或檢查碼。"};
- function barcodeCard(checks,fields=inspection.result.fields){const area=new Node();pick("renderBarcodeCard")({barcodeChecks:checks},{...inspection.result,checks,fields},area,inspection);return area.querySelector("section");}
+ function barcodeCard(checks,fields=inspection.result.fields){
+   const area=new Node(),result={...inspection.result,checks,fields},model=pick("buildResultSections")(inspection,result,inspection.ocr);
+   pick("renderBarcodeCard")(model,model.assessed,area,inspection);return area.querySelector("section");
+ }
  const trace={key:"barcode_traceability_0",actual:"https://trace.example.test/?t=0000000000000001",label:"履歷 QR Code",status:"pass"};
  const retail={key:"barcode_decode_0",actual:"4711378333473",label:"條碼圖形",status:"pass"};
  check("a retail barcode and a traceability URL have distinct headings and values",()=>{
@@ -104,10 +107,20 @@ async function main(){
    assert.match(card.textContent,/商品條碼缺漏/);
    assert.equal(card.querySelector(".barcode-traceability").querySelector(".badge").textContent,"✓ 已讀取履歷網址");
  });
- check("approved formula pass is visible separately from unresolved barcode readability",()=>{const checks=[formulaCheck,unread],before=JSON.stringify(checks),card=barcodeCard(checks);assert.match(card.className,/\bpass\b/);assert.match(card.querySelector(".badge").textContent,/✓ 條碼數字與日期規則相符/);assert.match(card.querySelector(".barcode-readability").textContent,/需實際掃碼確認可讀性/);assert.doesNotMatch(card.textContent,/不能確認.*檢查碼/);assert.equal(JSON.stringify(checks),before);});
+ check("approved matching print passes without requesting a scan or claiming bars were decoded",()=>{
+   const checks=[formulaCheck,unread],before=JSON.stringify(checks),card=barcodeCard(checks);
+   assert.match(card.className,/\bpass\b/);assert.match(card.querySelector(".badge").textContent,/✓ 條碼數字與日期規則相符/);
+   assert.doesNotMatch(card.textContent,/掃碼|條紋|可讀性/);assert.equal(JSON.stringify(checks),before);
+ });
  for(const status of ["fail","review"]){check(`genuine other barcode ${status} dominates even when the approved formula passes`,()=>{const card=barcodeCard([formulaCheck,unread,{key:"barcode_hri",status,reason:"條紋與印字不同"}]);assert.match(card.className,new RegExp(`\\b${status}\\b`));assert.match(card.querySelector(".barcode-formula-status").textContent,/數字與日期規則相符/);assert.match(card.querySelector(".badge").textContent,status==="fail" ? /有差異/ : /需確認/);assert.match(card.textContent,/條紋與印字不同/);});}
  check("uncertain formula never becomes a pass because the barcode was unread",()=>{const card=barcodeCard([{...formulaCheck,status:"review",reason:"日期不清楚"},unread]);assert.match(card.className,/\breview\b/);assert.doesNotMatch(card.textContent,/✓ 條碼數字與日期規則相符/);});
- check("basic format pass cannot dismiss unread barcode evidence",()=>{const card=barcodeCard([{key:"barcode_format",status:"pass",actual:"2803993832539"},unread]);assert.match(card.className,/\breview\b/);assert.doesNotMatch(card.textContent,/✓ 條碼數字與日期規則相符/);});
+ check("digits alone or a format-only pass show an unverified product code without a scan warning",()=>{
+   for(const checks of [[unread],[{key:"barcode_format",status:"pass",actual:unread.actual},unread]]){
+     const card=barcodeCard(checks,{barcode:{value:unread.actual}});
+     assert.match(card.className,/\bread\b/);assert.match(card.querySelector(".badge").textContent,/商品碼未核對/);
+     assert.match(card.textContent,/2803993832539/);assert.doesNotMatch(card.textContent,/✓|掃碼|解碼/);
+   }
+ });
  const auto3={id:"auto-three",rule,summary:"有效日期 3 位太陽日",composed_value:"2803993832539",parts:[{label:"由本張反推的前綴",value:"28039938"},{label:"有效日期",value:"2026-11-21"},{label:"3位太陽日",value:"325"},{label:"固定尾碼假設",value:"3"}],evidence:{kind:"observed_hypothesis",date_value:"2026-11-21",day_token:"325"},warnings:["候選尚未證實。"]},auto2={...auto3,id:"auto-two",summary:"有效日期 2 位太陽日",rule:{...rule,prefix:"280399383",day_width:2}};
  const autoData={...manualData,manual_entry:{...manualData.manual_entry,auto_candidates:[auto3,auto2],recommended_id:auto3.id}};
  setup();api(autoData);await open(inspection.id);

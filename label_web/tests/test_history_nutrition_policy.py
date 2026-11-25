@@ -100,22 +100,53 @@ class HistoryNutritionTests(unittest.TestCase):
             self.assertEqual(result["day_counts"]["2026-11-23"]["records"],28)
             self.assertEqual(project.call_count,1)
 
-    def test_summary_explains_the_unread_stripes_and_uses_each_revisions_printed_number(self):
-        result = deepcopy(self.old)
-        result["checks"] = [
-            {"key":"web_barcode_rule","source":"database","status":"pass","actual":"2 834665 432931","expected":"2834665432931"},
-            {"key":"barcode_unread","status":"review","actual":"2834665432931","label":"條碼圖形","reason":"未解碼"},
-        ]
+    def test_stripe_reminder_removed_from_details_revisions_filters_and_previous_summary(self):
+        rule = {"key":"web_barcode_rule","source":"database","status":"pass",
+                "actual":"2 834665 432931","expected":"2834665432931"}
+        unread = {"key":"barcode_unread","status":"review","actual":"2834665432931","label":"條碼圖形","reason":"未解碼"}
+        result = dict(self.old, nutrition_policy="literal-text-v2", checks=[rule, unread],
+                      status="review", counts={"pass":1,"fail":0,"review":1,"read":0})
         self.seed("papaya", result)
-        manual = deepcopy(result)
-        manual["checks"][0]["actual"] = "2834665430000"
+        mismatch = dict(rule, status="fail", actual="2834665430000", label="已核准條碼公式", reason="印字與標準不同")
+        manual = dict(result, checks=[mismatch, unread], status="fail", counts={"pass":0,"fail":1,"review":1,"read":0})
         with self.engine.begin() as conn:
             conn.execute(insert(db.corrections).values(id="revision", inspection_id="papaya", revision=1,
-                change={}, patches=[], result=manual, ocr=self.ocr, status="review", reviewer="A", note="", created_at=db.now()))
-        listed = self.get("/api/inspections")["items"][0]
-        self.assertEqual(listed["issue_reasons"], [dict(key="barcode_unread",status="review",label="條碼圖形",reason="未解碼",printed_match=True)])
-        self.assertNotIn("printed_match", listed["manual_issue_reasons"][0])
-        self.assertEqual(listed["counts"], {"pass":1,"fail":0,"review":1,"read":0})
+                change={}, patches=[], result=manual, ocr=self.ocr, status="fail", reviewer="A", note="", created_at=db.now()))
+            conn.execute(insert(history_status.summaries).values(policy="literal-text-v2/issues-v1",
+                source_table=db.inspections.name, row_id="papaya", status="review",
+                counts={"counts":result["counts"],"issue_reasons":[dict(unread, printed_match=True)]}))
+        details = self.get("/api/inspections/papaya")
+        self.assertEqual((details["status"],details["result"]["checks"]), ("pass",[rule]))
+        revision = details["manual_revision"]
+        self.assertEqual((revision["status"],revision["result"]["checks"]), ("fail",[mismatch]))
+        self.assertEqual(details["correction_history"][0]["status"], "fail")
+        history = self.get("/api/inspections?status=pass")
+        self.assertEqual(history["day_counts"], {"2026-11-23":{"photos":1,"records":1}})
+        listed = history["items"][0]
+        self.assertEqual((listed["status"],listed["manual_status"]), ("pass","fail"))
+        self.assertEqual((listed["issue_reasons"],[i["key"] for i in listed["manual_issue_reasons"]]), ([],["web_barcode_rule"]))
+        self.assertEqual(listed["counts"], {"pass":1,"fail":0,"review":0,"read":0})
+        self.assertEqual(listed["manual_counts"], {"pass":0,"fail":1,"review":0,"read":0})
+        self.assertEqual(self.get("/api/inspections?status=review")["items"], [])
+        for status, count in (("pass",1),("review",0)):
+            response = self.client.post("/api/admin/history/preview", json={"filters":{"status":status}}, headers=self.headers)
+            self.assertEqual(response.json["count"], count)
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.scalar(select(db.inspections.c.result)), result)
+            self.assertEqual(conn.scalar(select(db.corrections.c.result)), manual)
+
+    def test_stripe_reminder_alone_and_unverified_printed_text_still_require_review(self):
+        unread = {"key":"barcode_unread","status":"review","label":"條碼圖形"}
+        unverified = {"key":"text_line_0","status":"read","source":"ocr","actual":"2834665432931"}
+        for identifier, remaining in (("only",[]), ("unverified",[unverified])):
+            self.seed(identifier, dict(self.old, checks=[unread,*remaining], status="review"))
+            details = self.get("/api/inspections/"+identifier)
+            self.assertEqual((details["status"],details["result"]["checks"]), ("review",remaining))
+        history = self.get("/api/inspections?status=review")
+        self.assertEqual(history["day_counts"], {"2026-11-23":{"photos":1,"records":2}})
+        self.assertEqual({i["id"]:i["counts"] for i in history["items"]},
+                         {"only":{"pass":0,"fail":0,"review":0,"read":0},
+                          "unverified":{"pass":0,"fail":0,"review":0,"read":1}})
 
     def test_pre_policy_text_mismatch_keeps_its_original_judgment_and_reason(self):
         old = deepcopy(self.old)
@@ -140,8 +171,8 @@ class HistoryNutritionTests(unittest.TestCase):
         self.ocr = {"lines":[line(i, wrong if i == 3 else text, score=1) for i, text in enumerate(labels)]}
         old_check = {"key":"preserved_product","line_ids":[0],"status":"pass","reason":"當時的核對依據"}
         old = {"nutrition_policy":"excluded-v1", "fields":{"product":{"value":"當時的品名"}},
-               "inputs":{"base_date":"2025-08-19"},"checks":[old_check],"status":"pass",
-               "counts":{"pass":1,"fail":0,"review":0,"read":0}}
+               "inputs":{"base_date":"2025-08-19"},"checks":[old_check,{"key":"barcode_unread","status":"review"}],
+               "status":"review","counts":{"pass":1,"fail":0,"review":1,"read":0}}
         self.seed("hidden", old)
         corrected = deepcopy(self.ocr)
         corrected["lines"][3].update(text=correct, human_verified=True, original_ocr_text=wrong)
@@ -158,6 +189,7 @@ class HistoryNutritionTests(unittest.TestCase):
         self.assertEqual(shown["result"]["inputs"], old["inputs"])
         self.assertEqual(shown["result"]["fields"]["product"], old["fields"]["product"])
         self.assertIn(old_check, shown["result"]["checks"])
+        self.assertNotIn("barcode_unread", [check["key"] for check in shown["result"]["checks"]])
         self.assertEqual(shown["status"], "fail")
         self.assertTrue(any(check.get("expected")==correct and check.get("actual")==wrong and check["status"]=="fail"
                             for check in shown["result"]["checks"]))

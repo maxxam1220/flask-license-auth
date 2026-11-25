@@ -6,12 +6,26 @@ from validation import traditional_display
 
 
 NUTRITION_POLICY = "literal-text-v2"
+BARCODE_POLICY = "external-reader-v1"
 
 
 def _recount(result):
-    counts=Counter(check.get("status") for check in result["checks"])
+    counts=Counter(check.get("status") for check in result["checks"] if isinstance(check,dict))
     result["counts"]={k:counts[k] for k in ("pass","fail","review","read")}
-    result["status"]="fail" if counts["fail"] else "review" if not result["checks"] or counts["review"] or counts["read"] else "pass"
+    result["status"]="fail" if counts["fail"] else "pass" if counts["pass"] and counts["pass"]==len(result["checks"]) else "review"
+
+
+def project_barcode(result):
+    """Present a saved inspection under the current barcode policy without changing its snapshot."""
+    projected = dict(result, barcode_policy=BARCODE_POLICY)
+    original = result.get("checks")
+    if isinstance(original, list):
+        checks = [check for check in original if not (isinstance(check, dict) and
+                  check.get("key") == "barcode_unread" and check.get("status") == "review")]
+        if len(checks) != len(original):
+            projected["checks"] = checks
+            _recount(projected)
+    return projected
 
 
 def _group_unverified_nutrition(checks, rows):
@@ -130,4 +144,5 @@ def augment(result, ocr):
             for line in check.get("source_lines",[]):
                 line["score_kind"]="uncertainty_gate"
                 line["score"]=None
+    result["barcode_policy"]=BARCODE_POLICY
     return result

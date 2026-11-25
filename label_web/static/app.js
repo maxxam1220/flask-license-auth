@@ -1705,14 +1705,7 @@ function renderLogicChecks(result,area){
 }
 function dateResultCheck(check){return check?.source==="date" || /^(manufacture|expiry|arrival)(_|$)|^date_|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check?.key || "");}
 function barcodeResultCheck(check){return /barcode/i.test(check?.key || "") || check?.source==="barcode" || check?.label==="條碼";}
-function checkIssueText(check,allChecks=[]){
-  if(check.key==="barcode_unread" && check.status==="review"){
-    const digits=String(check.actual || "").replace(/\s/g,"");
-    const printedMatch=check.printed_match===true || (/^\d+$/.test(digits) && allChecks.some(other=>
-      other.key==="web_barcode_rule" && other.source==="database" && other.status==="pass" &&
-      String(other.actual || "").replace(/\s/g,"")===digits && String(other.expected || "").replace(/\s/g,"")===digits));
-    return `條碼圖形未讀到，${printedMatch ? "印字與標準相符。" : ""}請實際掃碼確認。`;
-  }
+function checkIssueText(check){
   const label=check.label || "",reason=check.reason || "";
   if(!reason) return label || "請查看判定明細";
   return label && !reason.startsWith(label) ? `${label}：${reason}` : reason;
@@ -1736,7 +1729,8 @@ function barcodeOnlyEvidence(line,result,checks){
   return values.some(value=>value===observed || (/^[0-9\s]{8,}$/.test(observed) && /^[0-9\s]{8,}$/.test(value) && observed.replace(/\s/g,"")===value.replace(/\s/g,"")));
 }
 function buildResultSections(inspection,result,ocr){
-  const allChecks=result.checks || [],checks=allChecks.filter(check=>!isNutritionCalculation(check));
+  const allChecks=result.checks || [],checks=allChecks.filter(check=>
+    !isNutritionCalculation(check) && !(check.key==="barcode_unread" && check.status==="review"));
   const dateChecks=checks.filter(dateResultCheck),barcodeChecks=checks.filter(barcodeResultCheck);
   const textChecks=checks.filter(check=>!dateResultCheck(check) && !barcodeResultCheck(check) && !["photo_scope","source_identity_conflict"].includes(check.key));
   const lines=(ocr.lines || []).filter(line=>!dateOnlyEvidence(line,result) && !barcodeOnlyEvidence(line,result,barcodeChecks));
@@ -1807,26 +1801,30 @@ function renderTraceability(checks,urls,card,onlyTrace){
   card.append(section);
 }
 function renderBarcodeCard(model,result,area,inspection=state.inspection){
-  if(!model.barcodeChecks.length)return;
   const isTrace=check=>String(check.key || "").startsWith("barcode_traceability_");
   const trace=model.barcodeChecks.filter(isTrace),checks=model.barcodeChecks.filter(check=>!isTrace(check));
   const urls=barcodeDisplayValues(trace.map(check=>check.actual));
   const field=result.fields?.barcode,observed=field?.display_value || field?.value;
   const values=barcodeDisplayValues([urls.includes(observed) || urls.includes(field?.value) ? null : observed,...checks.map(check=>check.display_actual || check.actual)]);
+  if(!model.barcodeChecks.length && !values.length)return;
   if(!checks.length && !values.length){
     const card=element("section",`result-barcode-card ${resultRowStatus(trace)}`);card.id="result-barcode-card";
     renderTraceability(trace,urls,card,true);area.append(card);return;
   }
   const formulaPass=checks.some(check=>check.key==="web_barcode_rule" && check.source==="database" && check.status==="pass" && check.expected);
-  const readabilityOnly=check=>formulaPass && check.key==="barcode_unread" && check.status==="review",status=resultRowStatus(checks.filter(check=>!readabilityOnly(check))),referenced=checks.some(check=>check.status==="pass" && check.source==="database" && check.expected),card=element("section",`result-barcode-card ${status}`);card.id="result-barcode-card";
-  const formulaLabel="✓ 條碼數字與日期規則相符",readabilityNote="條紋尚未成功解碼，需實際掃碼確認可讀性。";
-  card.append(element("h3","","商品條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 僅辨識",pass:formulaPass ? formulaLabel : referenced ? "✓ 已核對相符" : "✓ 基本檢查通過"}[status]));
+  const referenced=checks.some(check=>check.status==="pass" && check.source==="database" && check.expected);
+  const checkStatus=resultRowStatus(checks),status=checkStatus==="pass" && !referenced ? "read" : checkStatus;
+  const card=element("section",`result-barcode-card ${status}`);card.id="result-barcode-card";
+  const formulaLabel="✓ 條碼數字與日期規則相符";
+  card.append(element("h3","","商品條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 商品碼未核對",pass:formulaPass ? formulaLabel : "✓ 已核對相符"}[status]));
   if(formulaPass && status!=="pass")card.append(element("p","barcode-formula-status pass",formulaLabel));
   for(const value of values.slice(0,3))card.append(element("p","barcode-observed",value));
-  const problems=checks.filter(check=>["fail","review"].includes(check.status) && !readabilityOnly(check)),reasons=[...new Set(problems.map(check=>check.reason).filter(Boolean))];reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
-  if(checks.some(readabilityOnly))card.append(element("p","check-reason barcode-readability review",`? ${readabilityNote}`));
-  if(!referenced)card.append(element("p","help","格式或解碼檢查不代表已確認商品或批次條碼。"));
-  const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${readabilityOnly(check) ? readabilityNote : check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}card.append(detail);
+  const problems=checks.filter(check=>["fail","review"].includes(check.status)),reasons=[...new Set(problems.map(check=>check.reason).filter(Boolean))];reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
+  if(checks.length){
+    const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));
+    for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}
+    card.append(detail);
+  }
   if(inspection?.id){const button=element("button","button secondary barcode-rule-entry",allowed() ? "查看推算／補上條碼規則" : "查看條碼推算");button.id="result-barcode-rule-open";button.type="button";button.dataset.barcodeRule="true";button.disabled=state.busy;button.onclick=()=>openBarcodeRule(inspection.id);card.append(button);}
   if(trace.length)renderTraceability(trace,urls,card,false);
   area.append(card);
@@ -2102,7 +2100,7 @@ function renderInspection(inspection) {
     if(!problems.length)continue;
     const group=element("div",`rule-issue-summary count-${status}`);
     group.append(element("strong","",`${label} ${problems.length} 個檢查點`));
-    for(const reason of new Set(problems.map(check=>checkIssueText(check,ruleChecks))))group.append(element("p","",reason));
+    for(const reason of new Set(problems.map(checkIssueText)))group.append(element("p","",reason));
     counts.append(group);
   }
   header.append(element("strong","result-verdict",coverage.title),counts,element("p","result-coverage",coverage.note)); area.append(header);

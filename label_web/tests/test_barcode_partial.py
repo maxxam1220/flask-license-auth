@@ -92,11 +92,11 @@ class PartialBarcodeTests(unittest.TestCase):
         self.assertEqual(self.hri(evidence([row("182333",human_verified=True)]))["status"],"fail")
         self.assertEqual(self.hri(evidence([row("182333",human_verified=True,human_uncertain=True)]))["status"],"review")
 
-    def test_no_decode_preserves_old_full_length_candidate_rules(self):
+    def test_no_decode_alone_adds_no_verdict_but_explicit_checksum_still_applies(self):
         self.assertEqual(checks_for(evidence([row("182333")],decoded=False)), [])
-        checks=checks_for(evidence([row(VALUE)],decoded=False))
-        self.assertEqual([item["key"] for item in checks], ["barcode_unread"])
-        self.assertEqual(checks[0]["status"], "review")
+        self.assertEqual(checks_for(evidence([row(VALUE)],decoded=False)), [])
+        checks=checks_for(evidence([row("EAN: 2834667832334")],decoded=False))
+        self.assertEqual([(item["key"],item["status"]) for item in checks], [("barcode_checksum_0","fail")])
 
     def test_multiple_barcodes_do_not_borrow_partial_digits(self):
         data=evidence([row("182333")])
@@ -126,12 +126,45 @@ class PartialBarcodeTests(unittest.TestCase):
         data["lines"][0].update(text="4711378333472", human_verified=True)
         self.assertEqual(self.hri(data)["status"], "fail")
 
-    def test_traceability_url_does_not_replace_unread_product_bars(self):
+    def test_traceability_url_only_confirms_the_url(self):
         data = evidence([row(VALUE)], decoded=False)
         data["barcodes"]["items"].append({"text":"http://任意.example/查詢", "format":"QRCode", "box":[]})
         checks = {item["key"]:item for item in checks_for(data)}
-        self.assertEqual(checks["barcode_unread"]["status"], "review")
+        self.assertEqual(set(checks), {"barcode_traceability_0"})
         self.assertEqual(checks["barcode_traceability_0"]["status"], "pass")
+
+    def test_printed_barcode_evidence_without_decoded_bars(self):
+        from inspection_evidence import augment, BARCODE_POLICY
+        from source_validation import evaluate_source
+        source={"source_kind":"manual","barcode_values":[VALUE],"barcode_config":{"kind":"1"}}
+        for reference,printed,mark,status in (
+                (source,VALUE,{},"pass"), (source,"2834667832334",{},"fail"),
+                (source,VALUE,{"human_uncertain":True},"review"), (None,VALUE,{},"read")):
+            with self.subTest(printed=printed,status=status):
+                ocr=evidence([row(printed,score=.99,**mark)],decoded=False)
+                result=augment(evaluate_source(ocr["lines"],reference),ocr)
+                self.assertEqual([(item["status"],item["actual"]) for item in result["checks"]],[(status,printed)])
+                self.assertEqual(result["barcode_policy"],BARCODE_POLICY)
+                self.assertEqual(result["status"],"review" if status=="read" else status)
+                self.assertEqual(ocr["barcodes"],{"state":"not_read","items":[]})
+
+    def test_old_scannability_reminder_is_removed_without_inventing_a_pass(self):
+        from inspection_evidence import project_barcode
+        reminder={"key":"barcode_unread","status":"review","line_ids":[1]}
+        saved={"checks":[reminder],"status":"review","counts":{"review":1}}
+        displayed=project_barcode(saved)
+        self.assertEqual(displayed["checks"],[])
+        self.assertEqual(displayed["status"],"review")
+        self.assertEqual(sum(displayed["counts"].values()),0)
+        for key,status in (("web_barcode_rule","pass"),("barcode_hri","fail"),("manual_1","review"),("text_line_1","read"),
+                           ("barcode_unread","fail")):
+            check={"key":key,"status":status,"line_ids":[1]}
+            result=project_barcode(dict(saved,checks=[reminder,check]))
+            self.assertEqual(result["checks"],[check])
+            self.assertEqual(result["counts"][status],1)
+            self.assertEqual(result["status"],"review" if status=="read" else status)
+            self.assertEqual(project_barcode(result),result)
+        self.assertEqual(saved,{"checks":[reminder],"status":"review","counts":{"review":1}})
 
     def test_url_exemption_requires_qr_with_a_web_address(self):
         for kind, value in (("QR Code","12345678"), ("QR Code","https://"),
