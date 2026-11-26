@@ -487,6 +487,14 @@ def _date_review_reason(check, evidence):
         return f"沒有讀到完整的{label}，請對照原圖確認。"
     if any(line.get("human_uncertain") for line in evidence):
         return f"人工已標記{label}看不清楚，請對照原圖確認。"
+    for line in evidence:
+        retry = line.get("date_retry") or {}
+        if line.get("human_verified") or retry.get("kind") != check["key"]:
+            continue
+        if retry.get("status") == "disagrees":
+            return f"{label}的整張讀值與局部重讀不同，請對照原照確認。"
+        if retry.get("status") == "uncertain":
+            return f"局部重讀後仍無法確認{label}，請對照原照。"
     if len(evidence) == 1 and not evidence[0].get("human_verified"):
         line = evidence[0]
         alternatives = []

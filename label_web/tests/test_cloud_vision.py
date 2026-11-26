@@ -36,6 +36,16 @@ def response(lines=None, **changes):
     return result
 
 
+def date_reply(*readings, **changes):
+    reply = response(**changes)
+    reply["output"][0]["content"][0]["text"] = json.dumps({"readings":list(readings)}, ensure_ascii=False)
+    return reply
+
+
+def date_reading(identifier, text, **changes):
+    return dict({"target_id":identifier, "text":text, "uncertain":False, "alternatives":[]}, **changes)
+
+
 class CloudVisionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -82,6 +92,113 @@ class CloudVisionTests(unittest.TestCase):
         self.assertNotIn(self.secret, json.dumps(payload))
         self.assertEqual(result["cloud_call_count"], 1)
         self.assertFalse(result["capabilities"]["automatic_retry"])
+        self.assertTrue(result["capabilities"]["automatic_date_retry"])
+        self.assertEqual((result["diagnostics"]["date_retry_call_count"],result["diagnostics"]["date_retry_target_count"]), (0,0))
+
+    def test_two_uncertain_dates_share_one_blind_crop_request_and_keep_all_usage(self):
+        manufacture = "製造日期: 2026.11.26"
+        expiry = "有效日期: 2026.11.29 03時"
+        possible = "製造日期: 2026.11.20"
+        second = line("有效日期:")
+        for point in second["box"]:
+            point["y"] += 90
+        value = line("2026.11.29 03時", uncertain=True)
+        for point in value["box"]:
+            point["x"] += 194
+            point["y"] += 90
+        initial = response([line(manufacture, alternatives=[possible]), second, value])
+        reread = date_reply(date_reading("date-2", expiry), date_reading("date-1", manufacture))
+        reserve = Mock(return_value=True)
+        engine = cloud.CloudVisionEngine(reserve_date_retry=reserve)
+        self.transport.side_effect = [initial, reread]
+        result = engine.recognize(self.image)
+        self.assertEqual(self.transport.call_count, 2)
+        reserve.assert_called_once_with()
+        payload, key, timeout = self.transport.call_args.args
+        self.assertEqual(key, self.secret)
+        self.assertLessEqual(timeout, 30)
+        self.assertLessEqual(payload["max_output_tokens"], 1024)
+        self.assertEqual(payload["text"]["format"]["schema"], cloud.DATE_REREAD_SCHEMA)
+        self.assertFalse(payload["store"])
+        self.assertNotIn("previous_response_id", payload)
+        prompt = json.dumps(payload, ensure_ascii=False)
+        for hidden in (manufacture, possible, expiry, "2026.11", "03時", "manufacture", "expiry"):
+            self.assertNotIn(hidden, prompt)
+        parts = payload["input"][0]["content"]
+        self.assertEqual([p.get("text") for p in parts if p["type"]=="input_text"], ["date-1","date-2"])
+        for item in (part for part in parts if part["type"]=="input_image"):
+            with Image.open(io.BytesIO(base64.b64decode(item["image_url"].split(",")[1]))) as submitted:
+                self.assertLess(submitted.width, 640)
+                self.assertLess(submitted.height, 480)
+                self.assertFalse(submitted.info)
+        self.assertEqual([row["date_retry"]["status"] for row in result["lines"]], ["confirmed"] * 3)
+        self.assertEqual(result["date_retry"]["line_ids"], [0,1,2])
+        self.assertEqual(result["lines"][0]["date_retry"]["first"]["alternatives"][0]["text"], possible)
+        self.assertEqual((result["cloud_call_count"], result["cloud_usage_status"], result["usage_known"]), (2,"complete",True))
+        self.assertEqual(result["usage"], {"input_tokens":4600,"output_tokens":1400,"total_tokens":6000,
+            "input_tokens_details":{"cached_tokens":200},"output_tokens_details":{"reasoning_tokens":400}})
+        self.assertEqual([x["stage"] for x in result["cloud_calls"]], ["initial","date_reread"])
+        self.assertEqual(result["cloud_calls"], engine.cloud_calls)
+        self.assertEqual((result["diagnostics"]["date_retry_call_count"],result["diagnostics"]["date_retry_target_count"]), (1,2))
+
+    def test_second_timeout_returns_first_read_and_partial_billing_receipt(self):
+        initial = response([line("有效日期: 2026.11.29 03時", uncertain=True)])
+        self.transport.side_effect = [initial, cloud.CloudVisionError("timeout", request_may_be_billed=True)]
+        result = self.recognize()
+        self.assertEqual(self.transport.call_count, 2)
+        self.assertEqual(result["date_retry"], {"status":"failed","line_ids":[0],"reason":"timeout"})
+        self.assertTrue(result["lines"][0]["uncertain"])
+        self.assertNotIn("date_retry", result["lines"][0])
+        self.assertEqual(result["usage"]["total_tokens"], 3000)
+        self.assertFalse(result["usage_known"])
+        self.assertEqual(result["cloud_usage_status"], "partial")
+        self.assertEqual(result["cloud_calls"][1], {"stage":"date_reread","status":"failed","target_count":1,
+            "error_code":"timeout","request_may_be_billed":True,"usage":None})
+        self.assertEqual((result["diagnostics"]["date_retry_call_count"],result["diagnostics"]["date_retry_target_count"]), (1,1))
+
+    def test_date_id_or_response_error_keeps_initial_lines_and_accounts_for_received_usage(self):
+        original = "有效日期: 2026.11.29 03時"
+        good = date_reading("date-1", original)
+        for reread in (date_reply(dict(good,target_id="another")), date_reply(good,good), date_reply(dict(good,uncertain="false")),
+                       date_reply(dict(good,text="X"*257)), date_reply(good,model="not-the-model"), response(status="incomplete")):
+            with self.subTest(reread=reread["status"]):
+                self.transport.reset_mock()
+                self.transport.side_effect = [response([line(original, uncertain=True)]), reread]
+                result = self.recognize()
+                self.assertEqual(self.transport.call_count, 2)
+                self.assertTrue(result["lines"][0]["uncertain"])
+                self.assertEqual((result["date_retry"]["status"], result["usage"]["total_tokens"]), ("failed",6000))
+                self.assertTrue(result["cloud_calls"][1]["request_may_be_billed"])
+
+    def test_date_second_usage_known_even_if_initial_unknown_and_quota_skip_is_one_call(self):
+        expected = "有效日期: 2026.11.29 03時"
+        initial = response([line(expected, uncertain=True)], usage=None)
+        self.transport.side_effect = [initial, date_reply(date_reading("date-1", expected))]
+        result = self.recognize()
+        self.assertEqual((result["usage"]["total_tokens"],result["usage_known"],result["cloud_usage_status"]), (3000,False,"partial"))
+        self.transport.reset_mock()
+        self.transport.side_effect = [initial]
+        reserve = Mock(return_value=False)
+        limited = cloud.CloudVisionEngine(reserve_date_retry=reserve).recognize(self.image)
+        reserve.assert_called_once_with()
+        self.transport.assert_called_once()
+        self.assertTrue(limited["lines"][0]["uncertain"])
+        self.assertEqual(limited["date_retry"], {"line_ids":[0],"status":"skipped","reason":"budget_unavailable"})
+        self.assertEqual((limited["diagnostics"]["date_retry_call_count"],limited["diagnostics"]["date_retry_target_count"]), (0,0))
+        self.assertEqual((limited["usage"],limited["usage_known"],limited["cloud_usage_status"]), (None,False,"unknown"))
+
+    def test_date_crop_failure_or_expired_time_budget_does_not_charge_or_remove_primary_reading(self):
+        first = response([line("有效日期: 2026.11.29 03時", uncertain=True)])
+        for failure, reason in ((patch("cloud_vision._date_content", side_effect=OSError("image gone")), "crop_unavailable"),
+                                (patch("cloud_vision.time.monotonic", side_effect=[1,92,93]), "time_budget")):
+            with self.subTest(reason=reason), failure:
+                reserve = Mock()
+                self.transport.reset_mock()
+                self.transport.return_value = first
+                result = cloud.CloudVisionEngine(reserve_date_retry=reserve).recognize(self.image)
+                reserve.assert_not_called()
+                self.transport.assert_called_once()
+                self.assertEqual((result["date_retry"]["reason"],result["cloud_call_count"]), (reason,1))
 
     def test_preserves_printed_spelling_simplified_punctuation_and_outer_spaces(self):
         original = " 産地:台湾 ※ 淨重200g±9g，2025.11.16 "

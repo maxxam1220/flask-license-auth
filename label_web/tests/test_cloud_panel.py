@@ -10,7 +10,7 @@ from unittest.mock import patch
 from PIL import Image
 
 import cloud_vision as cloud
-from tests.test_cloud_vision import line, response
+from tests.test_cloud_vision import line, response, date_reading, date_reply
 
 
 def panel_document(**changes):
@@ -109,6 +109,24 @@ class CloudPanelTests(unittest.TestCase):
             transport.assert_called_once()
             self.assertTrue(caught.exception.request_may_be_billed)
             self.assertEqual(caught.exception.usage["total_tokens"],3000)
+
+    def test_date_at_edge_rereads_only_inside_selected_panel(self):
+        text = "有效日期: 2026.11.29 03時"
+        document = panel_document(label_region={"x":10,"y":10,"width":380,"height":240},
+                                  lines=[line(text, uncertain=True)])
+        first = response()
+        first["output"][0]["content"][0]["text"] = json.dumps(document,ensure_ascii=False)
+        with tempfile.TemporaryDirectory() as folder,patch.dict(os.environ,{"OPENAI_API_KEY":"test-only"},clear=True):
+            path = Path(folder)/"photo.png"
+            Image.new("RGB", (640,480), "white").save(path)
+            with patch("cloud_vision._post_response", side_effect=[first,date_reply(date_reading("date-1",text))]) as transport:
+                result = cloud.CloudVisionEngine().recognize_panel(path)
+        self.assertEqual(transport.call_count, 2)
+        self.assertEqual(result["cloud_call_count"], 2)
+        self.assertEqual(result["label_region"]["x"], 10)
+        retry = result["lines"][0]["date_retry"]
+        self.assertEqual(retry["status"], "confirmed")
+        self.assertEqual(retry["crop_box"][:2], [10,10])
 
 
 if __name__=="__main__":unittest.main()

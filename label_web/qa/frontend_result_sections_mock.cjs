@@ -228,4 +228,35 @@ check("history nutrition starts fully collapsed with its mixed verdict visible a
     assert.equal(section.querySelectorAll(".section-issue").length,2);assert.ok(section.querySelector(".line-mark"));
   }finally{t.state.historyNutrition=null;}
 });
+check("date card keeps the first reading separate from the reread, including a confirmed date",()=>{
+  for(const [status,title,verdict] of [["confirmed","兩次讀值一致","pass"],["disagrees","兩次讀值不同","review"],["uncertain","重讀仍不確定","review"]]){
+    const original="有效日期：2026.11.29 03時",second=status==="uncertain" ? "" : status==="disagrees" ? "有效日期：2026.11.28 03時" : original;
+    const observed={...line(13,original),date_retry:{kind:"expiry",status,line_ids:[13],first:{text:original,alternatives:[{text:"有效日期：2026.11.20"}]},reading:{text:second,alternatives:[]}}};
+    const s=sample([observed],[{key:"expiry",source:"date",status:verdict,actual:"2026.11.29 03時",line_ids:[13]}]);
+    const area=new Node();pick("renderUnmatchedDates")(s.inspection,s.result,area,true);
+    const detail=area.querySelector(".date-retry-evidence");assert.ok(detail);
+    assert.ok(detail.textContent.includes(title));assert.ok(detail.textContent.includes("第一次整張讀值　"+original));
+    assert.ok(detail.textContent.includes("第一次的其他候選　有效日期：2026.11.20"));
+    assert.ok(detail.textContent.includes("局部重讀　"+(second || "未辨認出完整文字")));
+  }
+});
+check("failed and skipped date reads identify only the affected date and preserve old records",()=>{
+  const append=pick("appendDateRetryEvidence"),node=new Node();
+  append(node,{lines:[]},[1],"expiry");assert.equal(node.textContent,"");
+  const ocr={lines:[line(1,"有效日期：2026.11.29")],date_retry:{status:"failed",line_ids:[1],reason:"timeout"}};
+  append(node,ocr,[2],"manufacture");assert.equal(node.textContent,"");
+  append(node,ocr,[1],"expiry");assert.match(node.textContent,/已送出.*未取得可用結果/);
+  const skipped=new Node();ocr.date_retry={status:"skipped",reason:"budget_unavailable",line_ids:[1]};
+  append(skipped,ocr,[1],"expiry");assert.match(skipped.textContent,/可用次數不足.*未送出/);
+});
+check("unknown second-call usage shows a known subtotal, with both stages distinguishable",()=>{
+  const s=sample([line(1,"有效日期：2026.11.29")]);
+  Object.assign(s.ocr,{recognition_engine:"cloud",cloud_call_count:2,cloud_usage_status:"partial",preprocessing:{passes:2},usage:{input_tokens:80,output_tokens:20,total_tokens:100},
+    cloud_calls:[{stage:"initial",status:"done",usage:{total_tokens:100}},{stage:"date_reread",status:"failed",usage:null}]});
+  const area=new Node();pick("renderRecognitionInfo")(s.inspection,s.result,[],area);
+  assert.match(area.textContent,/本次整圖讀取：1 次/);assert.match(area.textContent,/日期局部重讀：1 次/);
+  const usage=area.querySelector(".cloud-usage");
+  assert.match(usage.textContent,/已送出 2 次/);assert.match(usage.textContent,/已知小計：100 tokens/);
+  assert.match(usage.textContent,/日期局部重讀 · 用量未回報/);assert.doesNotMatch(usage.textContent,/總用量：100/);
+});
 console.log(`PASS ${count} independent result section checks`);

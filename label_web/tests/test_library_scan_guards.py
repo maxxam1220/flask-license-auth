@@ -1,6 +1,7 @@
 """Offline removal races: never pay or pass against a removed local standard."""
 from copy import deepcopy
 import io
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -15,6 +16,7 @@ import database as db
 import label_source
 import manual_reference
 from server import create_app
+from test_cloud_vision import line as provider_line, response as provider_response
 from test_validation import make_lines, STANDARD
 
 
@@ -104,6 +106,22 @@ class LibraryScanGuardTests(unittest.TestCase):
     def recognize(self, identifier, request_id="c"*32):
         return self.client.post(f"/api/inspections/{identifier}/recognize",json={"request_id":request_id,
             "recognition_engine":"cloud","label_scope":"full"},headers=self.headers)
+
+    def test_removal_during_first_cloud_read_skips_paid_date_followup(self):
+        self.app.config["CLOUD_OCR"] = None
+        def remove_after_initial(*args):
+            self.deactivate("photo")
+            return provider_response([provider_line("有效日期：2026.11.29", uncertain=True)])
+        with patch.dict(os.environ, {"OPENAI_API_KEY":"test-only","LABELCHECK_CLOUD_MODEL":"gpt-6.1-sol"}), \
+             patch("cloud_vision._post_response", side_effect=remove_after_initial) as send:
+            job = self.finish(self.upload(), "failed")
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.count(db.inspections), 0)
+        self.assertEqual(cloud_budget.remaining(self.engine,20), 19)
+        with self.engine.connect() as conn:
+            usage = conn.scalar(select(cloud_budget.calls.c.usage).where(cloud_budget.calls.c.job_id == job["id"]))
+        self.assertEqual(usage["total_tokens"], 3000)
+        self.assertEqual(usage["cloud_call_count"], 1)
 
     def test_removed_manual_and_photo_selections_stop_before_paid_call(self):
         self.deactivate("manual")

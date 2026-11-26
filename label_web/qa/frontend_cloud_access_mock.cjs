@@ -12,7 +12,7 @@ check("unlimited cloud names API billing and never displays a trial allowance",(
 $("#recognition-engine").value="local";t.recognitionChoiceNote();t.configureRecognition(unlimited);
 check("refreshing unlimited availability preserves an explicit local selection and a short local-only note",()=>{assert.equal($("#recognition-engine").value,"local");assert.equal($("#recognition-choice-note").textContent,"使用一般辨識。");});
 fresh();t.configureRecognition({cloud_available:true,cloud_unlimited:false,cloud_limit:20,cloud_remaining:7,default_engine:"cloud"});
-check("finite counters remain internal while the available cloud note stays short",()=>{assert.equal(t.state.recognition.cloud_remaining,7);assert.equal(t.state.recognition.cloud_limit,20);assert.equal($("#recognition-choice-note").textContent,"雲端辨識已開放，依 API 帳戶可用額度計費。");assert.doesNotMatch($("#recognition-choice-note").textContent,/7|20|試用/);});
+check("finite counters remain internal and the paid date reread is disclosed",()=>{assert.equal(t.state.recognition.cloud_remaining,7);assert.equal(t.state.recognition.cloud_limit,20);assert.match($("#recognition-choice-note").textContent,/依 API 帳戶可用額度計費。日期看不清時，最多另送一次局部重讀/);assert.doesNotMatch($("#recognition-choice-note").textContent,/7|20|試用/);});
 t.configureRecognition({...unlimited,cloud_limit:20,cloud_remaining:7});
 check("the explicit unlimited flag takes precedence over stale finite counters",()=>{assert.doesNotMatch($("#recognition-choice-note").textContent,/7|20|試用/);assert.match($("#recognition-choice-note").textContent,/API 帳戶/);});
 fresh();t.configureRecognition({...unlimited,cloud_available:false});

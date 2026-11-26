@@ -447,6 +447,7 @@ def create_app(config=None, ocr=None):
     def process_job(job):
         cloud_reserved=False
         cloud_usage=None
+        active_recognizer=recognizer
         try:
             with engine.begin() as conn:
                 conn.execute(update(db.jobs).where(db.jobs.c.id == job["id"]).values(state="running"))
@@ -457,16 +458,19 @@ def create_app(config=None, ocr=None):
                 # immediately before any paid call, then recheck at commit.
                 with engine.begin() as conn:
                     ensure_job_standard(conn, job)
-                active_recognizer=recognizer
                 if selected=="cloud":
                     from cloud_vision import CloudVisionEngine
-                    active_recognizer=app.config.get("CLOUD_OCR") or CloudVisionEngine()
+                    def reserve_date_retry():
+                        with engine.begin() as conn:
+                            ensure_job_standard(conn, job)
+                        return cloud_budget.reserve_date_retry(engine, job["id"], app.config["CLOUD_TRIAL_LIMIT"])
+                    active_recognizer=app.config.get("CLOUD_OCR") or CloudVisionEngine(reserve_date_retry=reserve_date_retry)
                     cloud_budget.reserve(engine,job["id"],os.environ.get("LABELCHECK_CLOUD_MODEL","gpt-6.1-sol"),app.config["CLOUD_TRIAL_LIMIT"])
                     cloud_reserved=True
                 ocr_result=recognize_scoped(data_dir / "images" / job["image_id"] / "image.jpg",active_recognizer,saved_request.get("label_scope","sticker"))
                 ocr_result["recognition_engine"]=selected
                 if cloud_reserved:
-                    cloud_usage=ocr_result.get("usage")
+                    cloud_usage=cloud_budget.usage_record(ocr_result)
                     cloud_budget.finish(engine,job["id"],"done",cloud_usage)
             inputs = {"batch_date": job["batch_date"], "arrival_date": saved_request.get("arrival_date", ""),
                       "source_code": saved_request.get("source_code", ""),
@@ -515,6 +519,10 @@ def create_app(config=None, ocr=None):
                 # Validation or persistence can fail after a paid response. Keep
                 # its known token usage instead of replacing it with an empty error.
                 failed_usage=cloud_usage if cloud_usage is not None else getattr(error,"usage",None)
+                receipts=getattr(active_recognizer,"cloud_calls",None)
+                if cloud_usage is None and isinstance(receipts,list) and receipts:
+                    from cloud_vision import usage_summary
+                    failed_usage=cloud_budget.usage_record({**usage_summary(receipts),"cloud_calls":receipts})
                 cloud_budget.finish(engine,job["id"],"failed",failed_usage,getattr(error,"code","processing_failed"))
                 message=getattr(error,"safe_message","雲端辨識未完成，照片已保留。重試會再使用一次雲端額度。")
             if isinstance(error, HTTPException) and error.code in {404, 409}:

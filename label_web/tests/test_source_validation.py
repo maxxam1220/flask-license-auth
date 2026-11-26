@@ -184,6 +184,18 @@ class SourceTextTests(unittest.TestCase):
 
 
 class SourceDateTests(unittest.TestCase):
+    def test_date_reread_explains_disagreement_or_unread_crop_without_changing_verdicts(self):
+        for status,reason in (("disagrees","整張讀值與局部重讀不同"),("uncertain","局部重讀後仍無法確認")):
+            with self.subTest(status=status):
+                date=line(0,"有效日期：2026.11.29 03時",score=0)
+                date.update(ambiguous=True,date_retry={"kind":"expiry","status":status})
+                result=evaluate_source([date],source(),base_date="2026-11-26")
+                self.assertEqual(check(result,"expiry")["status"],"review")
+                self.assertIn(reason,check(result,"expiry")["reason"])
+                date["human_uncertain"]=True
+                manual=evaluate_source([date],source(),base_date="2026-11-26")
+                self.assertIn("人工已標記",check(manual,"expiry")["reason"])
+
     def test_unknown_source_year_2025_fails_against_2026_base(self):
         result = evaluate_source([line(0, "到店日：2025.11.12")], None, base_date="2026-11-11")
         self.assertEqual(check(result, "arrival")["status"], "pass")

@@ -443,7 +443,7 @@ function recognitionSettings(prefix=""){
 }
 function recognitionChoiceNote(prefix=""){
   const cloud=$("#"+prefix+"recognition-engine").value==="cloud",config=state.recognition;
-  $("#"+prefix+"recognition-choice-note").textContent=cloud ? config.cloud_available ? "雲端辨識已開放，依 API 帳戶可用額度計費。" : "雲端辨識暫時無法使用。" : "使用一般辨識。";
+  $("#"+prefix+"recognition-choice-note").textContent=cloud ? config.cloud_available ? "雲端辨識已開放，依 API 帳戶可用額度計費。日期看不清時，最多另送一次局部重讀。" : "雲端辨識暫時無法使用。" : "使用一般辨識。";
   if(prefix==="crop-"){if(state.crop && !state.crop.manualScope)state.crop.wholeScope=$("#crop-label-scope").value || "sticker";invalidateCropPreview();}
 }
 function renderInspectSource() {
@@ -831,6 +831,8 @@ function openCorrectionDialog(lineId,dateKey=null) {
   const dateCheck=dateKey && (assessment.checks || []).find(check=>check.key===dateKey && ["review","fail"].includes(check.status) && (check.line_ids || []).includes(lineId));
   const dateNote=$("#correction-date-note");dateNote.textContent=dateCheck?.reason || "";dateNote.hidden=!dateCheck?.reason;
   dateNote.className=`date-first-reason ${dateCheck?.status || "review"}`;
+  const retryArea=$("#correction-date-evidence");retryArea.replaceChildren();
+  appendDateRetryEvidence(retryArea,inspection.ocr,[lineId],dateKey);
   const expected = [...new Set((assessment.checks || []).filter(check=>(check.line_ids || []).includes(lineId)).map(check=>check.expected).filter(Boolean))];
   $("#correction-standard").textContent = expected.join("\n") || "這行尚無比對標準。"; $("#correction-standard-details").open = false;
   $("#correction-revoke").hidden = !patch; $("#correction-revoke-help").hidden = !patch; $("#correction-reload").hidden = true; $("#correction-save").disabled = false; $("#correction-revoke").disabled = false;
@@ -1528,6 +1530,35 @@ function secondaryDateReviews(checks){
   const ids=new Set(dates.flatMap(check=>check.line_ids || []));
   return new Set(checks.filter(check=>check.status==="review" && dateResultCheck(check) && !dates.includes(check) && (check.line_ids || []).some(id=>ids.has(id))));
 }
+function appendDateRetryEvidence(container,ocr,ids,kind){
+  const lines=ocr?.lines || [];
+  const retry=lines.find(line=>ids.includes(line.id) && line.date_retry && (!kind || line.date_retry.kind===kind))?.date_retry;
+  const job=ocr?.date_retry;
+  if(!retry){
+    if(!job?.line_ids?.some(id=>ids.includes(id)))return;
+    let note="";
+    if(job.status==="failed")note="已送出日期局部重讀，但未取得可用結果。保留第一次讀值，請對照原照。";
+    if(job.status==="skipped"){
+      const cause={budget_unavailable:"本次可用次數不足",budget_error:"未能確認可用次數",time_budget:"剩餘處理時間不足",crop_unavailable:"無法擷取日期區域"}[job.reason];
+      note=`${cause ? cause+"，" : ""}未送出日期局部重讀。保留第一次讀值。`;
+    }
+    if(note)container.append(element("p","check-reason",note));
+    return;
+  }
+  const titles={confirmed:"兩次讀值一致",disagrees:"兩次讀值不同",uncertain:"重讀仍不確定"};
+  if(!Object.hasOwn(titles,retry.status))return;
+  const detail=element("details","date-retry-evidence"),reading=retry.reading || {};
+  detail.append(element("summary","",`日期局部重讀 · ${titles[retry.status]}`));
+  const firstReadings=(retry.line_ids || []).map(id=>lines.find(line=>line.id===id)?.date_retry?.first).filter(Boolean);
+  const first=firstReadings.map(record=>record.text).filter(Boolean).join("\n");
+  function add(label,value){if(value)detail.append(element("p","",`${label}　${value}`));}
+  function candidates(values){return [...new Set(values.map(value=>typeof value==="string" ? value : value?.text).filter(Boolean))].join("、");}
+  add("第一次整張讀值",first);
+  add("第一次的其他候選",candidates(firstReadings.flatMap(record=>record.alternatives || [])));
+  add("局部重讀",reading.text || "未辨認出完整文字");
+  add("重讀的其他候選",candidates(reading.alternatives || []));
+  container.append(detail);
+}
 function renderUnmatchedDates(inspection,result,area,showMatched=false){
   const matched=!!inspection.template_id || result.source_match?.status==="matched" || (!result.source_match && !!inspection.template_snapshot?.source?.code);
   if(matched && !showMatched)return;
@@ -1548,8 +1579,8 @@ function renderUnmatchedDates(inspection,result,area,showMatched=false){
     });
     rowChecks.forEach(check=>related.add(check));const status=rowChecks.reduce((worst,check)=>(weights[check.status] ?? 0)>(weights[worst] ?? 0) ? check.status : worst,"read"),row=element("div",`date-first-row ${status}`);row.dataset.dateField=key;
     row.append(element("dt","",label),element("dd","date-first-value",value),element("dd","date-first-status",{pass:"✓ 已做基本檢查",fail:"✕ 有異常",review:"? 需確認",read:"· 尚未核對"}[status] || "· 尚未核對"));
+    const evidence=element("dd","date-row-evidence");
     if(direct && ["fail","review"].includes(direct.status)){
-      const evidence=element("dd","date-row-evidence");
       if(direct.reason){evidence.append(element("p",`date-first-reason ${direct.status}`,direct.reason));shownInline.add(direct);}
       const ids=new Set(direct.line_ids?.length ? direct.line_ids : identifiers);
       const lines=(inspection.ocr?.lines || []).filter(line=>ids.has(line.id));
@@ -1558,8 +1589,9 @@ function renderUnmatchedDates(inspection,result,area,showMatched=false){
         button.type="button";button.dataset.correctLine=String(line.id);button.disabled=state.busy;
         button.onclick=()=>{if(state.inspection?.id===inspection.id)openCorrectionDialog(line.id,key);};evidence.append(button);
       }
-      if(evidence.children.length)row.append(evidence);
     }
+    appendDateRetryEvidence(evidence,inspection.ocr,identifiers,key);
+    if(evidence.children.length)row.append(evidence);
     list.append(row);
   }
   if(list.children.length)panel.append(list);else panel.append(element("p","date-first-empty","未辨識到可列出的製造、有效或到店日期，請對照照片確認；不代表日期已通過。"));
@@ -2215,7 +2247,9 @@ function recognitionInfo(inspection,result,rows){
   facts.push(`原始辨識：${count(diagnostics.line_count) ?? lines.length} 行；目前需確認：${review} 項`);
   if(cloud)facts.push("辨識方式：雲端讀取；需確認標記不是信心分數。");
   else if(typeof ocr.engine==="string" && ocr.engine)facts.push(`辨識引擎：${ocr.engine}`);
-  if(Number.isInteger(pre.passes) && pre.passes>0)facts.push(`本次整圖讀取：${pre.passes} 次${Number(pre.selected_rotation) ? `；採用旋轉 ${pre.selected_rotation}° 的讀取結果` : ""}`);
+  const wholeReads=cloud && Array.isArray(ocr.cloud_calls) ? ocr.cloud_calls.filter(call=>call.stage==="initial").length : pre.passes;
+  if(Number.isInteger(wholeReads) && wholeReads>0)facts.push(`本次整圖讀取：${wholeReads} 次${Number(pre.selected_rotation) ? `；採用旋轉 ${pre.selected_rotation}° 的讀取結果` : ""}`);
+  if(cloud && ocr.cloud_calls?.some(call=>call.stage==="date_reread"))facts.push("日期局部重讀：1 次");
   if(count(diagnostics.line_retry_count)>0)facts.push(`局部文字重讀：${diagnostics.line_retry_count} 行`);
   if(count(diagnostics.rotation_retry_count)>0 && !(Number(pre.passes)>1))facts.push(`旋轉重讀：${diagnostics.rotation_retry_count} 次`);
   if(Number.isFinite(ocr.elapsed) && ocr.elapsed>=0)facts.push(`辨識耗時：${ocr.elapsed} 秒`);
@@ -2236,7 +2270,16 @@ function renderRecognitionInfo(inspection,result,rows,area){
   panel.append(element("p","help","辨識分數與照片尺寸只用來協助判讀，不能保證無錯字；標籤內容仍依逐行比對結果判定。"));
   if(isCloudOCR(inspection.ocr)){
     const usage=element("details","cloud-usage"),data=inspection.ocr.usage || {};usage.append(element("summary","","雲端辨識用量來源"));usage.append(element("p","help",`來源：${inspection.ocr.provider || "雲端服務"}${inspection.ocr.model ? ` · ${inspection.ocr.model}` : ""}`));
-    for(const [key,label] of [["input_tokens","輸入用量"],["output_tokens","輸出用量"],["total_tokens","總用量"]])if(Number.isInteger(data[key]))usage.append(element("p","help",`${label}：${data[key]} tokens`));panel.append(usage);
+    const ocr=inspection.ocr;
+    if(Number.isInteger(ocr.cloud_call_count))usage.append(element("p","help",`已送出 ${ocr.cloud_call_count} 次雲端請求`));
+    if(ocr.cloud_usage_status==="partial")usage.append(element("p","help","部分請求未回報用量，以下僅列已知小計。"));
+    else if(ocr.cloud_usage_status==="unknown" || (!Object.keys(data).length && ocr.usage_known===false))usage.append(element("p","help","服務未回報本次用量。"));
+    for(const [key,label] of [["input_tokens","輸入用量"],["output_tokens","輸出用量"],["total_tokens",ocr.cloud_usage_status==="partial" ? "已知小計" : "總用量"]])if(Number.isInteger(data[key]))usage.append(element("p","help",`${label}：${data[key]} tokens`));
+    for(const call of (ocr.cloud_calls || [])){
+      const label={initial:"首次整張辨識",date_reread:"日期局部重讀"}[call.stage];
+      if(label)usage.append(element("p","help",`${label} · ${Number.isInteger(call.usage?.total_tokens) ? call.usage.total_tokens+" tokens" : "用量未回報"}${call.status==="failed" ? " · 未取得可用辨識結果" : ""}`));
+    }
+    panel.append(usage);
   }
   const recovery=result.recognition_of;
   if(recovery?.inspection_id)panel.append(element("p","help",recovery.crop ? "本筆使用先前照片的人工選定範圍重新辨識；原紀錄保留，未帶入先前人工訂正。" : "本筆重新讀取先前整張照片；原紀錄保留，未帶入先前人工訂正。"));

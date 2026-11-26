@@ -19,6 +19,9 @@ DIGIT = r"[0-9０-９]"
 DATE_PREFIX = re.compile(rf"(?:民國\s*)?{DIGIT}{{3,4}}\s*[年./．／－-]\s*{DIGIT}{{1,2}}\s*[月./．／－-]\s*{DIGIT}{{1,2}}(?:\s*日)?")
 CLOCK_PREFIX = re.compile(rf"\s*(?P<hour>{DIGIT}{{1,2}})\s*(?:[時时](?:\s*(?P<cjk_min>{DIGIT}{{1,2}})\s*分?)?|[:：]\s*(?P<colon_min>{DIGIT}{{1,2}}))")
 DATE_CANDIDATE = re.compile(DATE_PREFIX.pattern.replace(DIGIT, r"[0-9０-９OoIl]"))
+SHORT_DIGIT = r"[0-9０-９OoIl□�]"
+SHORT_DATE_START = re.compile(rf"{SHORT_DIGIT}{{2}}\s*(?:([.．/／])|{SHORT_DIGIT}{{2}})")
+MONTH_LENGTHS = (0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
 def barcode_number(text):
@@ -82,6 +85,44 @@ def split_date_annotation(text, short_format=""):
     if tail and not is_date_annotation(tail):
         raise ValueError("日期後方含無法辨識的文字。")
     return value[:end if short_format else annotation_start].rstrip(), tail
+
+
+def short_date_format_hint(value):
+    """Identify a possible printed form for localization, without guessing its source settings."""
+    start = SHORT_DATE_START.match(value)
+    if not start:
+        return None
+    if start[1]:
+        return "E" if start[1] in ".．" else "G"
+    return "K" if re.match(rf"{SHORT_DIGIT}{{8}}", value) else "I"
+
+
+def short_date_ink(value):
+    """Read a complete MM/DD, MM.DD, MMDD, or MMDD1700/2400 without adding a year."""
+    hint = short_date_format_hint(value)
+    if not hint:
+        return None
+    try:
+        core, annotation = split_date_annotation(value, hint)
+    except ValueError:
+        return None
+    digits = "".join(str(int(c)) for c in core if c.isdecimal())
+    month, day = int(digits[:2]), int(digits[2:4])
+    if not 1 <= month <= 12 or not 1 <= day <= MONTH_LENGTHS[month]:
+        return None
+    if hint == "K" and digits[4:] not in {"1700", "2400"}:
+        return None
+    # An uninterrupted extra digit is part of the core or an explicit clock.
+    # Never reinterpret part of a damaged eight-digit field as an annotation.
+    match = re.match(r"\s*".join(re.escape(char) for char in core), value)
+    if not match:
+        return None
+    suffix = value[match.end():]
+    if suffix[:1].isdecimal() and (hint == "K" or not CLOCK_PREFIX.match(suffix)):
+        return None
+    if any(barcode_number(run[0]) for run in re.finditer(rf"{DIGIT}(?:[\s－-]*{DIGIT})*", suffix)):
+        return None
+    return core, annotation
 
 
 def unlabelled_dates(text):
@@ -391,6 +432,8 @@ def date_evidence(heading, value, lines, kind=None):
             if other["id"] in {item["id"] for item in evidence} or anchor_kind(other.get("text","")) or not bounds(other):
                 continue
             raw = str(other["text"]).strip()
+            if kind in DATE_KINDS and not value.strip() and barcode_number(raw) and not short_date_ink(raw):
+                continue
             is_marker = False
             if complete:
                 clock = CLOCK_PREFIX.match(raw)
@@ -404,7 +447,12 @@ def date_evidence(heading, value, lines, kind=None):
                     continue
             elif not DATE_PREFIX.match((value + raw).strip()) and not re.fullmatch(
                     r"(?:民國)?[0-9０-９OoIl][0-9０-９OoIl年月日./．／－:時时分-]{0,23}", re.sub(r"\s+", "", raw)):
-                continue
+                # A separate date heading may be followed by a short printed
+                # date, an optional time, and a symbol. Existing geometric
+                # and competing-candidate guards still apply to the whole row.
+                short = short_date_ink(raw) if kind in DATE_KINDS and not value.strip() else None
+                if not short or not short[1]:
+                    continue
             nx,ny,nr,nb = bounds(other);height=max(b-y,nb-ny,1)
             row_overlap=max(0,min(b,nb)-max(y,ny))
             horizontal=row_overlap>=min(b-y,nb-ny)*.6 and 0<=nx-r<=height*3

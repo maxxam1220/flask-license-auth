@@ -717,4 +717,5 @@ details.result-zone-nutrition.review>summary .section-status-summary{color:#8055
 .date-first-row .date-row-evidence{grid-column:1/-1;min-width:0}
 .date-row-evidence .date-first-reason{margin:0 0 6px}
 .date-row-evidence .button{min-height:44px;white-space:normal;overflow-wrap:anywhere}
+.date-retry-evidence summary{cursor:pointer;min-height:44px;padding:10px 0}.date-retry-evidence p{margin:4px 0;white-space:pre-line;overflow-wrap:anywhere}
 .rule-date-details>summary{font-size:1rem;font-weight:normal;min-height:44px}

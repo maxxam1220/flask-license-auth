@@ -7,6 +7,7 @@ from sqlalchemy import select,func,update
 from sqlalchemy.exc import IntegrityError
 import cloud_budget
 from cloud_vision import CloudVisionError
+from test_cloud_vision import line as provider_line, response as provider_response
 import test_scan_v2
 
 
@@ -73,6 +74,44 @@ class CloudOpenUsageTests(unittest.TestCase):
         with self.engine.connect() as c:
             row=c.execute(select(cloud_budget.calls).where(cloud_budget.calls.c.job_id==submitted.json['id'])).mappings().one()
         self.assertEqual((row['state'],row['error_code']),('failed','quota'))
+
+    def test_concurrent_date_reservations_share_the_cap_and_cannot_replay(self):
+        jobs = [f'{i:032x}' for i in range(3)]
+        for job in jobs:
+            cloud_budget.reserve(self.engine, job, 'offline', 4)
+        def reserve_again(job):
+            return cloud_budget.reserve_date_retry(self.engine, job, 4)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(reserve_again, jobs * 2))
+        self.assertEqual(sum(results), 1)
+        self.assertEqual(self.used(), 4)
+        self.assertFalse(cloud_budget.reserve_date_retry(self.engine, jobs[results.index(True) % 3], -1))
+        self.assertFalse(cloud_budget.reserve_date_retry(self.engine, 'f'*32, -1))
+        self.assertEqual(self.used(), 4)
+
+    def test_date_followup_respects_last_call_and_keeps_partial_usage_on_timeout(self):
+        uncertain = provider_response([provider_line("有效日期：2026.11.29 03時", uncertain=True)])
+        for used, limit, expected_calls in [(0, 1, 1), (1, 3, 2)]:
+            with self.subTest(limit=limit):
+                self.app.config.update(CLOUD_TRIAL_LIMIT=limit, CLOUD_OCR=None)
+                with patch.dict(os.environ, {'OPENAI_API_KEY':'test-only','LABELCHECK_CLOUD_MODEL':'gpt-6.1-sol'}), \
+                     patch('cloud_vision._post_response', side_effect=[uncertain, CloudVisionError('timeout',request_may_be_billed=True)]) as send:
+                    request_id=f'{limit:032x}'
+                    first=self.upload(request_id=request_id)
+                    self.assertEqual(first.status_code,202)
+                    job=self.wait(first.json['id'])
+                    self.assertEqual(job['state'],'done')
+                    ocr=job['result']['ocr']
+                    self.assertEqual(ocr['cloud_call_count'],expected_calls)
+                    self.assertTrue(ocr['lines'][0]['ambiguous'])
+                    self.assertEqual(self.upload(request_id=request_id).json['id'],job['id'])
+                    self.assertEqual(send.call_count,expected_calls)
+                self.assertEqual(self.used(),used+expected_calls)
+                with self.engine.connect() as c:
+                    usage=c.scalar(select(cloud_budget.calls.c.usage).where(cloud_budget.calls.c.job_id==job['id']))
+                self.assertEqual(usage['cloud_call_count'],expected_calls)
+                self.assertEqual(usage['total_tokens'],3000)
+                self.assertEqual(usage['cloud_usage_status'],'complete' if expected_calls==1 else 'partial')
 
     def test_switching_back_to_finite_or_disabled_does_not_reset_history(self):
         cloud_budget.reserve(self.engine,'a'*32,'offline',-1)

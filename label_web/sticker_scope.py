@@ -135,11 +135,12 @@ def _masked_region(path, region):
 
 
 def recognize_scoped(path, recognizer, scope="sticker"):
-    """Keep original evidence coordinates; never make an extra OCR request.
+    """Keep original evidence coordinates when selecting the label.
 
     A provider with an explicit panel capability sees the entire original once
     so transparent printed labels are not clipped to a white barcode backing.
-    Its validated region is used only for local barcode decoding. Other engines
+    The cloud reader may reread uncertain date crops within the selected label.
+    Its validated region is also used for local barcode decoding. Other engines
     retain the conservative local surface detector and manual/full-image path.
     """
     from barcode_checks import decode_barcodes
