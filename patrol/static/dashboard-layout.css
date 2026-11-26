@@ -26,9 +26,16 @@
   border-radius: 9px;
   background: #eef3ef;
 }
-.dashboard-period .segmented { background: #e2eae2; border-color: #d5e0d5; }
+.dashboard-period { flex-wrap: wrap; }
+.weekday-date { display: inline-block; margin-inline-end: .5rem; }
+.dashboard-period .period-view { max-width: 100%; }
+.dashboard-period .segmented { flex-wrap: wrap; background: #e2eae2; border-color: #d5e0d5; }
 @media (max-width: 720px) {
   .dashboard-period { padding: .65rem 0; border-inline: 0; border-radius: 0; background: transparent; }
+  .dashboard-period .period-view { width: 100%; }
+  .dashboard-period [data-period-tabs] { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .dashboard-period [data-period-tabs] > a { grid-column: span 2; }
+  .dashboard-period [data-period-tabs] > a:nth-child(n+4) { grid-column: span 3; }
 }
 
 /* Keep the selected floor and each point's identity easy to find in a long list. */

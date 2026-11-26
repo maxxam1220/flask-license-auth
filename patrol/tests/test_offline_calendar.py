@@ -13,6 +13,12 @@ from test_offline_api import assert_error, entry, prepare, sync
 from test_three_day_routes import stops, synthetic_register  # noqa: F401
 
 
+SCHEDULED_DAYS = [
+    ("weekly_wed", "2026-11-18"), ("weekly_fri", "2026-11-20"),
+    ("weekly_mwf", "2026-11-20"), ("weekly_tts", "2026-11-19"),
+]
+
+
 def fixed_point(env, frequency, day, *, paired=False):
     point = env.pair_point if paired else env.direct_point
     point.frequency = frequency
@@ -23,7 +29,7 @@ def fixed_point(env, frequency, day, *, paired=False):
     return point, env.paired if paired else env.direct
 
 
-@pytest.mark.parametrize("frequency, due", [("weekly_wed", "2026-11-18"), ("weekly_fri", "2026-11-20")])
+@pytest.mark.parametrize("frequency, due", SCHEDULED_DAYS)
 def test_offday_receipt_cannot_complete_next_fixed_weekday(application, anytime, frequency, due):
     env = anytime
     point, url = fixed_point(env, frequency, due)
@@ -40,7 +46,7 @@ def test_offday_receipt_cannot_complete_next_fixed_weekday(application, anytime,
     assert len(missing) == 1 and missing[0]["period_key"] == due
 
 
-@pytest.mark.parametrize("frequency, due", [("weekly_wed", "2026-11-18"), ("weekly_fri", "2026-11-20")])
+@pytest.mark.parametrize("frequency, due", SCHEDULED_DAYS)
 def test_due_day_offline_upload_next_day_keeps_due_day_and_is_idempotent(application, anytime, frequency, due):
     env = anytime
     point, url = fixed_point(env, frequency, due)
@@ -68,9 +74,10 @@ def test_fixed_friday_public_holiday_can_still_save_a_voluntary_visit(applicatio
     assert rows(point)[0].period_key == "2026-12-25"
 
 
-def test_fixed_weekday_two_stage_cannot_reuse_yesterdays_execution(application, anytime):
+@pytest.mark.parametrize("frequency, due", SCHEDULED_DAYS)
+def test_fixed_weekday_two_stage_cannot_reuse_yesterdays_execution(application, anytime, frequency, due):
     env = anytime
-    point, url = fixed_point(env, "weekly_wed", "2026-11-18", paired=True)
+    point, url = fixed_point(env, frequency, due, paired=True)
     executor = prepare(env.executor)
     result = sync(env.executor, executor, entry(executor, url, env.clock[0]))
     assert result.status_code == 200, result.text
@@ -82,9 +89,9 @@ def test_fixed_weekday_two_stage_cannot_reuse_yesterdays_execution(application, 
     assert sync(env.executor, current, entry(current, url, env.clock[0])).status_code == 200
     assert sync(env.inspector, inspector, observation).status_code == 200
     execution_days = {r.period_key for r in rows(point, PatrolExecution)}
-    assert execution_days == {"2026-11-18", "2026-11-19"}
+    assert execution_days == {due, env.clock[0].date().isoformat()}
     record, = rows(point)
-    assert record.period_key == "2026-11-19"
+    assert record.period_key == env.clock[0].date().isoformat()
     assert db.session.get(PatrolExecution, record.execution_id).period_key == record.period_key
 
 
@@ -98,7 +105,7 @@ def test_frequency_change_rejects_old_grant_without_deleting_local_receipt_ident
     assert not rows(env.direct_point) and db.session.query(OfflineSubmission).count() == 0
 
 
-@pytest.mark.parametrize("frequency", ["weekly_wed", "weekly_fri", "daily"])
+@pytest.mark.parametrize("frequency", ["weekly_wed", "weekly_fri", "weekly_mwf", "weekly_tts", "daily"])
 def test_original_visit_points_remain_authorized_but_new_points_do_not(stops, frequency):
     env = stops
     env.point.frequency = frequency

@@ -104,7 +104,7 @@ def _visit(**changes):
 def test_v17_upgrade_preserves_rows_children_indexes_and_is_idempotent(engine, v17):
     with engine.connect() as connection:
         before = snapshot(connection, v17)
-    assert upgrade_schema(engine) == LATEST_VERSION == 19
+    assert upgrade_schema(engine) == LATEST_VERSION
     with engine.connect() as connection:
         after = snapshot(connection, v17)
         assert after.pop("patrol_schema_versions")[:-1] == before.pop("patrol_schema_versions")

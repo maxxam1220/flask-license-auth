@@ -9,6 +9,10 @@ previous team. Team predicates supplement, never replace, category checks.
 from sqlalchemy import false, or_, select
 
 from models import Inspection, PatrolExecution, Point
+from patrol_calendar import FIXED_FREQUENCIES
+
+
+EXECUTOR_VISIT_FREQUENCIES = ("irregular", "three_day", "daily", *sorted(FIXED_FREQUENCIES))
 
 
 def patrol_scope(user):
@@ -127,5 +131,5 @@ def can_read_inspection(user, record):
         # from receipts this same account submitted as an inspector in the past.
         return (record.executor_visit and record.category == "general" and
                 record.workflow_mode == "spot" and
-                record.frequency in ("irregular", "three_day", "daily", "weekly_wed", "weekly_fri"))
+                record.frequency in EXECUTOR_VISIT_FREQUENCIES)
     return user.role == "inspector"

@@ -44,6 +44,43 @@ def parse_time(value):
     return parsed.astimezone(timezone.utc)
 
 
+def scan_point_at_capture(point, signed, day, receive_day):
+    """Keep a pre-cutover stair draft under its original daily two-stage identity."""
+    if point is None or not point.active or point.deleted_at is not None or not isinstance(signed, dict):
+        return None
+    switching = point.pending_frequency and point.frequency_effective_date <= receive_day
+    if not switching and signed.get("frequency") == point.frequency:
+        return point
+    target = point.pending_frequency if switching else point.frequency
+    if (signed.get("frequency") != "daily" or target not in ("weekly_mwf", "weekly_tts")
+            or point.category != "general" or point.workflow_mode != "two_stage"
+            or day + timedelta(days=1) != receive_day):
+        return None
+    # This marker is written only for the two verified stairs. A manual frequency
+    # edit, a subsequent cutover or a changed point identity has no matching marker.
+    detail = json.dumps(dict(before="daily", after=target, effective_date=receive_day.isoformat(),
+                             code=point.code), sort_keys=True)
+    marker = db.session.scalar(select(AuditLog.id).where(AuditLog.action == "b2_stair_frequency_scheduled",
+        AuditLog.target == f"point:{point.id}", AuditLog.detail == detail).limit(1))
+    if marker is None:
+        return None
+    schedules = [row for row in point.schedules if row.effective_date <= receive_day]
+    if len(schedules) < 2:
+        return None
+    before, after = schedules[-2:]
+    if (before.effective_date > day or before.frequency != "daily"
+            or after.effective_date != receive_day or after.frequency != target
+            or any(not row.active or row.retired_at or row.legacy_unscheduled
+                   or (row.category, row.workflow_mode, row.floor, row.point_code, row.point_name) !=
+                      (point.category, point.workflow_mode, point.floor, point.code, point.name)
+                   for row in (before, after))):
+        return None
+    # Use this read-only snapshot for duplicate checks, the execution link and
+    # the final receipt; never modify the current ORM point or today's new slots.
+    values = {column.name: getattr(point, column.name) for column in Point.__table__.columns}
+    return SimpleNamespace(**(values | {"frequency": "daily"}))
+
+
 def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_local,
                      csrf_token, device_binding, lock_current_user,
                      executor_can_scan, point_revision, inspection_in_slot, audit):
@@ -422,18 +459,15 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             # Obtain the writer reservation without overwriting any admin
             # setting from a stale object, then reread the authoritative row.
             db.session.execute(db.update(Point).where(Point.id == point_id).values(id=Point.id))
-        point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update()
+        live_point = db.session.scalar(select(Point).where(Point.id == point_id).with_for_update()
                                   .execution_options(populate_existing=True))
         # Waiting for the point lock can cross midnight. Recheck the server
         # clock after acquiring it instead of using the earlier grant-check time.
-        if point and point.pending_frequency and point.frequency_effective_date <= local_dt(now()).date():
-            db.session.rollback()
-            return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
-        matched_settings, retired_checklist = (settings_match(point, grant["settings"], issued)
-            if point and point.active and point.deleted_at is None else (False, None))
-        if (not point or not point.active or point.deleted_at is not None
-                or not matched_settings or point.qr_token != entry["token"]
+        point = scan_point_at_capture(live_point, grant["settings"], day, local_dt(now()).date())
+        matched_settings, retired_checklist = settings_match(point, grant["settings"], issued) if point else (False, None)
+        if (not point or not matched_settings or point.qr_token != entry["token"]
                 or point.schedule_start > day):
+            db.session.rollback()
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         stage = stage_for(user, point)
         if not stage or stage != grant["stage"]:
@@ -477,7 +511,9 @@ def register_offline(app, *, now, local_dt, naive_utc, period_for, timezone_loca
             return fail("expired", "已超過補傳期限；暫存仍保留，請聯絡管理員。")
         # Photo processing can also cross the scheduled cutover while this
         # transaction holds the point lock and prevents activation elsewhere.
-        if point.pending_frequency and point.frequency_effective_date <= local_dt(received).date():
+        receive_day = local_dt(received).date()
+        if (live_point.pending_frequency and live_point.frequency_effective_date <= receive_day
+                and scan_point_at_capture(live_point, grant["settings"], day, receive_day) is None):
             db.session.rollback()
             return fail("point_changed", "點位、頻率或 QR Code 已更新，這筆暫存需要確認，尚未刪除。")
         row = OfflineSubmission(user_id=user.id, binding_id=binding.id, client_id=entry["client_id"],

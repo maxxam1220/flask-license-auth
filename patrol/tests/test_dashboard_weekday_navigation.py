@@ -20,11 +20,11 @@ def view(link):
     return parse_qs(urlsplit(link["href"]).query)["view"][0]
 
 
-def test_daily_primary_tabs_only_show_daily_wednesday_friday_without_history_menu(calendar):
+def test_primary_tabs_show_daily_and_fixed_schedules_without_history_menu(calendar):
     _, page = context(calendar.app, calendar.inspector, "/dashboard?floor=1")
     primary = primary_tabs(page.text)
     links = Anchors(primary).links
-    assert [view(link) for link in links] == ["daily", "weekly_wed", "weekly_fri"]
+    assert [view(link) for link in links] == ["daily", "weekly_wed", "weekly_fri", "weekly_mwf", "weekly_tts"]
     assert [view(link) for link in links if link["aria-current"] == "page"] == ["daily"]
     assert all(parse_qs(urlsplit(link["href"]).query)["floor"] == ["1"] for link in links)
     assert all(label in primary for label in ("每日巡檢", "週三巡檢", "週五巡檢"))
@@ -55,7 +55,7 @@ def test_legacy_schedule_direct_urls_remain_valid_without_history_menu(calendar,
     assert result["view"] == selected
     assert "data-history-schedules" not in page.text
     primary = Anchors(primary_tabs(page.text)).links
-    assert [view(link) for link in primary] == ["daily", "weekly_wed", "weekly_fri"]
+    assert [view(link) for link in primary] == ["daily", "weekly_wed", "weekly_fri", "weekly_mwf", "weekly_tts"]
     assert not [link for link in primary if link["aria-current"] == "page"]
 
 
@@ -66,7 +66,7 @@ def test_new_schedule_tabs_translate_without_reintroducing_history_menu(calendar
     db.session.commit()
     _, page = context(calendar.app, calendar.inspector, "/dashboard")
     primary = primary_tabs(page.text)
-    for label in ("週三巡檢", "週五巡檢"):
+    for label in ("週三巡檢", "週五巡檢", "每週一、三、五", "每週二、四、六"):
         assert translate(label, locale) in primary and label not in primary
     assert "data-history-schedules" not in page.text
 

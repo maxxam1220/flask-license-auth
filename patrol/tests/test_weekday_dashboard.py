@@ -53,7 +53,7 @@ def test_weekday_tabs_isolate_points_records_and_shared_completion_counts(calend
     assert tabs is not None
     links = Anchors(tabs.group(1)).links
     assert [parse_qs(urlsplit(link["href"]).query)["view"][0] for link in links] == [
-        "daily", "weekly_wed", "weekly_fri"]
+        "daily", "weekly_wed", "weekly_fri", "weekly_mwf", "weekly_tts"]
     assert len([link for link in links if link.get("aria-current") == "page"]) == 1
 
 
@@ -249,3 +249,38 @@ def test_recategorized_history_without_pending_attributes_never_crashes_or_expos
         baseline_result, baseline_response = overview(env, baseline, target, client=client)
         assert "PRIVATE-NEW-SAFETY-LOCATION" not in baseline_response.text
     assert client.get(getattr(env, name + "_url")).status_code == 404
+
+
+@pytest.mark.parametrize("weekend_scan", [False, True])
+def test_grouped_days_keep_separate_receipts_and_exclude_saturday(calendar, weekend_scan):
+    env = calendar
+    point = env.wed
+    point.frequency = point.schedules[0].frequency = "weekly_tts"
+    db.session.commit()
+    # Monday is optional. Tuesday is completed. Thursday is signed only.
+    for day in (16, 17, 19):
+        env.clock[0] = instant(f"2026-11-{day}")
+        scan(env.executor, env.wed_url)
+        if day != 19:
+            scan(env.inspector, env.wed_url)
+            scan(env.peer, env.wed_url)
+    env.clock[0] = instant("2026-11-21")
+    saturday, _ = context(env.app, env.executor, "/ready")
+    assert not saturday["ready_points"]
+    assert saturday["ready_excluded"]
+    if weekend_scan:
+        scan(env.executor, env.wed_url)
+        scan(env.inspector, env.wed_url)
+    for view in ("weekly", "weekly_tts"):
+        result, page = overview(env, view, "2026-11-21")
+        cards = [card for card in result["cards"] if card["point"].id == point.id]
+        assert [(card["schedule_day"].day, card["slots"][0]["stage_status"]) for card in cards] == [
+            (17, "done"), (19, "expired_unreviewed")] + ([(21, "done")] if weekend_scan else [])
+        assert all(card["schedule_day"].isoformat() in page.text for card in cards)
+    env.clock[0] = instant("2026-11-22", 0)
+    report, _ = overview(env, "weekly_tts", "2026-11-21")
+    assert report["totals"] == {"total": 2, "done": 1, "pending": 1}
+    missed, _ = context(env.app, env.inspector, report["missed_query_url"])
+    assert {row["due_date"].day for row in missed["occurrences"]} == {19}
+    history, _ = context(env.app, env.inspector, report["records_query_url"])
+    assert {row.period_key for row in history["records"]} == {"2026-11-16", "2026-11-17"} | ({"2026-11-21"} if weekend_scan else set())

@@ -19,20 +19,20 @@ from zoneinfo import ZoneInfo
 
 from domain import CATEGORY_OPTIONS, FLOOR_ORDER
 from daily_rounds import daily2_anytime
-from patrol_calendar import (CALENDAR_POLICY_START, FIXED_FREQUENCIES, fixed_weekday,
-                             is_fixed_schedule_day, obligation_required)
+from patrol_calendar import (CALENDAR_POLICY_START, FIXED_FREQUENCIES, FIXED_WEEKDAYS,
+                             fixed_weekday, is_fixed_schedule_day, obligation_required)
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 THREE_DAY_ANCHOR = date(2026, 11, 10)
 VIEW_FREQUENCIES = {"daily": ("daily", "daily2"), "three_day": ("three_day",),
-                    "weekly": ("weekly", "weekly_wed", "weekly_fri"), "monthly": ("monthly",),
-                    "weekly_wed": ("weekly_wed",), "weekly_fri": ("weekly_fri",)}
+                    "weekly": ("weekly", *FIXED_WEEKDAYS), "monthly": ("monthly",),
+                    **{freq: (freq,) for freq in FIXED_WEEKDAYS}}
 FREQUENCIES = {"daily", "daily2", "three_day", "weekly", "monthly", "irregular", *FIXED_FREQUENCIES}
 
 
 def period_bounds(day, view):
     # Fixed-weekday points use the actual attendance day. An optional visit on
-    # another day cannot satisfy Wednesday/Friday or unlock a different day's
+    # another day cannot satisfy a scheduled date or unlock a different day's
     # second stage, even though reports group them under the weekly tab.
     if view in FIXED_FREQUENCIES:
         return day, day
@@ -72,7 +72,7 @@ def missed_period_required(day, frequency, category, *, count_from=None, safety_
     if start > end:
         return False
     return (not respect_calendar or obligation_required(start, end, category, safety_leave_dates,
-                                                        policy_start=calendar_policy_start))
+                                                        policy_start=calendar_policy_start, frequency=frequency))
 
 
 def _value(item, name, default=None):
@@ -214,7 +214,7 @@ def slot_plans(point, day, timeline, *, for_missed=False, view="daily", respect_
                 # apply to the displayed period, not to that future start.
                 start = period_bounds(day, frequency)[0]
             if not obligation_required(start, end, snapshot["category"], safety_leave_dates,
-                                       policy_start=calendar_policy_start):
+                                       policy_start=calendar_policy_start, frequency=frequency):
                 continue
         slot = ("am" if morning else "pm") if frequency == "daily2" else "any"
         yield snapshot, slot, deadline
@@ -267,7 +267,8 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
     executed = _completion_keys(executions, "two_stage")
     occurrences = []
     seen_points = set()
-    day_step = timedelta(days=7 if frequency == "weekly" or frequency in FIXED_FREQUENCIES else 3 if frequency == "three_day" else 1)
+    weekday = fixed_weekday(frequency)
+    day_step = timedelta(days=7 if frequency == "weekly" or weekday is not None else 3 if frequency == "three_day" else 1)
     for point in points:
         point_id = _value(point, "id")
         if point_id in seen_points:
@@ -281,8 +282,8 @@ def calculate_missed(points, completions, date_from, date_to, now, *, category="
         # A period filter can only match its last day. Choose
         # those dates before reading historical schedules for each point.
         due_day = period_bounds(first_due_day, frequency)[1]
-        if frequency in FIXED_FREQUENCIES:
-            due_day += timedelta(days=(fixed_weekday(frequency) - due_day.weekday()) % 7)
+        if weekday is not None:
+            due_day += timedelta(days=(weekday - due_day.weekday()) % 7)
         while due_day <= last_due_day:
             for snapshot, slot, local_deadline in slot_plans(point, due_day, timeline, for_missed=True,
                     respect_calendar=respect_calendar, safety_leave_dates=safety_leave_dates,

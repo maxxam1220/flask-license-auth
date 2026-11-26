@@ -4,7 +4,8 @@
   const t = (source, params = {}) => root.PatrolI18n?.t(source, params) ?? String(source).replace(/\{(\w+)\}/g, (match, key) => Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : match);
   const pointName = (source, names) => names?.[root.PatrolI18n?.getLocale()] || source;
   const frequencyLabel = frequency => t({ daily: '每日一次', daily2: '每日兩次', three_day: '每3日一次',
-    weekly: '每週一次', weekly_wed: '每週三', weekly_fri: '每週五', monthly: '每月一次', irregular: '不定期' }[frequency] || '每日一次');
+    weekly: '每週一次', weekly_wed: '每週三', weekly_fri: '每週五', weekly_mwf: '每週一、三、五',
+    weekly_tts: '每週二、四、六', monthly: '每月一次', irregular: '不定期' }[frequency] || '每日一次');
   const DB_NAME = 'patrol-offline-v1';
   const STORES = ['meta', 'manifests', 'queue', 'receipts'];
   const MAX_QUEUE_BYTES = 256 * 1024 * 1024;

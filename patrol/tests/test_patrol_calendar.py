@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from general_workflow import execution_deadline, execution_review_status
-from missed import TAIPEI, calculate_missed, period_bounds, schedule_timeline, slot_plans
+from missed import TAIPEI, calculate_missed, missed_period_required, period_bounds, schedule_timeline, slot_plans
 from patrol_calendar import (CALENDAR_COVERAGE_END, CALENDAR_YEARS, HOLIDAY_NAMES,
                              exclusion_reason, has_calendar_year, is_excluded_day,
                              is_fixed_schedule_day, obligation_required)
@@ -165,6 +165,56 @@ def test_fixed_schedule_plan_only_appears_on_its_weekday():
         plans = list(slot_plans(item, date(2026, 11, day), schedule_timeline(item), view="weekly"))
         assert bool(plans) == (day == 18)
         assert is_fixed_schedule_day(date(2026, 11, day), "weekly_wed") == (day == 18)
+
+
+@pytest.mark.parametrize("frequency,due", [
+    ("weekly_mwf", [23, 25, 27]), ("weekly_tts", [24, 26]),
+])
+def test_alternating_stairs_have_separate_due_dates_for_all_weekly_report_filters(frequency, due):
+    item = point(frequency, mode="two_stage")
+    for number in range(23, 30):
+        day = date(2026, 11, number)
+        assert missed_period_required(day, frequency, "general") == (number in due)
+        for view in ("weekly", frequency):
+            plans = list(slot_plans(item, day, schedule_timeline(item), view=view))
+            assert len(plans) == int(number in due)
+    completions = [(1, frequency, date(2026, 11, number).isoformat(), "any") for number in range(23, 30)
+                   if number not in due or number in due[2:]]
+    stages = [(1, frequency, date(2026, 11, due[0]).isoformat(), "any", "two_stage")]
+    for report_filter in ("", frequency, "weekly_all"):
+        rows = missed(item, "2026-11-23", "2026-11-29", completions=completions,
+                      executions=stages, frequency=report_filter)
+        assert [(row["due_date"].day, row["missing_stage_label"]) for row in rows] == [
+            (due[1], "未執行"), (due[0], "已執行、未巡檢")]
+        for row in rows:
+            assert row["period_key"] == row["period_label"] == row["due_date"].isoformat()
+            assert row["deadline"] == execution_deadline(frequency, row["period_key"], "any")
+            before = row["deadline"] - timedelta(microseconds=1)
+            args = ([item], [], row["due_date"], row["due_date"])
+            assert calculate_missed(*args, before) == []
+            assert len(calculate_missed(*args, row["deadline"])) == 1
+
+
+def test_three_day_weekday_pattern_keeps_weekends_holidays_and_category_leave_exempt():
+    saturday = date(2026, 11, 28)
+    assert is_fixed_schedule_day(saturday, "weekly_tts")
+    assert exclusion_reason(saturday, "general") == "週末"
+    assert missed(point("weekly_tts"), saturday.isoformat(), "2026-11-29") == []
+    assert not missed_period_required(saturday, "weekly_tts", "general")
+    thursday = date(2026, 11, 26)
+    assert not missed_period_required(thursday, "weekly_tts", "safety", safety_leave_dates={thursday})
+    assert missed_period_required(thursday, "weekly_tts", "general", safety_leave_dates={thursday})
+    assert not missed_period_required(date(2026, 12, 25), "weekly_mwf", "general")
+
+
+def test_new_stair_frequency_keeps_earlier_schedule_history():
+    item = point("weekly_tts", mode="two_stage")
+    item.schedules[0].frequency = "daily"
+    item.schedules.append(SimpleNamespace(id=2, effective_date=date(2026, 11, 26), frequency="weekly_tts",
+                                          category="general", workflow_mode="two_stage", active=True))
+    rows = missed(item, "2026-11-23", "2026-11-29")
+    assert [(r["frequency"], r["due_date"].day) for r in rows] == [
+        ("weekly_tts", 26), ("daily", 25), ("daily", 24), ("daily", 23)]
 
 
 @pytest.mark.parametrize("shown,visible", [("2026-11-03", True), ("2026-12-24", True),

@@ -31,6 +31,14 @@
     "id": "Area merokok",
     "vi": "Khu hút thuốc"
   },
+  "甲梯": {
+    "id": "Tangga A",
+    "vi": "Cầu thang A"
+  },
+  "乙梯": {
+    "id": "Tangga B",
+    "vi": "Cầu thang B"
+  },
   "甲梯、乙梯": {
     "id": "Tangga A dan B",
     "vi": "Cầu thang A và B"

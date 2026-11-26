@@ -4,7 +4,7 @@ from datetime import timezone
 from sqlalchemy import select
 
 from daily_rounds import daily2_anytime, next_daily2_slot
-from missed import period_bounds, schedule_timeline, slot_plans
+from missed import FREQUENCIES, period_bounds, schedule_timeline, slot_plans
 from models import Inspection, PatrolExecution, db
 from patrol_access import can_access_point
 from patrol_calendar import is_excluded_day
@@ -15,7 +15,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter, 
     today = local_now.date()
     executor = user.role == "executor"
     current_half = "am" if local_now.hour < 12 else "pm"
-    period_ranges = {frequency: period_bounds(today, frequency) for frequency in ("daily", "daily2", "three_day", "weekly", "monthly", "weekly_wed", "weekly_fri")}
+    period_ranges = {frequency: period_bounds(today, frequency) for frequency in FREQUENCIES}
     candidates = {}
     for point in points:
         # historical_points() can include a former team's redacted point.
@@ -29,7 +29,7 @@ def ready_patrol_points(points, user, local_now, floor_filter, category_filter, 
             continue
         if point.frequency == "irregular" or (executor and point.workflow_mode != "two_stage"):
             continue
-        view = "weekly" if point.frequency in ("weekly_wed", "weekly_fri") else point.frequency if point.frequency in ("three_day", "monthly", "weekly") else "daily"
+        view = "daily" if point.frequency == "daily2" else point.frequency
         anytime = point.frequency == "daily2" and daily2_anytime(today)
         current_slot = current_half if point.frequency == "daily2" else "any"
         for plan, slot, deadline in slot_plans(point, today, schedule_timeline(point), view=view, safety_leave_dates=safety_leave_dates):

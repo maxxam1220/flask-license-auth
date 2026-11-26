@@ -15,6 +15,8 @@ for (const locale of ['zh-Hant', 'id', 'vi']) test('fixed weekday labels remain 
   const label = module.exports.frequencyLabel;
   assert.equal(label('weekly_wed'), locale === 'zh-Hant' ? '每週三' : messages['每週三'][locale]);
   assert.equal(label('weekly_fri'), locale === 'zh-Hant' ? '每週五' : messages['每週五'][locale]);
+  assert.equal(label('weekly_mwf'), locale === 'zh-Hant' ? '每週一、三、五' : messages['每週一、三、五'][locale]);
+  assert.equal(label('weekly_tts'), locale === 'zh-Hant' ? '每週二、四、六' : messages['每週二、四、六'][locale]);
   assert.notEqual(label('weekly_fri'), label('daily'));
 });
 

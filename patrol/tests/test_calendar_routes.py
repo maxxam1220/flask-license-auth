@@ -1,4 +1,6 @@
 """Calendar policy across real ready, overview, receipt and missed-report routes."""
+import csv
+import io
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -7,9 +9,11 @@ import pytest
 
 import app as patrol
 from missed import TAIPEI
+from migrations import _schedule_b2_stairs
 from models import Inspection, Point, db
 from safety_leave import SafetyLeaveExclusion
 from test_app import application, seeded, login, rendered_contexts  # noqa: F401
+from test_calendar_migration import seed_stairs
 from test_workflow_checkin import payload, team
 
 
@@ -156,3 +160,44 @@ def test_calendar_coverage_warning_and_dashboard_view_allowlist(calendar):
         assert env.inspector.get("/dashboard?view=" + value).status_code == 200
     for value in ("weekly_all", "unknown"):
         assert env.inspector.get("/dashboard?view=" + value).status_code == 400
+
+
+def test_b2_stair_cutover_keeps_ready_scans_and_missed_export_consistent(calendar):
+    env = calendar
+    env.clock[0] = instant("2026-11-26")
+    seed_stairs(db.session.connection())
+    a, b = (db.session.get(Point, key) for key in (56, 116))
+    assert (a.code, b.code) == ("B2-G002", "B2-G003")
+    a.created_at = b.created_at = datetime(2026, 11, 10)
+    db.session.flush()
+    _schedule_b2_stairs(db.session.connection(), env.clock[0])
+    db.session.commit()
+
+    # Before cutover both stairs are daily. The existing weekend policy
+    # exempts Saturday even though it is a designated weekday for A.
+    for day, due in [(26, {a.id, b.id}), (27, {b.id}), (28, set()), (29, set()), (30, {b.id})]:
+        env.clock[0] = instant(f"2026-11-{day}")
+        assert ready(env, env.executor).keys() & {a.id, b.id} == due
+        if day == 27:
+            scan(env.executor, "/c/" + a.qr_token)
+            scan(env.inspector, "/c/" + a.qr_token)  # Voluntary Friday.
+        if day == 28:
+            scan(env.executor, "/c/" + a.qr_token)
+            assert a.id not in ready(env)
+            form, _ = context(env.app, env.inspector, "/c/" + a.qr_token)
+            assert form["can_confirm"]  # Optional review remains available via QR.
+        if day in (29, 30):
+            scan(env.executor, "/c/" + b.qr_token)
+            scan(env.inspector, "/c/" + b.qr_token)  # Optional Sunday, due Monday.
+
+    env.clock[0] = instant("2026-12-01", 0)
+    assert ready(env, env.executor).keys() & {a.id, b.id} == {a.id}
+    query = "floor=-2&date_from=2026-11-26&date_to=2026-11-30"
+    missed, _ = context(env.app, env.inspector, "/missed?" + query)
+    assert [(r["due_date"].day, r["code"], r["missing_stage_label"]) for r in missed["occurrences"]] == [
+        (27, b.code, "未執行"), (26, a.code, "未執行"), (26, b.code, "未執行")]
+    exported = env.inspector.get("/missed/export?" + query + "&frequency=weekly_all")
+    assert exported.status_code == 200
+    rows = list(csv.DictReader(io.StringIO(exported.data.decode("utf-8-sig"))))
+    assert [(r["應完成日期"], r["點位名稱"], r["巡檢頻率"], r["缺少階段"]) for r in rows] == [
+        ("2026-11-27", "乙梯", "每週一、三、五", "未執行")]

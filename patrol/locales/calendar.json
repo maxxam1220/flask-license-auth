@@ -1,4 +1,13 @@
 {
+  "本週沒有應巡點位": {"id": "Tidak ada lokasi yang wajib diperiksa minggu ini", "vi": "Tuần này không có điểm nào phải kiểm tra"},
+  "仍可掃碼留紀錄。": {"id": "Anda tetap dapat memindai untuk mencatat kunjungan.", "vi": "Vẫn có thể quét mã để ghi nhận."},
+  "每週一、三、五": {"id": "Setiap Senin, Rabu, dan Jumat", "vi": "Thứ Hai, thứ Tư và thứ Sáu hằng tuần"},
+  "每週二、四、六": {"id": "Setiap Selasa, Kamis, dan Sabtu", "vi": "Thứ Ba, thứ Năm và thứ Bảy hằng tuần"},
+  "週一": {"id": "Senin", "vi": "Thứ Hai"},
+  "週二": {"id": "Selasa", "vi": "Thứ Ba"},
+  "週四": {"id": "Kamis", "vi": "Thứ Năm"},
+  "週六": {"id": "Sabtu", "vi": "Thứ Bảy"},
+  "每個指定日分別計算，隔日 00:00 到期。週六、週日、國定假日及適用的職安請休均免巡，仍可掃碼留紀錄。": {"id": "Setiap hari terjadwal dihitung sendiri dan berakhir pukul 00.00 hari berikutnya. Sabtu, Minggu, hari libur nasional, dan cuti tim keselamatan yang berlaku tidak diwajibkan. Anda tetap dapat memindai untuk mencatat kunjungan.", "vi": "Mỗi ngày đã định được tính riêng và hết hạn lúc 00:00 hôm sau. Thứ Bảy, Chủ nhật, ngày lễ và ngày nghỉ phép áp dụng cho bộ phận an toàn đều được miễn. Vẫn có thể quét mã để ghi nhận."},
   "每週三": {"id": "Setiap Rabu", "vi": "Thứ Tư hằng tuần"},
   "每週五": {"id": "Setiap Jumat", "vi": "Thứ Sáu hằng tuần"},
   "週三巡檢": {"id": "Inspeksi Rabu", "vi": "Kiểm tra thứ Tư"},

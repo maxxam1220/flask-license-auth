@@ -10,7 +10,10 @@ from pathlib import Path
 
 
 CALENDAR_POLICY_START = date(2026, 11, 13)
-FIXED_WEEKDAYS = {"weekly_wed": 2, "weekly_fri": 4}
+FIXED_WEEKDAYS = {
+    "weekly_wed": (2,), "weekly_fri": (4,),
+    "weekly_mwf": (0, 2, 4), "weekly_tts": (1, 3, 5),
+}
 FIXED_FREQUENCIES = frozenset(FIXED_WEEKDAYS)
 _RESOURCE = json.loads((Path(__file__).parent / "data/taiwan_holidays.json").read_text(encoding="utf-8"))
 CALENDAR_YEARS = tuple(sorted(int(year) for year in _RESOURCE["years"]))
@@ -19,13 +22,19 @@ HOLIDAY_NAMES = {date.fromisoformat(day): name
                  for year in _RESOURCE["years"].values() for day, name in year["weekday_holidays"].items()}
 
 
+def scheduled_weekdays(frequency):
+    """Taipei weekdays for a fixed schedule; other frequencies have no weekday restriction."""
+    return FIXED_WEEKDAYS.get(frequency, ())
+
+
 def fixed_weekday(frequency):
-    return FIXED_WEEKDAYS.get(frequency)
+    weekdays = scheduled_weekdays(frequency)
+    return weekdays[0] if len(weekdays) == 1 else None
 
 
 def is_fixed_schedule_day(day, frequency):
-    weekday = fixed_weekday(frequency)
-    return weekday is None or day.weekday() == weekday
+    weekdays = scheduled_weekdays(frequency)
+    return not weekdays or day.weekday() in weekdays
 
 
 def has_calendar_year(day):
@@ -52,11 +61,12 @@ def is_excluded_day(day, category, safety_leave_dates=(), *, policy_start=CALEND
     return bool(exclusion_reason(day, category, safety_leave_dates, policy_start=policy_start))
 
 
-def obligation_required(start, end, category, safety_leave_dates=(), *, policy_start=CALENDAR_POLICY_START):
+def obligation_required(start, end, category, safety_leave_dates=(), *, policy_start=CALENDAR_POLICY_START, frequency=None):
     """A flexible multi-day period is exempt only when every possible day is exempt."""
     day = start
     while day <= end:
-        if not is_excluded_day(day, category, safety_leave_dates, policy_start=policy_start):
+        if is_fixed_schedule_day(day, frequency) and not is_excluded_day(
+                day, category, safety_leave_dates, policy_start=policy_start):
             return True
         day += timedelta(days=1)
     return False

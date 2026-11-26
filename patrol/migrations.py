@@ -6,19 +6,20 @@ No credentials, application data, or connection URLs are logged here.
 """
 from __future__ import annotations
 
+import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import Column, MetaData, Table, UniqueConstraint, CheckConstraint, case, exists, inspect, literal, select, text
 from sqlalchemy.schema import AddConstraint, CreateColumn, CreateTable
 
-from models import (Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
+from models import (AuditLog, Inspection, InspectionIssue, InspectionPhoto, IssueEvent, IssueEventPhoto, LoginEvent, OfflineSubmission, PatrolExecution, Point, PointSchedule,
                     ENGINEERING_TITLE_RULE, EXECUTION_SLOT_RULE, EXECUTOR_VISIT_RULE, POINT_INSPECTION_TEAM_RULE, POINT_PENDING_FREQUENCY_RULE, RevokedSession, SchemaVersion, User, db, protect_execution_link, protect_legacy_exemptions)
 from safety_leave import SafetyLeaveExclusion
 
 
-LATEST_VERSION = 19
+LATEST_VERSION = 20
 MIGRATION_LOCK_ID = 714032610302
 BASE_TABLES = frozenset({
     "patrol_users", "patrol_points", "patrol_point_schedules",
@@ -139,6 +140,8 @@ def _upgrade_locked(connection) -> int:
             _upgrade_v17_to_v18(connection)
         if current < 19:
             _upgrade_v18_to_v19(connection)
+        if current < 20:
+            _upgrade_v19_to_v20(connection)
 
     version_table.create(connection, checkfirst=True)
     _validate_current(connection)
@@ -371,6 +374,16 @@ FREQUENCY_CHECKS_V18 = {
     "patrol_executor_visit_fields": FREQUENCY_CHECKS_V17["patrol_executor_visit_fields"].replace(
         "frequency = 'irregular'", "(frequency = 'irregular' OR frequency = 'three_day')"),
 }
+FREQUENCY_CHECKS_V19 = {
+    "patrol_point_pending_frequency": FREQUENCY_CHECKS_V18["patrol_point_pending_frequency"].replace(
+        "pending_frequency = 'three_day'", "pending_frequency = 'three_day' "
+        "OR pending_frequency = 'weekly_wed' OR pending_frequency = 'weekly_fri'"),
+    "patrol_execution_valid_slot": FREQUENCY_CHECKS_V18["patrol_execution_valid_slot"].replace(
+        "'three_day'", "'three_day','weekly_wed','weekly_fri'"),
+    "patrol_executor_visit_fields": FREQUENCY_CHECKS_V18["patrol_executor_visit_fields"].replace(
+        "(frequency = 'irregular' OR frequency = 'three_day')",
+        "(frequency IN ('irregular','three_day','daily','weekly_wed','weekly_fri'))"),
+}
 
 
 def _normalize_frequency_check(expression):
@@ -381,7 +394,7 @@ def _normalize_frequency_check(expression):
 
 def _upgrade_v17_to_v18(connection):
     """Accept known intermediate DDL while upgrading legacy frequencies."""
-    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V17, FREQUENCY_CHECKS_V18))
+    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V17, FREQUENCY_CHECKS_V18, FREQUENCY_CHECKS_V19))
 
 
 def _expand_frequency_checks(connection, accepted_rules):
@@ -407,8 +420,56 @@ def _expand_frequency_checks(connection, accepted_rules):
 
 def _upgrade_v18_to_v19(connection):
     """Expand named frequency checks and add reversible safety leave records."""
-    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V18,))
+    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V18, FREQUENCY_CHECKS_V19))
     SafetyLeaveExclusion.__table__.create(connection, checkfirst=True)
+
+
+B2_STAIR_FREQUENCIES = {
+    56: ("B2-G002", "甲梯", "weekly_tts"),
+    116: ("B2-G003", "乙梯", "weekly_mwf"),
+}
+
+
+def _upgrade_v19_to_v20(connection):
+    _expand_frequency_checks(connection, (FREQUENCY_CHECKS_V19,))
+    _schedule_b2_stairs(connection, datetime.now(timezone.utc))
+
+
+def _schedule_b2_stairs(connection, instant):
+    """Append next-day schedules only to the two verified, renumbered points."""
+    points = Point.__table__
+    schedules = PointSchedule.__table__
+    candidates = connection.execute(select(points).where(points.c.id.in_(B2_STAIR_FREQUENCIES))
+                                    .order_by(points.c.id).with_for_update()).mappings()
+    targets = [p for p in candidates if (p.code, p.name) == B2_STAIR_FREQUENCIES[p.id][:2]]
+    if not targets:
+        return
+    if len(targets) != len(B2_STAIR_FREQUENCIES):
+        raise SchemaMigrationError("Incomplete B2 stair identities; schedules were not applied.")
+    taipei = ZoneInfo("Asia/Taipei")
+    effective = instant.astimezone(taipei).date() + timedelta(days=1)
+    cutover = datetime.combine(effective, time.min, taipei).astimezone(timezone.utc).replace(tzinfo=None)
+    for point in targets:
+        identity = dict(floor=-2, category="general", workflow_mode="two_stage", active=True,
+                        point_code=point.code, point_name=point.name)
+        latest = connection.execute(select(schedules).where(schedules.c.point_id == point.id)
+            .order_by(schedules.c.effective_date.desc(), schedules.c.id.desc()).limit(1)).mappings().first()
+        if (point.floor != -2 or point.inspection_team != "general" or point.category != "general"
+                or point.workflow_mode != "two_stage" or not point.active or point.deleted_at is not None
+                or point.frequency != "daily" or point.pending_frequency is not None
+                or point.frequency_effective_date is not None or latest is None or latest.effective_date >= effective
+                or latest.frequency != "daily" or latest.retired_at is not None or latest.legacy_unscheduled
+                or any(latest[key] != val for key, val in identity.items())):
+            raise SchemaMigrationError(f"B2 stair {point.code} has an incompatible current or future schedule.")
+        frequency = B2_STAIR_FREQUENCIES[point.id][2]
+        connection.execute(schedules.insert().values(point_id=point.id, effective_date=effective,
+            frequency=frequency, workflow_changed_at=cutover, **identity))
+        connection.execute(points.update().where(points.c.id == point.id).values(
+            pending_frequency=frequency, frequency_effective_date=effective))
+        detail = {"before": "daily", "after": frequency, "effective_date": effective.isoformat(), "code": point.code}
+        connection.execute(AuditLog.__table__.insert().values(action="b2_stair_frequency_scheduled",
+            target=f"point:{point.id}", detail=json.dumps(detail, sort_keys=True),
+            created_at=instant.astimezone(timezone.utc).replace(tzinfo=None)))
 
 
 def _compact(expression):

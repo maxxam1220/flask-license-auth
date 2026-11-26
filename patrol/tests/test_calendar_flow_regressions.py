@@ -12,7 +12,32 @@ from test_offline_api import assert_error, entry, prepare, sync
 from test_workflow_checkin import payload
 
 
-@pytest.mark.parametrize("frequency,due", [("weekly_wed", "2026-11-18"), ("weekly_fri", "2026-11-20")])
+@pytest.mark.parametrize("frequency,offday", [("weekly_mwf", "2026-11-19"), ("weekly_tts", "2026-11-18")])
+def test_optional_online_stair_checkin_does_not_unlock_tomorrows_inspection(calendar, frequency, offday):
+    env = calendar
+    point = env.wed
+    point.frequency = point.schedules[0].frequency = frequency
+    db.session.commit()
+    env.clock[0] = instant(offday)
+    for step in range(2):
+        day = env.clock[0].date().isoformat()
+        assert (point.id in ready(env, env.executor)) == bool(step)
+        live, _ = context(env.app, env.inspector, env.wed_url)
+        assert live["waiting_for_execution"] and not live["can_confirm"]
+        first = scan(env.executor, env.wed_url)
+        review = scan(env.inspector, env.wed_url)
+        assert env.executor.get(first.location).status_code == 200
+        assert env.inspector.get(review.location).status_code == 200
+        record = db.session.scalar(db.select(Inspection).where(Inspection.point_id == point.id, Inspection.period_key == day))
+        execution = db.session.get(PatrolExecution, record.execution_id)
+        assert (record.frequency, record.period_key) == (execution.frequency, execution.period_key) == (frequency, day)
+        env.clock[0] += timedelta(days=1)
+
+
+@pytest.mark.parametrize("frequency,due", [
+    ("weekly_wed", "2026-11-18"), ("weekly_fri", "2026-11-20"),
+    ("weekly_mwf", "2026-11-20"), ("weekly_tts", "2026-11-19"),
+])
 def test_offline_execution_unlocks_only_its_day_and_delayed_review_closes_that_obligation(calendar, frequency, due):
     env = calendar
     point = env.wed
@@ -46,6 +71,26 @@ def test_offline_execution_unlocks_only_its_day_and_delayed_review_closes_that_o
     missed, _ = context(env.app, env.inspector,
         f"/missed?frequency={frequency}&date_from={due}&date_to={due}")
     assert not [row for row in missed["occurrences"] if row["point_id"] == point.id]
+
+
+def test_weekend_stair_scan_is_optional_and_keeps_saturday_on_delayed_upload(calendar):
+    env = calendar
+    point = env.wed
+    point.frequency = point.schedules[0].frequency = "weekly_tts"
+    db.session.commit()
+    env.clock[0] = instant("2026-11-21")
+    assert point.id not in ready(env) and point.id not in ready(env, env.executor)
+    executor, inspector = prepare(env.executor), prepare(env.inspector)
+    checkin = entry(executor, env.wed_url, env.clock[0])
+    review = entry(inspector, env.wed_url, env.clock[0] + timedelta(minutes=2))
+    env.clock[0] += timedelta(days=1)
+    missed, _ = context(env.app, env.inspector, "/missed?frequency=weekly_tts&date_from=2026-11-21&date_to=2026-11-21")
+    assert missed["totals"]["missed"] == 0
+    assert sync(env.executor, executor, checkin).status_code == 200
+    saved = sync(env.inspector, inspector, review)
+    assert saved.status_code == 200, saved.text
+    record = db.session.get(Inspection, saved.json["record_id"])
+    assert record.period_key == db.session.get(PatrolExecution, record.execution_id).period_key == "2026-11-21"
 
 
 def test_holiday_two_stage_offline_attendance_is_voluntary_and_not_a_ready_obligation(calendar):
