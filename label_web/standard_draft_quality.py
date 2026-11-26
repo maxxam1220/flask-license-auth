@@ -36,7 +36,7 @@ def eligibility(ocr, patches=None, result=None):
             continue
         line = dict(original)
         patch = active.get(line.get("id"))
-        if patch and patch.get("kind") == "ocr_misread":
+        if patch and patch.get("kind") in {"confirmed_text", "ocr_misread"}:
             line.update(text=patch.get("text"), human_verified=True, human_uncertain=False)
         elif patch and patch.get("kind") == "uncertain":
             line["human_uncertain"] = True

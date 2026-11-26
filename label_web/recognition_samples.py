@@ -142,6 +142,15 @@ def collect(engine, data_dir):
                     # even if the four corners start at a different vertex.
                     key = _digest([image_hash, row["width"], row["height"], sorted(box)])
                     group = groups.setdefault(key, {"sample": None, "texts": set(), "excluded_review": False})
+                    if patch.get("kind") == "confirmed_text":
+                        # An unchanged, verified reading is not an OCR error. It can
+                        # still expose a conflicting transcription of the same crop.
+                        counts["excluded_kind"] += 1
+                        if isinstance(line.get("text"), str) and line["text"] == patch.get("text"):
+                            group["texts"].add(line["text"])
+                        else:
+                            group["excluded_review"] = True
+                        continue
                     if patch.get("kind") != "ocr_misread":
                         counts["excluded_kind"] += 1
                         group["excluded_review"] = True

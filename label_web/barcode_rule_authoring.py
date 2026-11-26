@@ -21,6 +21,7 @@ from validation import line_is_uncertain, parse_date
 
 
 DAY_LABELS={"base_date":"本批基準日","manufacture":"製造日期","expiry":"有效日期","arrival":"到店日"}
+_LEGACY_PENDING_DATE={f"缺少唯一清楚且完整的{label}，無法核對條碼公式。":kind for kind,label in DAY_LABELS.items()}
 RULE_KEYS={"version","symbology","prefix","day_source","day_width","suffix"}
 CHOICE_KEYS={"base_revision","source_revision","manual_revision","candidate_id","fill_keep_days"}
 MANUAL_KEYS={"manual_rule","confirmed_ean13"}
@@ -72,7 +73,7 @@ def _observed(original,current):
     patches={row["line_id"]:row for row in (current or {}).get("patches",[])}
     for line in ocr.get("lines",[]):
         patch=patches.get(line.get("id"))
-        if patch and patch["kind"]=="ocr_misread":
+        if patch and patch["kind"] in {"confirmed_text","ocr_misread"}:
             line.update(text=patch["text"],human_verified=True,human_uncertain=False)
         elif patch:
             line["human_uncertain"]=True
@@ -142,6 +143,46 @@ def read_observations(ocr,base_date,*,allow_upca=False):
     return {"ocr":readings,"decoded":decoded,"dates":dates,"base_date":base_date},parsed,next(iter(found),"") if not reason else "",reason
 
 
+def _pending_date_details(kind, field):
+    label=DAY_LABELS[kind]
+    value=field.get("value") if isinstance(field.get("value"),str) else ""
+    identifiers=field.get("line_ids")
+    evidence={"kind":kind, "value":value, "line_ids":list(identifiers) if isinstance(identifiers,(list,tuple)) else []}
+    if value:
+        reason=f"已讀到完整條碼印字。請先核對{label}「{value}」，確認日期後才能核對條碼公式。"
+    else:
+        reason=f"已讀到完整條碼印字。缺少可用的{label}，確認日期後才能核對條碼公式。"
+    return {"pending_date":evidence, "reason":reason}
+
+
+def with_pending_barcode_date(result):
+    """Explain the exact historic missing-date verdict using its saved printed evidence."""
+    if not isinstance(result,dict) or not isinstance(result.get("checks"),list):
+        return result
+    checks=result["checks"]
+    updated=None
+    for index,check in enumerate(checks):
+        if (not isinstance(check,dict) or check.get("key")!="web_barcode_rule" or check.get("source")!="database"
+                or check.get("status")!="review" or check.get("pending_date") or check.get("expected")):
+            continue
+        reason=check.get("reason")
+        kind=_LEGACY_PENDING_DATE.get(reason) if isinstance(reason,str) else None
+        if not kind or check.get("date_source",kind)!=kind:
+            continue
+        digits=literal_value(check.get("actual",""))
+        if len(digits)!=13 or gtin_valid(digits) is not True:
+            continue
+        fields=result.get("fields") or {}
+        field=fields.get(kind) if isinstance(fields,dict) else None
+        if not isinstance(field,dict):
+            saved=next((item for item in checks if isinstance(item,dict) and item.get("key")==kind),{})
+            field={"value":saved.get("actual"), "line_ids":saved.get("line_ids")}
+        if updated is None:
+            updated=list(checks)
+        updated[index]={**check, **_pending_date_details(kind,field)}
+    return dict(result,checks=updated) if updated is not None else result
+
+
 def evaluate_rule(lines,rule,base_date):
     """Apply an approved rule to observed text; date business checks stay separate."""
     check={"key":"web_barcode_rule","label":"已核准條碼公式","source":"database","status":"review",
@@ -157,7 +198,9 @@ def evaluate_rule(lines,rule,base_date):
         return check
     chosen=dates.get(rule["day_source"])
     if chosen is None:
-        check["reason"]=f"缺少唯一清楚且完整的{DAY_LABELS[rule['day_source']]}，無法核對條碼公式。"
+        kind=rule["day_source"]
+        printed=next((item for item in observed["dates"] if item["kind"]==kind), {})
+        check.update(_pending_date_details(kind,printed))
         return check
     expected=compose(rule,chosen)
     check.update(expected=expected,status="pass" if value==expected else "fail",date_value=chosen.isoformat(),

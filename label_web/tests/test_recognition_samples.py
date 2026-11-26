@@ -98,6 +98,15 @@ class RecognitionSampleTests(unittest.TestCase):
                 self.assertEqual([dict(row) for row in conn.execute(select(table)).mappings()], before[table.name])
         self.assertEqual((self.root / "images/image-first/image.jpg").read_bytes(), b"unchanged photo bytes; never decode")
 
+    def test_original_text_confirmation_is_not_a_misread_training_example(self):
+        self.add("different-image", target="OCR原字", kind="confirmed_text", image_hash="b"*64)
+        exported = self.exported()
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(exported[0]["provenance"][0]["inspection_id"], "first")
+        self.add("same-crop", target="OCR原字", kind="confirmed_text")
+        self.assertEqual(self.get().json["counts"]["candidates"], 0)
+        self.assertEqual(self.get("/export").status_code, 409)  # Conflicting readings of the same crop.
+
     def test_only_latest_effective_revision_is_used_and_revoke_removes_sample(self):
         self.revision("first", 2, target="新版實印字")
         self.assertEqual(self.exported()[0]["corrected_text"], "新版實印字")

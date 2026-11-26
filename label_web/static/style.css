@@ -714,3 +714,7 @@ details.result-zone-nutrition>summary h3{display:inline}
 details.result-zone-nutrition>summary .section-status-summary{display:inline-block;margin-inline-start:12px;font-weight:500}
 details.result-zone-nutrition.fail>summary .section-status-summary{color:#923b2c}
 details.result-zone-nutrition.review>summary .section-status-summary{color:#805513}
+.date-first-row .date-row-evidence{grid-column:1/-1;min-width:0}
+.date-row-evidence .date-first-reason{margin:0 0 6px}
+.date-row-evidence .button{min-height:44px;white-space:normal;overflow-wrap:anywhere}
+.rule-date-details>summary{font-size:1rem;font-weight:normal;min-height:44px}

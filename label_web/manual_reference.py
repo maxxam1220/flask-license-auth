@@ -335,7 +335,7 @@ def payload(engine, inspection):
         patch = patches.get(line.get("id"))
         if not patch:
             continue
-        if patch["kind"] == "ocr_misread":
+        if patch["kind"] in {"confirmed_text", "ocr_misread"}:
             # A confirmed reading is draft input, never an approved standard or
             # a replacement of the original OCR stored with the inspection.
             line.update(text=patch["text"], human_verified=True, human_uncertain=False)

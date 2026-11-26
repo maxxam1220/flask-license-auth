@@ -135,6 +135,35 @@ class HistoryNutritionTests(unittest.TestCase):
             self.assertEqual(conn.scalar(select(db.inspections.c.result)), result)
             self.assertEqual(conn.scalar(select(db.corrections.c.result)), manual)
 
+    def test_previous_summary_reloads_recorded_date_candidates_without_rewriting_evidence(self):
+        old_reason = "日期未看清楚或有多個候選，請對照原圖確認。"
+        key = dict(key="manufacture", source="date", status="review", reason=old_reason,
+                   actual="2026.11.26", line_ids=[11], label="製造日期格式")
+        expiry = dict(key, key="expiry", actual="2026.11.29 03時", line_ids=[13], label="有效日期格式")
+        formula = dict(key="web_barcode_rule", source="database", status="review", actual="2839179133336",
+                       date_source="expiry", expected="", reason="缺少唯一清楚且完整的有效日期，無法核對條碼公式。")
+        old_checks = [key,dict(key, key="manufacture_year"),expiry,formula]
+        original = dict(self.old, nutrition_policy="literal-text-v2", checks=old_checks, status="review",
+                        counts={"pass":0,"fail":0,"review":4,"read":0})
+        self.ocr = {"lines":[{"id":11, "text":"製造日期: 2026.11.26", "score":0, "ambiguous":True,
+                              "ambiguity_reason":"cloud_uncertain", "alternatives":[{"text":"製造日期: 2026.11.20"}]}]}
+        self.seed("uncertain-date", original)
+        with self.engine.begin() as conn:
+            conn.execute(insert(history_status.summaries).values(policy="literal-text-v2/external-reader-v1/i1",
+                source_table=db.inspections.name, row_id="uncertain-date", status="review",
+                counts={"counts":original["counts"], "issue_reasons":[key]}))
+        details = self.get("/api/inspections/uncertain-date")
+        reason = details["result"]["checks"][0]["reason"]
+        self.assertIn("2026.11.26", reason)
+        self.assertIn("2026.11.20", reason)
+        self.assertEqual((details["status"],details["result"]["counts"]), ("review", original["counts"]))
+        self.assertEqual(details["result"]["checks"][-1]["pending_date"], {"kind":"expiry","value":"2026.11.29 03時","line_ids":[13]})
+        listed = self.get("/api/inspections?status=review")["items"][0]
+        self.assertEqual(listed["issue_reasons"][0]["reason"], reason)
+        self.assertEqual([item["key"] for item in listed["issue_reasons"]], ["manufacture","expiry","web_barcode_rule"])
+        with self.engine.connect() as conn:
+            self.assertEqual(conn.scalar(select(db.inspections.c.result)), original)
+
     def test_stripe_reminder_alone_and_unverified_printed_text_still_require_review(self):
         unread = {"key":"barcode_unread","status":"review","label":"條碼圖形"}
         unverified = {"key":"text_line_0","status":"read","source":"ocr","actual":"2834665432931"}

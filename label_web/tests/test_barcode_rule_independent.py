@@ -80,6 +80,41 @@ class BarcodeRuleMathIndependentTests(unittest.TestCase):
             with self.subTest(rows=rows):
                 self.assertEqual(rules.evaluate_rule(rows, RULE, "2026-11-21")["status"], "review")
 
+    def test_barcode_date_dependency_keeps_the_printed_date_and_its_location(self):
+        rule=dict(RULE,prefix="28391791")
+        printed="2 839179 133336"
+        rows=[line(13,"有效日期: 2026.11.29 03時",ambiguous=True), line(19,printed)]
+        rows[0]["score"]=0
+        pending=rules.evaluate_rule(rows,rule,"2026-11-26")
+        self.assertEqual(pending["status"],"review")
+        self.assertEqual(pending["pending_date"],{"kind":"expiry","value":"2026.11.29 03時","line_ids":[13]})
+        self.assertEqual((pending["actual"],pending["expected"],pending["line_ids"]),(printed,"",[19]))
+        self.assertIn("先核對有效日期",pending["reason"])
+        self.assertNotIn("pending_date",rules.evaluate_rule(rows[:1],rule,"2026-11-26"))
+        rows[0].update(human_verified=True)
+        self.assertEqual(rules.evaluate_rule(rows,rule,"2026-11-26")["status"],"pass")
+        rows[1]["text"]=rules.compose(rule,date(2026,11,28))
+        self.assertEqual(rules.evaluate_rule(rows,rule,"2026-11-26")["status"],"fail")
+
+    def test_legacy_dependency_uses_only_the_saved_missing_date_rule_verdict(self):
+        old={"key":"web_barcode_rule","source":"database","status":"review","actual":OBSERVED,
+             "reason":"缺少唯一清楚且完整的有效日期，無法核對條碼公式。","date_source":"expiry","expected":""}
+        field={"value":"2026.11.21","line_ids":[7]}
+        date_check={"key":"expiry","actual":field["value"],"line_ids":[7],"status":"review"}
+        for fields in ({"expiry":field},{}):
+            result={"checks":[date_check,dict(old)],"fields":fields,"counts":{"review":2},"status":"review"}
+            original=deepcopy(result)
+            display=rules.with_pending_barcode_date(result)
+            self.assertEqual(display["checks"][1]["pending_date"],dict(field,kind="expiry"))
+            self.assertIs(display["checks"][0],result["checks"][0])
+            self.assertEqual((display["status"],display["counts"]),("review",{"review":2}))
+            self.assertEqual(original,result)
+            self.assertIs(rules.with_pending_barcode_date(display),display)
+        for change in ({"reason":"條碼印字不完整"},{"status":"fail"},{"actual":""},
+                       {"source":"human"},{"date_source":"manufacture"}):
+            result={"checks":[dict(old,**change)]}
+            self.assertIs(rules.with_pending_barcode_date(result),result)
+
     def test_formula_match_cannot_mask_wrong_scheduled_date_or_year(self):
         source = reference_catalog.build_draft({"code": "sample", "name": "測試水果",
             "barcode": "28039938", "barcode_type": "1", "keep_days": 9,

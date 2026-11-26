@@ -81,6 +81,20 @@ class CorrectionAPITests(unittest.TestCase):
         self.assertEqual(manual["status"],"fail")
         self.assertEqual(manual["ocr"]["lines"][0]["text"],"品名：測試蘋")
 
+    def test_confirm_original_requires_exact_text_and_still_checks_the_standard(self):
+        self.assertEqual(self.post(kind="confirmed_text").status_code, 400)
+        self.assertEqual(self.count(), 0)
+        raw = self.lines[0]["text"]
+        reply = self.post(kind="confirmed_text", text=raw)
+        self.assertEqual(reply.status_code, 201, reply.json)
+        manual = reply.json["manual_revision"]
+        self.assertEqual(manual["patches"][0]["kind"], "confirmed_text")
+        self.assertEqual(manual["ocr"]["lines"][0]["text"], raw)
+        self.assertTrue(manual["ocr"]["lines"][0]["human_verified"])
+        self.assertEqual(manual["status"], "fail")  # Printed product name differs from its standard.
+        self.assertNotIn("manual_0", [c["key"] for c in manual["result"]["checks"]])
+        self.assertEqual(reply.json["ocr"]["lines"][0], self.lines[0])
+
     def test_print_error_forces_fail_even_equal_expected(self):
         response = self.post(kind="label_misprint")
         self.assertEqual(response.json["manual_revision"]["status"],"fail")

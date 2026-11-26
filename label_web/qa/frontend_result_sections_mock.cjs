@@ -183,6 +183,38 @@ check("history uses the reasons from the same revision as the counts",()=>{
   assert.doesNotMatch(t.historyProblemSummary({...revised,manual_issue_reasons:undefined}),/條碼|日期顛倒/);
   assert.doesNotMatch(t.historyProblemSummary({...revised,manual_counts:{fail:0,review:0}}),/日期顛倒|條碼/);
 });
+check("uncertain date rows open their own original with evidence, while dependent checks remain counted",()=>{
+  const manufacture={...line(11,"製造日期: 2026.11.26"),ambiguous:true,score:0,alternatives:[{text:"製造日期: 2026.11.20"}]};
+  const expiry={...line(13,"有效日期: 2026.11.29 03時"),ambiguous:true,score:0};
+  const reasons=["製造日期讀到「2026.11.26」，另一候選為「2026.11.20」。","雲端將有效日期「2026.11.29 03時」標為不確定。"];
+  const checks=[{key:"manufacture",source:"date",status:"review",label:"製造日期",actual:"2026.11.26",reason:reasons[0],line_ids:[11]},
+    {key:"expiry",source:"date",status:"review",label:"有效日期",actual:"2026.11.29 03時",reason:reasons[1],line_ids:[13]},
+    {key:"date_order",source:"date",status:"review",label:"日期先後",reason:"等待兩日確認",line_ids:[11,13]},
+    {key:"expiry_year",source:"date",status:"review",label:"有效日年份",reason:"等待有效日期確認",line_ids:[13]},
+    {key:"barcode_multiple",source:"barcode",status:"fail",label:"商品碼",reason:"另外讀到不同商品碼"}];
+  const {inspection}=sample([manufacture,expiry],checks,{status:"fail",source_match:{status:"matched"}});
+  Object.assign(inspection,{reviews:[],created_at:"2026-11-26T01:38:00Z"});
+  t.state.inspection=inspection;t.renderInspection(inspection);
+  const $=selector=>context.document.querySelector(selector),area=$("#result-area");
+  const header=area.querySelector(".scan-result-header"),other=header.querySelector(".rule-date-details");
+  assert.match(header.querySelector(".count-review").textContent,/4 個檢查點/);
+  assert.match(header.textContent,/另外讀到不同商品碼/);assert.match(other.querySelector("summary").textContent,/2 項/);
+  assert.match(other.textContent,/等待兩日確認/);assert.ok(!other.open);
+  const rows=area.querySelector("#result-date-card").querySelectorAll(".date-first-row");
+  assert.equal(rows.length,2);
+  for(const [index,original] of [manufacture,expiry].entries()){
+    const row=rows[index],button=row.querySelector("button");
+    assert.equal(row.querySelector(".date-first-reason").textContent,reasons[index]);
+    assert.equal(button.dataset.correctLine,String(original.id));button.onclick();
+    assert.equal($("#correction-kind").value,"confirmed_text");
+    assert.equal($("#correction-original").value,original.text);assert.equal($("#correction-text").value,original.text);
+    assert.equal($("#correction-text").readOnly,true);assert.equal($("#correction-date-note").textContent,reasons[index]);
+    assert.equal(t.state.correction.lineId,original.id);assert.equal($("#correction-full-photo").href,inspection.image.url);
+    $("#correction-dialog").close();
+  }
+  t.state.inspection={...inspection,id:"another"};
+  rows[0].querySelector("button").onclick();assert.ok(!$("#correction-dialog").open);
+});
 check("history nutrition starts fully collapsed with its mixed verdict visible and opens all rows in one step",()=>{
   const print=[line(0,"熱量 51大卡"),line(1,"脂肪 0.1公克"),line(2,"蛋白質 0.2公克")];
   const s=sample(print,print.map((row,index)=>({...sourceCheck(row.id,row.text,["pass","fail","review"][index]),key:`source_nutrition_${index}`})));

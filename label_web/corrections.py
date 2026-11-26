@@ -8,7 +8,7 @@ from source_validation import evaluate_source
 from validation import evaluate, traditional_display
 
 
-KINDS = {"ocr_misread", "label_misprint", "uncertain"}
+KINDS = {"confirmed_text", "ocr_misread", "label_misprint", "uncertain"}
 
 
 class CorrectionInputError(ValueError):
@@ -35,9 +35,13 @@ def validate_request(body, original):
     kind, value = body.get("kind"), body.get("text", "")
     if operation == "replace":
         if not isinstance(kind, str) or kind not in KINDS:
-            raise CorrectionInputError("請選擇辨識錯誤、標籤印錯或照片看不清楚。")
+            raise CorrectionInputError("請選擇核對結果。")
         if not isinstance(value, str) or len(value) > 1000 or '\x00' in value or (kind != "uncertain" and not value.strip()):
             raise CorrectionInputError("請填寫照片實際印出的文字，最多 1,000 字。")
+        if kind == "confirmed_text":
+            original_text = next(line.get("text") for line in original["ocr"]["lines"] if line.get("id") == identifier)
+            if value != original_text:
+                raise CorrectionInputError("確認原文時須保留辨識文字。要修改文字，請選擇「辨識讀錯」。")
     return {"base_revision":base, "line_id":identifier, "operation":operation,
             "kind":kind, "text":value, "reviewer":reviewer.strip(), "note":note}
 
@@ -97,7 +101,7 @@ def apply_patch_verdicts(result, patches):
             check["human_assessment"] = True
             check["confidence_note"] = "此結果包含人工逐字確認；顯示的信心分數仍是原始 OCR 分數。"
     for patch in patches.values():
-        if patch["kind"] == "ocr_misread":
+        if patch["kind"] in {"confirmed_text", "ocr_misread"}:
             continue
         status = "fail" if patch["kind"] == "label_misprint" else "review"
         result["checks"].append({"key":f"manual_{patch['line_id']}", "label":"人工確認標籤印錯" if status == "fail" else "人工標記待確認",

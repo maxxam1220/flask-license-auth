@@ -26,6 +26,30 @@ def check(result, key):
 
 
 class SourceTextTests(unittest.TestCase):
+    def test_uncertain_printed_dates_show_the_observed_alternative_and_wait_for_confirmation(self):
+        manufacture = dict(line(11, "製造日期: 2026.11.26", score=0), uncertain=True, ambiguous=True,
+                           ambiguity_reason="cloud_uncertain", alternatives=[{"text":"製造日期: 2026.11.20"}])
+        expiry = dict(line(13, "有效日期: 2026.11.29 03時", score=0), uncertain=True, ambiguous=True,
+                      ambiguity_reason="cloud_uncertain")
+        standard = dict(source("品名：紐西蘭愛妃蘋果切片59元", keep=3), source_kind="manual")
+        observed = [line(1, "品名：紐西蘭愛妃蘋果切片59元"), manufacture, expiry]
+        result = evaluate_source(observed, standard, base_date="2026-11-26")
+        for key in ("manufacture","expiry","manufacture_year","expiry_year","date_order","keep_days","expired"):
+            self.assertEqual(check(result, key)["status"], "review", key)
+        for reading in ("2026.11.26","2026.11.20"):
+            self.assertIn(reading, check(result,"manufacture")["reason"])
+        self.assertIn("雲端辨識讀到「2026.11.29 03時」", check(result,"expiry")["reason"])
+        self.assertNotIn("候選", check(result,"expiry")["reason"])
+        self.assertIn("再判斷先後", check(result,"date_order")["reason"])
+        self.assertIn("仍待確認", check(result,"expired")["reason"])
+        # Only an actual observation / human confirmation clears a flagged line.
+        both = [observed[0],dict(manufacture,human_verified=True),dict(expiry,human_verified=True)]
+        confirmed = evaluate_source(both, standard, base_date="2026-11-26")
+        self.assertTrue(all(item["status"] == "pass" for item in confirmed["checks"] if item.get("source") == "date"))
+        both[1] = dict(both[1], text="製造日期: 2026.11.20")
+        mismatch = evaluate_source(both, standard, base_date="2026-11-26")
+        self.assertEqual(check(mismatch,"keep_days")["status"], "fail")
+
     def test_full_database_text_including_codes_counts_and_notice(self):
         texts = ["品名：美國櫻桃1.3kg/盒", "貨號：211239", "入數：1盒", "<請清洗後食用>",
                  "新北市土城區中興路9號", "免付費電話：0800-200-859"]

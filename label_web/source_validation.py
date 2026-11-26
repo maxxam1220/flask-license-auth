@@ -7,7 +7,7 @@ import re
 import unicodedata
 
 from validation import diff_parts, parse_date, standalone_date_label, traditional_display, product_row_candidates, line_is_uncertain
-from label_geometry import (analyze_label_scope, scope_review_result, date_observations,
+from label_geometry import (analyze_label_scope, scope_review_result, date_observations, date_segments,
                             date_evidence_overlaps, without_date_evidence,
                             is_date_annotation, split_date_annotation, unlabelled_dates)
 from text_rows import group_observed_rows, nutrition_label, nutrition_line_ids, NUMBER_CELL
@@ -480,6 +480,59 @@ def _date_fields(lines):
     return found
 
 
+def _date_review_reason(check, evidence):
+    label = FIELD_NAMES[check["key"]]
+    value = check.get("actual")
+    if not value:
+        return f"沒有讀到完整的{label}，請對照原圖確認。"
+    if any(line.get("human_uncertain") for line in evidence):
+        return f"人工已標記{label}看不清楚，請對照原圖確認。"
+    if len(evidence) == 1 and not evidence[0].get("human_verified"):
+        line = evidence[0]
+        alternatives = []
+        for other in line.get("alternatives") or []:
+            if not isinstance(other, dict) or not isinstance(other.get("text"), str):
+                continue
+            readings = [s["value"] for s in date_segments(other) if s["kind"] == check["key"] and s["value"]]
+            if len(readings) == 1 and readings[0] != value and readings[0] not in alternatives:
+                alternatives.append(readings[0])
+        if alternatives:
+            readings = "、".join(f"「{item}」" for item in alternatives)
+            return f"{label}讀到「{value}」，另有候選{readings}。請對照原圖確認。"
+        if line.get("ambiguity_reason") == "cloud_uncertain":
+            return f"雲端辨識讀到「{value}」，並將這行標為不確定。請對照原圖確認{label}。"
+    return check.get("reason")
+
+
+def with_date_review_evidence(result, lines):
+    """Explain archived and fresh date reviews from their own OCR, without changing verdicts."""
+    checks = result.get("checks")
+    if not isinstance(checks, list):
+        return result
+    pending = [(i, c) for i, c in enumerate(checks) if isinstance(c, dict) and c.get("source") == "date" and c.get("status") == "review"]
+    if not pending:
+        return result
+    by_id = {line["id"]: line for line in lines if isinstance(line, dict) and isinstance(line.get("id"), (int, str))}
+    updated = None
+    for position, check in pending:
+        key, reason = check.get("key"), check.get("reason")
+        if key in DATE_KEYS and reason == "日期未看清楚或有多個候選，請對照原圖確認。":
+            evidence = [by_id[i] for i in check.get("line_ids", []) if i in by_id]
+            reason = _date_review_reason(check, evidence)
+        elif key in ("date_order", "arrival_manufacture", "arrival_expiry") and reason in (
+                "日期先後順序合理。", "有效日期早於製造日期。", "到店日早於製造日期。", "到店日晚於有效日期。"):
+            reason = "日期仍待確認，請核對原圖後再判斷先後順序。"
+        elif key == "expired" and reason in ("有效日期已早於本批基準日。", "有效日期未早於本批基準日。"):
+            reason = "有效日期仍待確認，請核對原圖後再與本批基準日比較。"
+        elif key in ("manufacture_year", "expiry_year", "arrival_year") and reason == "未取得可跨年的資料庫日期設定，先與本批基準年份核對。":
+            reason = "這行日期仍待確認，請先核對原圖上的日期。"
+        if reason != check.get("reason"):
+            if updated is None:
+                updated = list(checks)
+            updated[position] = dict(check, reason=reason)
+    return dict(result, checks=updated) if updated is not None else result
+
+
 def _formatted_date(value, code):
     pattern = ("%Y.%m.%d" if code in "AB" else "%Y/%m/%d" if code in "CD"
                else "%m.%d" if code in "EF" else "%m/%d" if code in "GH" else "%m%d")
@@ -781,4 +834,4 @@ def evaluate_source(lines, source, batch_date="", arrival_date="", base_date="",
                      else "尚未找到對應資料庫標籤；僅檢查日期，其他文字不判定正確。"))
     result = {"checks": checks, "fields": fields, "notes": notes, "rule_version": RULE_VERSION,
               "verified_scope": "approved_text" if approved_text else "manual_text" if manual_source else "catalog_fields" if catalog_source else "selected_database_label" if source else "dates_only", "mode": "recognition"}
-    return _decorate(result, lines)
+    return with_date_review_evidence(_decorate(result, lines), lines)

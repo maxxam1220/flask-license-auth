@@ -68,6 +68,7 @@ function applySession(session,refreshHistory=true) {
     $("#template-select").replaceChildren(new Option("自動對應系統標籤與清單",""));
     renderNextScanChoice();
     $("#correction-form").reset();$("#correction-original").value="";$("#correction-text").value="";$("#correction-standard").textContent="";$("#correction-full-photo").removeAttribute("href");
+    $("#correction-date-note").textContent="";$("#correction-date-note").hidden=true;
     const canvas=$("#correction-photo");canvas.width=canvas.width;
     closeCropDialog();
     state.resultRenderEpoch=(state.resultRenderEpoch || 0)+1;state.resultPhotoCache=null;$("#result-image-canvas").width=1;$("#result-image-link").removeAttribute("href");
@@ -489,7 +490,12 @@ function renderOCR(lines, container, threshold=.65) {
   if (!lines.length) return container.append(element("p", "muted", "未辨識到文字，請換一張清楚的照片。"));
   lines.forEach(line => {
     const row = element("div", "ocr-line", line.text);
-    if(line.human_uncertain || (!line.human_verified && (line.ambiguous || (Number.isFinite(line.score) && line.score < threshold))))row.append(element("small", "", line.ambiguity_reason==="line_retry_disagrees" ? "局部重讀結果不同，請對照原圖。" : line.ambiguous ? "不同次辨識有差異，請對照照片。" : "此行需對照照片確認。"));
+    if(line.human_uncertain || (!line.human_verified && (line.ambiguous || (Number.isFinite(line.score) && line.score < threshold)))){
+      let reason="此行需對照照片確認。";
+      if(line.ambiguity_reason==="line_retry_disagrees")reason="局部重讀結果不同，請對照原圖。";
+      if(line.ambiguity_reason==="cloud_uncertain")reason="雲端辨識將這行標為不確定，請對照原圖。";
+      row.append(element("small","",reason));
+    }
     container.append(row);
   });
 }
@@ -771,14 +777,25 @@ function restoreInspectionSettings(inspection) {
   state.inspectSource = !inspection.template_id && (explicitCode || match?.status === "matched") ? {...match,...selected,code:explicitCode || match.code,name:selected?.name || match?.name || inspection.name || explicitCode} : null;
   renderInspectSource();
 }
-const correctionLabels = {ocr_misread:"OCR 辨識讀錯",label_misprint:"標籤實際印錯",uncertain:"看不清楚，待確認"};
+const correctionLabels = {confirmed_text:"已確認原辨識文字正確",ocr_misread:"OCR 辨識讀錯",label_misprint:"標籤實際印錯",uncertain:"看不清楚，待確認"};
 function setDialogError(id, message = "") { const node = $(id); node.textContent = message; node.hidden = !message; }
 function currentRevision(inspection = state.inspection) { return Number(inspection?.manual_revision?.revision) || 0; }
 function currentPatch(lineId) { return (state.inspection?.manual_revision?.patches || []).find(patch => patch.line_id === lineId); }
 function correctionKindChanged() {
-  const uncertain = $("#correction-kind").value === "uncertain";
-  $("#correction-text").required = !uncertain; $("#correction-text").disabled = uncertain;
-  $("#correction-text-help").textContent = uncertain ? "不必猜字，會保留目前文字並標記待確認。看清楚後可以再次訂正。" : "依照片逐字填寫，包含標點；即使照片印錯，也請保留實際錯字。";
+  const kind=$("#correction-kind").value,confirmed=kind==="confirmed_text",uncertain=kind==="uncertain";
+  const input=$("#correction-text"),context=state.correction;
+  input.required=!uncertain;input.disabled=uncertain;input.readOnly=confirmed;
+  if(context){
+    if(confirmed){
+      if(context.previousKind!=="confirmed_text")context.draftText=input.value;
+      input.value=context.originalText;
+    }else if(context.previousKind==="confirmed_text")input.value=context.draftText ?? context.originalText;
+    context.previousKind=kind;
+  }
+  let help=uncertain ? "保留目前文字，標記為待確認。" : "請依照片逐字填寫，包括標點。";
+  if(confirmed)help=context && currentPatch(context.lineId) ? "儲存後會以原始辨識文字取代本行目前的人工判定。" : "請確認上方原照與這行原始文字完全一致。";
+  $("#correction-text-help").textContent=help;
+  $("#correction-save").textContent=confirmed ? "確認原文並重新判定" : "儲存訂正並重新判定";
 }
 function drawCorrectionPhoto(inspection, line) {
   const canvas = $("#correction-photo"), request = ++state.correctionImageRequest, image = new Image();
@@ -802,15 +819,18 @@ function drawCorrectionPhoto(inspection, line) {
   image.onerror = () => { if (request === state.correctionImageRequest) $("#correction-photo-note").textContent = "預覽暫時無法載入，請點選完整原圖確認。"; };
   image.src = inspection.image.url;
 }
-function openCorrectionDialog(lineId) {
+function openCorrectionDialog(lineId,dateKey=null) {
   if (state.busy || !state.inspection) return;
   const inspection = state.inspection, line = inspection.ocr.lines.find(item => item.id === lineId); if (!line) return;
   const patch = currentPatch(lineId), result = inspection.manual_revision?.result || inspection.result;
-  state.correction = {inspectionId:inspection.id,lineId,baseRevision:currentRevision(),conflict:false};
+  state.correction = {inspectionId:inspection.id,lineId,baseRevision:currentRevision(),conflict:false,originalText:line.text || "",dateKey};
   $("#correction-form").reset(); $("#correction-original").value = line.text || "";
-  $("#correction-text").value = patch?.text ?? line.text ?? ""; $("#correction-kind").value = patch?.kind || "ocr_misread";
+  $("#correction-text").value = patch?.text ?? line.text ?? ""; $("#correction-kind").value = patch?.kind || (dateKey ? "confirmed_text" : "ocr_misread");
   $("#correction-reviewer").value = sessionStorage.getItem("labelcheck-operator") || "";
   const assessment=buildResultSections(inspection,result,inspection.manual_revision?.ocr || inspection.ocr).assessed;
+  const dateCheck=dateKey && (assessment.checks || []).find(check=>check.key===dateKey && ["review","fail"].includes(check.status) && (check.line_ids || []).includes(lineId));
+  const dateNote=$("#correction-date-note");dateNote.textContent=dateCheck?.reason || "";dateNote.hidden=!dateCheck?.reason;
+  dateNote.className=`date-first-reason ${dateCheck?.status || "review"}`;
   const expected = [...new Set((assessment.checks || []).filter(check=>(check.line_ids || []).includes(lineId)).map(check=>check.expected).filter(Boolean))];
   $("#correction-standard").textContent = expected.join("\n") || "這行尚無比對標準。"; $("#correction-standard-details").open = false;
   $("#correction-revoke").hidden = !patch; $("#correction-revoke-help").hidden = !patch; $("#correction-reload").hidden = true; $("#correction-save").disabled = false; $("#correction-revoke").disabled = false;
@@ -824,7 +844,10 @@ async function saveCorrection(operation = "replace") {
   if (!reviewer.value.trim() || !note.value.trim()) { setDialogError("#correction-error","請填寫訂正人員與原因。"); return; }
   if (operation === "replace" && !$("#correction-form").reportValidity()) return;
   const body = {base_revision:context.baseRevision,line_id:context.lineId,operation,reviewer:reviewer.value.trim(),note:note.value.trim()};
-  if (operation === "replace") { body.kind = $("#correction-kind").value; body.text = body.kind === "uncertain" ? "" : $("#correction-text").value; }
+  if (operation === "replace") {
+    body.kind=$("#correction-kind").value;body.text=body.kind==="uncertain" ? "" : $("#correction-text").value;
+    if(body.kind==="confirmed_text" && body.text!==context.originalText){setDialogError("#correction-error","確認原文時必須保留完整的原始辨識文字。若印字不同，請選擇辨識讀錯。");return;}
+  }
   setDialogError("#correction-error"); setBusy(true);
   $$("#correction-form button, #correction-close").forEach(button=>{button.disabled=true;});
   $$("#correction-form input, #correction-form textarea, #correction-form select").forEach(input=>{input.disabled=true;});
@@ -832,7 +855,7 @@ async function saveCorrection(operation = "replace") {
     const inspection = await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}/corrections`,{method:"POST",body});
     sessionStorage.setItem("labelcheck-operator",body.reviewer); state.inspection=inspection;state.manualView=true;
     renderInspection(inspection); $("#correction-dialog").close();
-    toast(operation === "revoke" ? "已撤回這行訂正，原紀錄仍保留。" : "人工訂正已保存，判定已更新。");
+    toast(operation === "revoke" ? "已撤回這行訂正，原紀錄仍保留。" : body.kind==="confirmed_text" ? "已確認原辨識文字，判定已更新。" : "人工訂正已保存，判定已更新。");
   } catch (error) {
     if (error.status === 409) {
       context.conflict = true;
@@ -1453,7 +1476,7 @@ function appendOCRAlternatives(container, item) {
   }
   if (!values.length) return;
   const block = element("div", "line-comparison ocr-alternatives");
-  block.append(element("strong", "", hasLocalRetryDifference(item) ? "局部重讀候選（僅供對照，未套用）" : "另一次辨識（僅供對照，未套用）"));
+  block.append(element("strong", "", hasLocalRetryDifference(item) ? "局部重讀候選（僅供對照，未套用）" : "其他辨識候選（僅供對照，未套用）"));
   if(hasLocalRetryDifference(item))block.append(element("p","help","局部重讀結果不同，請對照原圖；候選可能更不準確，原始辨識文字仍保留。"));
   values.forEach(text => block.append(element("p", "scan-line-text", text)));
   container.append(block);
@@ -1500,13 +1523,18 @@ function resultLine(item) {
   }
   return row;
 }
+function secondaryDateReviews(checks){
+  const dates=checks.filter(check=>check.status==="review" && (/^(manufacture|expiry|arrival)$/.test(check.key) || check.whole_date_label));
+  const ids=new Set(dates.flatMap(check=>check.line_ids || []));
+  return new Set(checks.filter(check=>check.status==="review" && dateResultCheck(check) && !dates.includes(check) && (check.line_ids || []).some(id=>ids.has(id))));
+}
 function renderUnmatchedDates(inspection,result,area,showMatched=false){
   const matched=!!inspection.template_id || result.source_match?.status==="matched" || (!result.source_match && !!inspection.template_snapshot?.source?.code);
   if(matched && !showMatched)return;
   const checks=(result.checks || []).filter(check=>check.source==="date" || /^(manufacture|expiry|arrival)(_|$)|^date_|^keep_days$|^batch$|^expired$|^future_manufacture$/.test(check.key || ""));
   const keyGroups={manufacture:["manufacture","date_order","arrival_manufacture","keep_days","batch","future_manufacture"],expiry:["expiry","date_order","arrival_expiry","keep_days","expired"],arrival:["arrival","arrival_manufacture","arrival_expiry"]},weights={fail:3,review:2,pass:1,read:0};
   const panel=element("section","result-date-first");panel.id=matched ? "result-date-card" : "result-date-first";panel.setAttribute("aria-label","日期檢查");panel.append(element("h3","",matched ? "日期" : "日期先看"));
-  const list=element("dl","date-first-list"),related=new Set();
+  const list=element("dl","date-first-list"),related=new Set(),shownInline=new Set();
   const dateRows=[["manufacture","製造日期"],["expiry","有效日期"],["arrival","到店日"],
     ...checks.filter(check=>check.whole_date_label).map(check=>[check.key,check.whole_date_label])];
   for(const [key,label] of dateRows){
@@ -1519,11 +1547,25 @@ function renderUnmatchedDates(inspection,result,area,showMatched=false){
       return (check.line_ids || []).some(id=>identifiers.includes(id) && Object.keys(keyGroups).every(other=>other===key || !(result.fields?.[other]?.line_ids || checks.find(item=>item.key===other)?.line_ids || []).includes(id)));
     });
     rowChecks.forEach(check=>related.add(check));const status=rowChecks.reduce((worst,check)=>(weights[check.status] ?? 0)>(weights[worst] ?? 0) ? check.status : worst,"read"),row=element("div",`date-first-row ${status}`);row.dataset.dateField=key;
-    row.append(element("dt","",label),element("dd","date-first-value",value),element("dd","date-first-status",{pass:"✓ 已做基本檢查",fail:"✕ 有異常",review:"? 需確認",read:"· 尚未核對"}[status] || "· 尚未核對"));list.append(row);
+    row.append(element("dt","",label),element("dd","date-first-value",value),element("dd","date-first-status",{pass:"✓ 已做基本檢查",fail:"✕ 有異常",review:"? 需確認",read:"· 尚未核對"}[status] || "· 尚未核對"));
+    if(direct && ["fail","review"].includes(direct.status)){
+      const evidence=element("dd","date-row-evidence");
+      if(direct.reason){evidence.append(element("p",`date-first-reason ${direct.status}`,direct.reason));shownInline.add(direct);}
+      const ids=new Set(direct.line_ids?.length ? direct.line_ids : identifiers);
+      const lines=(inspection.ocr?.lines || []).filter(line=>ids.has(line.id));
+      for(const line of lines){
+        const button=element("button","button secondary",lines.length===1 ? `核對${label}原照` : `核對原照片段：${line.text}`);
+        button.type="button";button.dataset.correctLine=String(line.id);button.disabled=state.busy;
+        button.onclick=()=>{if(state.inspection?.id===inspection.id)openCorrectionDialog(line.id,key);};evidence.append(button);
+      }
+      if(evidence.children.length)row.append(evidence);
+    }
+    list.append(row);
   }
   if(list.children.length)panel.append(list);else panel.append(element("p","date-first-empty","未辨識到可列出的製造、有效或到店日期，請對照照片確認；不代表日期已通過。"));
   const problems=[...related].filter(check=>["fail","review"].includes(check.status)).sort((a,b)=>(weights[b.status] || 0)-(weights[a.status] || 0)),reasons=new Set();
-  for(const check of problems){const reason=check.reason || check.label;if(!reason || reasons.has(reason))continue;reasons.add(reason);panel.append(element("p",`date-first-reason ${check.status}`,`${check.status==="fail" ? "✕" : "?"} ${reason}`));}
+  const secondary=secondaryDateReviews(checks);
+  for(const check of problems){const reason=check.reason || check.label;if(!reason || shownInline.has(check) || secondary.has(check) || reasons.has(reason))continue;reasons.add(reason);panel.append(element("p",`date-first-reason ${check.status}`,`${check.status==="fail" ? "✕" : "?"} ${reason}`));}
   panel.append(element("p","date-first-scope",matched ? checks.some(check=>/_schedule$/.test(check.key || "")) ? "依已設定的日期規則核對；未提供的規則不視為已確認。" : checks.some(check=>check.key==="keep_days") ? "包含已提供的保存天數檢查；未提供的排程仍無法確認。" : "僅呈現已執行的基本日期檢查，格式正確不代表符合本批排程。" : "尚無確定比對標準。這裡只顯示已執行的日期格式、先後與基準日檢查；不代表已確認保存期限或完整排程。"));
   if(result.inputs?.base_date)panel.append(element("p","help",`本批基準日：${result.inputs.base_date}`));
   if(related.size){const detail=element("details","date-first-details");detail.append(element("summary","","查看日期檢查依據"));for(const check of related){const row=element("p","");row.append(element("strong","",`${check.label || "日期檢查"}：`),element("span","",`${check.reason || "未提供判定說明"}${check.display_expected || check.expected ? ` 依據：${check.display_expected || check.expected}` : ""}`));detail.append(row);}panel.append(detail);}
@@ -1816,10 +1858,17 @@ function renderBarcodeCard(model,result,area,inspection=state.inspection){
   const checkStatus=resultRowStatus(checks),status=checkStatus==="pass" && !referenced ? "read" : checkStatus;
   const card=element("section",`result-barcode-card ${status}`);card.id="result-barcode-card";
   const formulaLabel="✓ 條碼數字與日期規則相符";
-  card.append(element("h3","","商品條碼"),badge(status,{fail:"✕ 有差異",review:"? 依據或讀取需確認",read:"· 商品碼未核對",pass:formulaPass ? formulaLabel : "✓ 已核對相符"}[status]));
+  const problems=checks.filter(check=>["fail","review"].includes(check.status));
+  const pending=problems.find(check=>check.key==="web_barcode_rule" && check.status==="review" && Object.hasOwn(barcodeDateLabels,check.pending_date?.kind));
+  const otherIssue=problems.some(check=>check!==pending);
+  const dateWait=pending ? `條碼公式等待${barcodeDateLabels[pending.pending_date.kind]}確認` : "";
+  const printMatches=checks.some(check=>check.key==="barcode_hri" && check.status==="pass");
+  card.append(element("h3","","商品條碼"),badge(status,{fail:"✕ 有差異",review:dateWait && !otherIssue ? `? ${dateWait}` : "? 依據或讀取需確認",read:"· 商品碼未核對",pass:formulaPass ? formulaLabel : "✓ 已核對相符"}[status]));
   if(formulaPass && status!=="pass")card.append(element("p","barcode-formula-status pass",formulaLabel));
+  if(pending && printMatches)card.append(element("p","barcode-formula-status pass","✓ 條碼印字與條紋一致"));
+  if(dateWait && otherIssue)card.append(element("p","check-reason",dateWait));
   for(const value of values.slice(0,3))card.append(element("p","barcode-observed",value));
-  const problems=checks.filter(check=>["fail","review"].includes(check.status)),reasons=[...new Set(problems.map(check=>check.reason).filter(Boolean))];reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
+  const reasons=new Set(problems.filter(check=>check!==pending).map(check=>check.reason).filter(Boolean));reasons.forEach(reason=>card.append(element("p","check-reason",reason)));
   if(checks.length){
     const detail=element("details","section-evidence");detail.append(element("summary","","查看條碼依據"));
     for(const check of checks){const p=element("p","",`${check.label || "條碼"}：${check.reason || ""}`);if(check.expected)p.append(element("span","",` 依據：${check.display_expected || check.expected}`));detail.append(p);}
@@ -2100,7 +2149,13 @@ function renderInspection(inspection) {
     if(!problems.length)continue;
     const group=element("div",`rule-issue-summary count-${status}`);
     group.append(element("strong","",`${label} ${problems.length} 個檢查點`));
-    for(const reason of new Set(problems.map(checkIssueText)))group.append(element("p","",reason));
+    const secondary=secondaryDateReviews(problems);
+    for(const reason of new Set(problems.filter(check=>!secondary.has(check)).map(checkIssueText)))group.append(element("p","",reason));
+    if(secondary.size){
+      const more=element("details","rule-date-details");more.append(element("summary","",`其餘日期檢查 · ${secondary.size} 項`));
+      for(const check of secondary)more.append(element("p","",checkIssueText(check)));
+      group.append(more);
+    }
     counts.append(group);
   }
   header.append(element("strong","result-verdict",coverage.title),counts,element("p","result-coverage",coverage.note)); area.append(header);
@@ -2168,7 +2223,7 @@ function recognitionInfo(inspection,result,rows){
   if(result.label_scope?.blocked)warnings.push(result.label_scope.reason || "照片內的標籤範圍不明，請框選一張完整標籤後重新辨識。");
   if(small>0)warnings.push(`有 ${small} 行字框較小${Number.isFinite(diagnostics.small_text_height_threshold_px) ? `（短邊小於 ${diagnostics.small_text_height_threshold_px} 像素）` : ""}，請放大原照確認細字；必要時靠近重拍。`);
   if(low>0)warnings.push(cloud ? `雲端讀取有 ${low} 行標記需確認，請對照原照。` : `原始 OCR 有 ${low} 行低於辨識分數門檻 ${threshold}，請依照片核對；這不是整張標籤的正確率。`);
-  if(ambiguous>0)warnings.push(`有 ${ambiguous} 行不同次讀取不一致，請查看該行明細或重拍。`);
+  if(ambiguous>0)warnings.push(`有 ${ambiguous} 行辨識未確定，請對照原照與該行明細。`);
   if(width>0 && height>0 && Math.max(width,height)<1000)warnings.push("保存照片較小，細字可能缺少細節；請優先選原始照片或靠近重拍。");
   if(!lines.length)warnings.push("沒有辨識到文字，請確認照片清楚且只有一張完整標籤。");
   return {facts,warnings,review};
@@ -2671,7 +2726,7 @@ $("#correction-kind").onchange=correctionKindChanged;
 $("#correction-revoke").onclick=()=>saveCorrection("revoke");
 $("#correction-close").onclick=()=>{if(!state.busy)$("#correction-dialog").close();};
 $("#correction-dialog").addEventListener("cancel",event=>{if(state.busy)event.preventDefault();});
-$("#correction-reload").onclick=async()=>{const context=state.correction;if(!context || state.busy)return;try{state.inspection=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}`);renderInspection(state.inspection);openCorrectionDialog(context.lineId);}catch(error){setDialogError("#correction-error",error.message);}};
+$("#correction-reload").onclick=async()=>{const context=state.correction;if(!context || state.busy)return;try{state.inspection=await api(`/api/inspections/${encodeURIComponent(context.inspectionId)}`);renderInspection(state.inspection);openCorrectionDialog(context.lineId,context.dateKey);}catch(error){setDialogError("#correction-error",error.message);}};
 $("#barcode-rule-close").onclick=()=>closeBarcodeRule();
 $("#barcode-rule-dialog").addEventListener("cancel",event=>{if(state.barcodeRule?.saving){event.preventDefault();return;}closeBarcodeRule();});
 $("#barcode-rule-reload").onclick=()=>openBarcodeRule(state.barcodeRule?.inspectionId);

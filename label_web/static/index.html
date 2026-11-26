@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#173f35"><title>標籤核對｜福和生鮮</title>
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261125-inspection-summary">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/static/style.css?v=20261126-date-review">
   <script src="/static/reading.js?v=20261112-readable" defer></script>
-  <script src="/static/app.js?v=20261125-barcode-print" defer></script>
+  <script src="/static/app.js?v=20261126-date-review" defer></script>
 </head>
 <body>
 <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -188,13 +188,13 @@
 </dialog>
 <dialog id="result-image-dialog" class="result-image-dialog" aria-labelledby="result-image-title"><div class="edit-heading"><h2 id="result-image-title">放大標籤照片</h2><button id="result-image-close" type="button" class="button secondary">關閉</button></div><div class="result-image-scroll"><canvas id="result-image-canvas" role="img" aria-label="原照片局部放大"></canvas></div><p id="result-image-note" class="help"></p><a id="result-image-link" target="_blank" rel="noopener">開啟完整原圖</a></dialog>
 <dialog id="correction-dialog" class="edit-dialog" aria-labelledby="correction-title">
-  <div class="edit-heading"><h2 id="correction-title">訂正辨識文字</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div><p class="correction-impact">訂正照片實際文字後，會立即重新判定這筆紀錄；不會更改標準，也不會自動訓練模型。</p>
-  <p class="help">請依照片實際印字訂正，只影響這筆檢查。原始辨識與訂正紀錄都會保留。</p>
+  <div class="edit-heading"><h2 id="correction-title">核對或訂正辨識文字</h2><button id="correction-close" class="button secondary" type="button">關閉</button></div><p class="correction-impact">請對照原照確認印字。儲存後會重新判定這筆紀錄，並保留原始辨識與歷次訂正。</p>
   <figure class="correction-photo"><canvas id="correction-photo" role="img" aria-label="所選文字的原始照片位置"></canvas><figcaption id="correction-photo-note">載入原圖中…</figcaption><a id="correction-full-photo" target="_blank" rel="noopener">查看完整原圖</a></figure>
+  <p id="correction-date-note" class="date-first-reason review" hidden></p>
   <form id="correction-form">
     <label>原始 OCR 文字<textarea id="correction-original" rows="2" readonly></textarea></label>
     <details id="correction-standard-details"><summary>查看比對標準（唯讀）</summary><p id="correction-standard" class="scan-line-text"></p></details>
-    <label>訂正類型<select id="correction-kind" required><option value="ocr_misread">辨識讀錯：照片印字正確，OCR 讀錯</option><option value="label_misprint">標籤印錯：照片上確實有錯字或漏字</option><option value="uncertain">看不清楚：保留文字，標記待確認</option></select></label>
+    <label>核對結果<select id="correction-kind" required><option value="ocr_misread">辨識讀錯，依照片訂正文字</option><option value="confirmed_text">確認原辨識文字正確</option><option value="label_misprint">標籤印錯，依照片記錄實際印字</option><option value="uncertain">看不清楚，保留待確認</option></select></label>
     <label>照片實際印字<textarea id="correction-text" rows="3" maxlength="2000" required></textarea></label>
     <p id="correction-text-help" class="help">依照片逐字填寫，包含標點；即使照片印錯，也請保留實際錯字。</p>
     <label>訂正人員<input id="correction-reviewer" maxlength="100" required autocomplete="name"></label>

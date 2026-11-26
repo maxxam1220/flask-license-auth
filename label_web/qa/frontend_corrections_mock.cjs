@@ -90,6 +90,26 @@ async function main(){
   t.openCorrectionDialog(0);$("#correction-kind").value="uncertain";$("#correction-reviewer").value="QA";$("#correction-note").value="模糊";sent=[];context.capture=(url,options)=>{sent.push(options.body);return corrected;};vm.runInContext("api=async(url,options)=>capture(url,options)",context);await t.saveCorrection();
   assert.equal(sent[0].kind,"uncertain");assert.equal(sent[0].text,"");assert.equal(sent[0].base_revision,2);checks++;console.log("PASS uncertain does not guess or submit expected text");
   t.openCorrectionDialog(0);$("#correction-reviewer").value="QA";$("#correction-note").value="撤回";sent=[];await t.saveCorrection("revoke");assert.equal(sent[0].operation,"revoke");assert.equal("text" in sent[0],false);assert.equal("kind" in sent[0],false);checks++;console.log("PASS revoke appends operation without replacement text");
+  const selectKind=value=>{$("#correction-kind").value=value;vm.runInContext("correctionKindChanged()",context);};
+  t.state.inspection=corrected;sent=[];t.openCorrectionDialog(0,"manufacture");
+  check("date entry preserves an existing manual judgment and drafts when switching to verify the original",()=>{
+    assert.equal($("#correction-kind").value,"ocr_misread");
+    assert.equal($("#correction-text").value,"品名：蘋果");assert.equal($("#correction-revoke").hidden,false);
+    $("#correction-text").value="不同的人工草稿";selectKind("confirmed_text");
+    assert.equal($("#correction-text").value,raw.text);assert.equal($("#correction-text").readOnly,true);
+    assert.match($("#correction-text-help").textContent,/取代本行目前的人工判定/);
+    selectKind("label_misprint");assert.equal($("#correction-text").readOnly,false);
+    assert.equal($("#correction-text").value,"不同的人工草稿");assert.equal(sent.length,0);
+  });
+  selectKind("confirmed_text");$("#correction-text").value+=" ";$("#correction-reviewer").value="QA";$("#correction-note").value="已對照這行原照";
+  await t.saveCorrection();
+  check("a changed raw value cannot be submitted under original-text confirmation",()=>{
+    assert.equal(sent.length,0);assert.match($("#correction-error").textContent,/保留完整的原始辨識文字/);
+  });
+  selectKind("confirmed_text");await t.saveCorrection();
+  check("explicit original-text confirmation submits the immutable raw line with reviewer and revision",()=>{
+    assert.deepEqual(plain(sent),[{kind:"confirmed_text",text:raw.text,line_id:0,base_revision:2,operation:"replace",reviewer:"QA",note:"已對照這行原照"}]);
+  });
   const versioned={...std,history:[{revision:1,source_revision:"hash",operation:"update",reviewer:"QA",note:"第一版",created_at:inspection.created_at},{revision:2,source_revision:"old-hash",operation:"update",created_at:inspection.created_at}]};
   context.apiResult=versioned;vm.runInContext("api=async()=>apiResult",context);await t.openStandardEditor("original");
   check("history exposes restore while disabling obsolete source versions",()=>{const buttons=$("#standard-edit-history-list").querySelectorAll("button");assert.equal(buttons.length,2);assert.equal(buttons[0].disabled,false);assert.equal(buttons[1].disabled,true);});
@@ -150,9 +170,18 @@ async function main(){
   await t.openHistoryCleanup("filters");$("#cleanup-from").value="2026-11-12";$("#cleanup-to").value="";$("#cleanup-status").value="";context.capture=()=>({...preview,expires_at:"2020-01-01T00:00:00Z"});await t.previewHistoryCleanup();$("#cleanup-confirm").checked=true;sent=[];context.capture=(url)=>{sent.push(url);return {};};await t.commitHistoryCleanup({preventDefault(){}});check("expired preview is invalidated without write",()=>{assert.equal(sent.length,0);assert.match($("#cleanup-error").textContent,/預覽已過期/);assert.equal($("#cleanup-confirm-panel").hidden,true);});
   context.capture=()=>preview;await t.previewHistoryCleanup();$("#cleanup-confirm").checked=true;$("#cleanup-from").value="2026-11-11";sent=[];context.capture=(url)=>{sent.push(url);return {};};await t.commitHistoryCleanup({preventDefault(){}});check("changed criteria cannot reuse an old preview hash",()=>{assert.equal(sent.length,0);assert.match($("#cleanup-error").textContent,/篩選已變更/);});
   t.applySession(operator);check("downgrade closes recycle dialog and erases snapshot DOM",()=>{assert.equal($("#history-cleanup-dialog").open,false);assert.equal($("#cleanup-items").textContent,"");assert.equal($("#cleanup-summary").textContent,"");});
-  check("OCR detail warning follows actual ambiguity and .65 threshold",()=>{const output=new Node();t.renderOCR([{text:"普通分數",score:.8},{text:"低分",score:.64},{text:"兩次不一致",score:.99,ambiguous:true},{text:"人工確認",score:.2,human_verified:true}],output);assert.equal(output.querySelectorAll("small").length,2);assert.doesNotMatch(output.children[0].textContent,/確認|不確定/);assert.match(output.children[2].textContent,/不同次辨識/);});
+  check("OCR detail distinguishes marked uncertainty and disagreement from a real retry",()=>{
+    const output=new Node();
+    t.renderOCR([{text:"普通分數",score:.8},{text:"低分",score:.64},{text:"待核",score:.99,ambiguous:true},{text:"人工確認",score:.2,human_verified:true},{text:"雲端",score:0,ambiguous:true,ambiguity_reason:"cloud_uncertain"},{text:"局部",score:.9,ambiguous:true,ambiguity_reason:"line_retry_disagrees"}],output);
+    assert.equal(output.querySelectorAll("small").length,4);
+    assert.doesNotMatch(output.children[0].textContent,/確認|不確定/);
+    assert.match(output.children[2].textContent,/對照照片確認/);
+    assert.match(output.children[4].textContent,/雲端辨識.*不確定/);
+    assert.doesNotMatch(output.children[4].textContent,/重讀|不同次/);
+    assert.match(output.children[5].textContent,/局部重讀結果不同/);
+  });
   check("recognition facts use diagnostics without inventing page accuracy",()=>{const item={image:{width:1280,height:960},ocr:{lines:[raw],engine:"actual-engine",preprocessing:{passes:2,selected_rotation:90},diagnostics:{line_count:12,low_score_count:1,low_score_threshold:.65,small_text_line_count:2,small_text_height_threshold_px:12,ambiguous_line_count:1,line_retry_count:0,rotation_retry_count:1}}};const info=t.recognitionInfo(item,{label_scope:{blocked:true,reason:"只拍單張"}},[{status:"review"}]);assert.match(info.facts.join(" "),/1280 × 960/);assert.match(info.facts.join(" "),/原始辨識：12 行/);assert.match(info.facts.join(" "),/旋轉 90/);assert.match(info.warnings.join(" "),/只拍單張/);assert.match(info.warnings.join(" "),/2 行字框較小/);assert.match(info.warnings.join(" "),/不是整張標籤的正確率/);assert.doesNotMatch(info.facts.join(" "),/局部文字重讀/);});
-  check("old metadata fallback counts only observed low scores and ambiguity",()=>{const info=t.recognitionInfo({ocr:{lines:[{text:"a",score:.6},{text:"b",score:.9,ambiguous:true},{text:"c"}]}},{},[]);assert.match(info.warnings.join(" "),/1 行低於/);assert.match(info.warnings.join(" "),/1 行不同次/);assert.doesNotMatch(info.facts.join(" "),/引擎|保存照片|耗時/);assert.doesNotMatch(info.warnings.join(" "),/字框較小/);});
+  check("old metadata fallback counts only observed low scores and ambiguity",()=>{const info=t.recognitionInfo({ocr:{lines:[{text:"a",score:.6},{text:"b",score:.9,ambiguous:true},{text:"c"}]}},{},[]);assert.match(info.warnings.join(" "),/1 行低於/);assert.match(info.warnings.join(" "),/1 行辨識未確定/);assert.doesNotMatch(info.facts.join(" "),/引擎|保存照片|耗時/);assert.doesNotMatch(info.warnings.join(" "),/字框較小|不同次/);});
   check("crop bounds reject incomplete, tiny and out-of-photo regions",()=>{for(const selection of [{x:0,y:0,width:99,height:100},{x:-1,y:0,width:100,height:100},{x:900,y:0,width:101,height:100},{x:0,y:750,width:100,height:100},{x:NaN,y:0,width:100,height:100}])assert.throws(()=>t.cropBounds(selection,1000,800));const valid={x:10,y:20,width:300,height:200};assert.deepEqual(plain(t.cropBounds(valid,1000,800)),valid);});
   check("drag selection supports reverse direction with stored-pixel bounds",()=>{assert.deepEqual(plain(t.selectionFromPoints({x:850,y:700},{x:20,y:30},1000,800)),{x:20,y:30,width:830,height:670});assert.deepEqual(plain(t.selectionFromPoints({x:-20,y:-50},{x:1200,y:900},1000,800)),{x:0,y:0,width:1000,height:800});});
   const cropContext={inspectionId:"original",width:1000,height:800,photo:{},preview:null};t.state.crop=cropContext;t.state.busy=false;t.state.inspection=corrected;$("#crop-dialog").open=true;

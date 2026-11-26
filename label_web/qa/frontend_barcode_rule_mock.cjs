@@ -114,6 +114,22 @@ async function main(){
  });
  for(const status of ["fail","review"]){check(`genuine other barcode ${status} dominates even when the approved formula passes`,()=>{const card=barcodeCard([formulaCheck,unread,{key:"barcode_hri",status,reason:"條紋與印字不同"}]);assert.match(card.className,new RegExp(`\\b${status}\\b`));assert.match(card.querySelector(".barcode-formula-status").textContent,/數字與日期規則相符/);assert.match(card.querySelector(".badge").textContent,status==="fail" ? /有差異/ : /需確認/);assert.match(card.textContent,/條紋與印字不同/);});}
  check("uncertain formula never becomes a pass because the barcode was unread",()=>{const card=barcodeCard([{...formulaCheck,status:"review",reason:"日期不清楚"},unread]);assert.match(card.className,/\breview\b/);assert.doesNotMatch(card.textContent,/✓ 條碼數字與日期規則相符/);});
+ const pendingDate={...formulaCheck,status:"review",expected:"",reason:"需先核對照片的有效日期",pending_date:{kind:"expiry",value:"2026.11.29 03時",line_ids:[13]}};
+ const hri={key:"barcode_hri",status:"pass",reason:"條紋與印字比對完成"};
+ check("a blocked formula names its date and separately reports a verified print-to-bars match",()=>{
+   const card=barcodeCard([pendingDate,hri]);
+   assert.match(card.className,/\breview\b/);
+   assert.match(card.querySelector(".badge").textContent,/條碼公式等待有效日期確認/);
+   assert.match(card.querySelector(".barcode-formula-status").textContent,/✓ 條碼印字與條紋一致/);
+   assert.doesNotMatch(card.textContent,/依據或讀取需確認|數字與日期規則相符/);
+   const missing=barcodeCard([pendingDate]);assert.doesNotMatch(missing.textContent,/印字與條紋一致/);
+ });
+ check("other actual barcode problems take precedence while preserving the pending date",()=>{
+   const card=barcodeCard([pendingDate,{...hri,status:"fail",reason:"條碼印字與解碼不同"}]);
+   assert.match(card.className,/\bfail\b/);assert.match(card.querySelector(".badge").textContent,/有差異/);
+   assert.match(card.textContent,/條碼公式等待有效日期確認/);assert.match(card.textContent,/條碼印字與解碼不同/);
+   assert.doesNotMatch(card.textContent,/印字與條紋一致/);
+ });
  check("digits alone or a format-only pass show an unverified product code without a scan warning",()=>{
    for(const checks of [[unread],[{key:"barcode_format",status:"pass",actual:unread.actual},unread]]){
      const card=barcodeCard(checks,{barcode:{value:unread.actual}});

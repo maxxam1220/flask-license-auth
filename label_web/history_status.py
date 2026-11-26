@@ -6,7 +6,7 @@ import database as db
 import inspection_evidence
 
 
-SUMMARY_POLICY = f"{inspection_evidence.NUTRITION_POLICY}/{inspection_evidence.BARCODE_POLICY}/i1"
+SUMMARY_POLICY = f"{inspection_evidence.NUTRITION_POLICY}/{inspection_evidence.BARCODE_POLICY}/i2"
 
 
 summaries = Table("labelcheck_history_status", db.metadata,
@@ -26,7 +26,11 @@ def project(result, ocr, snapshot, patches=()):
         if result.get("nutrition_policy") == "excluded-v1" and isinstance(result.get("checks"), list):
             recovered = _recover_checks(result, ocr, snapshot, patches)
         result = inspection_evidence.project_nutrition_text(result, ocr, source, recovered_checks=recovered)
-    return inspection_evidence.project_barcode(result)
+    from barcode_rule_authoring import with_pending_barcode_date
+    from source_validation import with_date_review_evidence
+    result = inspection_evidence.project_barcode(result)
+    result = with_date_review_evidence(result, (ocr or {}).get("lines") or [])
+    return with_pending_barcode_date(result)
 
 
 def _recover_checks(result, ocr, snapshot, patches):
@@ -72,7 +76,10 @@ def result_summary(result):
     def priority(check):
         key = str(check.get("key") or "")
         rule = "barcode" in key or check.get("source") == "date" or key in {"manufacture", "expiry", "arrival", "keep_days"}
-        return (check["status"] != "fail", not rule)
+        # A date relationship can have several follow-on warnings for one
+        # uncertain field. Show the printed dates and the affected barcode first.
+        derived_date = check.get("source") == "date" and key not in {"manufacture", "expiry", "arrival"}
+        return (check["status"] != "fail", not rule, derived_date)
     reasons = [{key: check.get(key, "") for key in ("status", "key", "label", "reason")}
                for check in sorted(candidates, key=priority)[:3]]
     return {"counts": result.get("counts", {}), "issue_reasons": reasons}
